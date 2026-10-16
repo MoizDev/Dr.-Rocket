@@ -308,6 +308,7 @@ pub struct TerminalTab {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>) -> Self {
         crate::platform::setup_window(cc);
+        crate::platform::set_repaint_context(&cc.egui_ctx);
         egui_extras::install_image_loaders(&cc.egui_ctx);
         ui::install_fonts(&cc.egui_ctx);
         let settings = Settings::load();
@@ -1064,6 +1065,13 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.tabs.iter().any(|t| t.dirty()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.modal = Modal::ConfirmQuit;
+        }
+        for p in crate::platform::take_opened_files() {
+            if p.is_dir() {
+                self.open_folder(&p);
+            } else {
+                self.open_file(&p);
+            }
         }
         if let Some(ws) = &mut self.workspace {
             ws.poll();
