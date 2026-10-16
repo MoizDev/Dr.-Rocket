@@ -729,8 +729,7 @@ fn apply_test_inlays(tab: &mut Tab, report: &TestReport) {
             && let Some(pos) = f.srcloc.pos
         {
             let line = tab.editor.doc.buffer.line_of(pos);
-            let first = f.message.lines().next().unwrap_or("").to_string();
-            let short = if first.chars().count() > 70 { format!("{}…", first.chars().take(69).collect::<String>()) } else { first };
+            let short = short_test_message(&f.message);
             tab.editor.deco.inlays.push(Inlay { line, text: short, kind: InlayKind::Fail });
             failed_lines.insert(line);
         }
@@ -744,6 +743,21 @@ fn apply_test_inlays(tab: &mut Tab, report: &TestReport) {
             }
         }
     }
+}
+
+/// Condense a test-engine failure message for an inline chip:
+/// "Actual value 16 differs from 15, the expected value." -> "got 16, expected 15".
+fn short_test_message(msg: &str) -> String {
+    let one_line: String = msg.split_whitespace().collect::<Vec<_>>().join(" ");
+    let re = regex::Regex::new(r"^Actual value (.+?) differs from (.+?), the expected value\.?$").expect("valid regex");
+    if let Some(c) = re.captures(&one_line) {
+        return format!("got {}, expected {}", &c[1], &c[2]);
+    }
+    let re = regex::Regex::new(r"^Actual value (.+?) is not within (.+?) of expected value (.+?)\.?$").expect("valid regex");
+    if let Some(c) = re.captures(&one_line) {
+        return format!("got {}, expected {} ± {}", &c[1], &c[3], &c[2]);
+    }
+    if one_line.chars().count() > 70 { format!("{}…", one_line.chars().take(69).collect::<String>()) } else { one_line }
 }
 
 fn eval(tab: &mut Tab, text: &str) {
@@ -856,6 +870,18 @@ fn show_step_marks(tab: &mut Tab) {
         tab.editor.reveal_soft(r.start);
     }
     let _ = a;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_test_message;
+
+    #[test]
+    fn condenses_check_expect_messages() {
+        assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
+        assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
+        assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
+    }
 }
 
 // =====================================================================================
@@ -1372,11 +1398,7 @@ fn transcript_entry(ui: &mut Ui, e: &Entry, theme: &crate::theme::Theme, tk: &To
                 ui.spacing_mut().item_spacing.x = 0.0;
                 for p in parts {
                     match p {
-                        ValuePart::Text(t) => {
-                            let mut job = racket_job(t, theme, mono, &[], Color32::TRANSPARENT);
-                            job.wrap.max_width = w;
-                            ui.label(job);
-                        }
+                        ValuePart::Text(t) => value_text(ui, t, theme, mono, w),
                         ValuePart::Image(tex, size) => {
                             let scale = (w / size[0]).min(1.0);
                             ui.add(egui::Image::new((tex.id(), vec2(size[0], size[1]) * scale)));
@@ -1428,6 +1450,42 @@ fn transcript_entry(ui: &mut Ui, e: &Entry, theme: &crate::theme::Theme, tk: &To
         }
     }
     let _ = tk;
+}
+
+/// A printed value. Racket marks repeating decimals with a combining overline (U+0305);
+/// fonts can't place that mark, so draw the bar over those digits ourselves.
+fn value_text(ui: &mut Ui, t: &str, theme: &crate::theme::Theme, mono: &egui::FontId, w: f32) {
+    let mut clean = String::with_capacity(t.len());
+    let mut overlined: Vec<usize> = Vec::new();
+    let mut n = 0usize;
+    for c in t.chars() {
+        if c == '\u{0305}' {
+            if n > 0 {
+                overlined.push(n - 1);
+            }
+        } else {
+            clean.push(c);
+            n += 1;
+        }
+    }
+    let mut job = racket_job(&clean, theme, mono, &[], Color32::TRANSPARENT);
+    job.wrap.max_width = w;
+    let resp = ui.label(job);
+    if overlined.is_empty() {
+        return;
+    }
+    let galley = ui.painter().layout_job({
+        let mut j = racket_job(&clean, theme, mono, &[], Color32::TRANSPARENT);
+        j.wrap.max_width = w;
+        j
+    });
+    let color = theme.syntax.number.color;
+    for i in overlined {
+        let a = galley.pos_from_cursor(egui::text::CCursor::new(i));
+        let b = galley.pos_from_cursor(egui::text::CCursor::new(i + 1));
+        let y = resp.rect.top() + a.top() + mono.size * 0.12;
+        ui.painter().hline(resp.rect.left() + a.left()..=resp.rect.left() + b.left(), y, Stroke::new(1.2, color));
+    }
 }
 
 fn test_card(ui: &mut Ui, r: &TestReport, theme: &crate::theme::Theme, mono: &egui::FontId, jump: &mut Option<Srcloc>, w: f32) {

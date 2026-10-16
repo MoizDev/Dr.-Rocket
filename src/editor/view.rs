@@ -829,16 +829,19 @@ impl EditorView {
         };
         let font = ui::mono((font_size * 0.78).round());
         let icon_w = if glyph.is_some() { font_size * 0.85 } else { 0.0 };
-        // Keep the chip inside the editor: truncate long messages with an ellipsis.
+        // Keep the chip inside the editor: truncate long messages, and fall back to an
+        // icon-only chip when there is no room for text at all.
         let room = self.geom.rect.right() - SCROLLBAR_W - 10.0 - x - icon_w - 14.0;
-        if room < 24.0 {
+        let text = if room >= 40.0 { inlay.text.clone() } else { String::new() };
+        if room < 0.0 || (text.is_empty() && glyph.is_none()) {
             return;
         }
-        let mut job = LayoutJob::simple_singleline(inlay.text.clone(), font, fg);
-        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        let mut job = LayoutJob::simple_singleline(text, font, fg);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room.max(1.0));
         let g = p.layout_job(job);
         let h = (self.geom.line_h * 0.72).min(font_size * 1.35);
-        let r = Rect::from_min_size(pos2(x, y + (self.geom.line_h - h) / 2.0), vec2(g.size().x + icon_w + 14.0, h));
+        let text_w = if g.size().x > 0.5 { g.size().x + 14.0 } else { 10.0 };
+        let r = Rect::from_min_size(pos2(x, y + (self.geom.line_h - h) / 2.0), vec2(text_w + icon_w, h));
         p.rect_filled(r, CornerRadius::same(5), bg);
         if let Some(gl) = glyph {
             p.text(pos2(r.left() + 6.0 + icon_w / 2.0, r.center().y), Align2::CENTER_CENTER, gl, ui::icon_font(font_size * 0.8), fg);
