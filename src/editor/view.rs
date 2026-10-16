@@ -171,6 +171,47 @@ pub enum EditorAction {
     RunSelection,
 }
 
+/// Trackpad scrolling locks to the axis a gesture starts on, so a slightly diagonal swipe
+/// scrolls straight up/down. A clearly sideways motion still scrolls horizontally.
+#[derive(Clone, Copy, Default)]
+struct ScrollLock {
+    axis: Option<ScrollAxis>,
+    last: f64,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum ScrollAxis {
+    Vertical,
+    Horizontal,
+}
+
+impl ScrollLock {
+    /// A pause this long (seconds) ends a gesture.
+    const GESTURE_GAP: f64 = 0.25;
+    /// How strongly the other axis must dominate to break the lock.
+    const BREAK_RATIO: f32 = 3.0;
+
+    fn filter(&mut self, delta: Vec2, now: f64) -> Vec2 {
+        if now - self.last > Self::GESTURE_GAP {
+            self.axis = None;
+        }
+        self.last = now;
+        let (ax, ay) = (delta.x.abs(), delta.y.abs());
+        let axis = match self.axis {
+            Some(ScrollAxis::Vertical) if ax > ay * Self::BREAK_RATIO => ScrollAxis::Horizontal,
+            Some(ScrollAxis::Horizontal) if ay > ax * Self::BREAK_RATIO => ScrollAxis::Vertical,
+            Some(a) => a,
+            None if ax > ay * 1.5 => ScrollAxis::Horizontal,
+            None => ScrollAxis::Vertical,
+        };
+        self.axis = Some(axis);
+        match axis {
+            ScrollAxis::Vertical => Vec2::new(0.0, delta.y),
+            ScrollAxis::Horizontal => Vec2::new(delta.x, 0.0),
+        }
+    }
+}
+
 pub struct EditorStyle<'a> {
     pub theme: &'a Theme,
     pub settings: &'a Settings,
@@ -223,6 +264,7 @@ pub struct EditorView {
     pub find: FindBar,
     /// Words offered by completion besides identifiers in the document.
     pub completion_words: Arc<Vec<String>>,
+    scroll_lock: ScrollLock,
     pub read_only: bool,
     id: Id,
     scroll: Vec2,
@@ -255,6 +297,7 @@ impl EditorView {
             deco: Decorations::default(),
             find: FindBar::default(),
             completion_words: Arc::new(Vec::new()),
+            scroll_lock: ScrollLock::default(),
             read_only: false,
             id,
             scroll: Vec2::ZERO,
@@ -505,8 +548,9 @@ impl EditorView {
                 if shift && delta.x == 0.0 {
                     self.scroll.x -= delta.y;
                 } else {
-                    self.scroll.y -= delta.y;
-                    self.scroll.x -= delta.x;
+                    let d = self.scroll_lock.filter(delta, now);
+                    self.scroll.y -= d.y;
+                    self.scroll.x -= d.x;
                 }
                 self.hover = None;
             }
@@ -1987,6 +2031,20 @@ mod tests {
             ed.show(ui, rect, style);
         });
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn scroll_lock_keeps_diagonal_swipes_vertical() {
+        let mut lock = ScrollLock::default();
+        // A vertical swipe that drifts sideways stays vertical...
+        assert_eq!(lock.filter(Vec2::new(2.0, 10.0), 0.0), Vec2::new(0.0, 10.0));
+        assert_eq!(lock.filter(Vec2::new(6.0, 8.0), 0.016), Vec2::new(0.0, 8.0));
+        // ...until it turns clearly sideways.
+        assert_eq!(lock.filter(Vec2::new(12.0, 2.0), 0.032), Vec2::new(12.0, 0.0));
+        // A new gesture that starts sideways scrolls horizontally.
+        let mut lock = ScrollLock::default();
+        assert_eq!(lock.filter(Vec2::new(9.0, 3.0), 1.0), Vec2::new(9.0, 0.0));
+        assert_eq!(lock.filter(Vec2::new(5.0, 4.0), 1.016), Vec2::new(5.0, 0.0));
     }
 
     fn key(k: Key) -> Event {
