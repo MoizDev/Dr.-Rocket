@@ -454,11 +454,21 @@ impl EditorView {
         if self.focus_request {
             resp.request_focus();
             self.focus_request = false;
+            if std::env::var_os("DRROCKET_TRACE").is_some() {
+                eprintln!("focus requested: {:?}", self.id);
+            }
         }
         if resp.hovered() {
             ctx.set_cursor_icon(CursorIcon::Text);
         }
         let focused = resp.has_focus();
+        if std::env::var_os("DRROCKET_TRACE").is_some() && focused != ui.ctx().data(|d| d.get_temp::<bool>(self.id.with("was-focused")).unwrap_or(false)) {
+            eprintln!("focus {:?} -> {focused}", self.id);
+            ui.ctx().data_mut(|d| d.insert_temp(self.id.with("was-focused"), focused));
+        }
+        if std::env::var_os("DRROCKET_TRACE").is_some() && ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(_)))) {
+            eprintln!("text event: editor {:?} focused={focused} focus_request={} mode={:?}", self.id, self.focus_request, style.mode);
+        }
         if focused {
             ui.memory_mut(|m| m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: self.find.open || self.completion.is_some() }));
         }

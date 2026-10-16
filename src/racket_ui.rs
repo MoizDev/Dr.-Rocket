@@ -589,6 +589,9 @@ fn decode_image(ctx: &egui::Context, img: &proto::ImageData, key: usize) -> Opti
 }
 
 fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) {
+    if std::env::var_os("DRROCKET_TRACE").is_some() {
+        eprintln!("run event: {ev:?}");
+    }
     let now = ctx.input(|inp| inp.time);
     let tab = &mut app.tabs[i];
     match ev {
@@ -652,7 +655,12 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
                 tab.editor.deco.marks.push(Mark { range: s..e, kind: MarkKind::Uncovered });
             }
             let n = tab.editor.deco.marks.iter().filter(|m| m.kind == MarkKind::Uncovered).count();
-            tab.rk.push(Entry::Info(if n == 0 { "All expressions were covered by tests.".into() } else { format!("{n} expressions were not covered (highlighted).") }));
+            let msg = match n {
+                0 => "All expressions were covered by tests.".to_string(),
+                1 => "1 expression was not covered (highlighted).".to_string(),
+                n => format!("{n} expressions were not covered (highlighted)."),
+            };
+            tab.rk.push(Entry::Info(msg));
         }
         RunEvent::Profile(report) => {
             tab.rk.profile = Some(report);

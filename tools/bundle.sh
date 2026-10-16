@@ -9,7 +9,7 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp target/release/drrocket "$app/Contents/MacOS/drrocket"
 
-# Icon set from the rendered PNGs.
+# Icon set from the rendered PNGs (regenerate with `cargo run --example make_icon`).
 iconset="$(mktemp -d)/AppIcon.iconset"
 mkdir -p "$iconset"
 for s in 16 32 128 256 512; do

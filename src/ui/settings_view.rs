@@ -211,8 +211,8 @@ impl App {
         let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         self.dialog(ctx, "About", 380.0, |app, ui| {
             ui.horizontal(|ui| {
-                let (r, _) = ui.allocate_exact_size(vec2(48.0, 48.0), Sense::hover());
-                crate::ui::welcome::paint_logo(ui, r, &app.theme);
+                let (r, _) = ui.allocate_exact_size(vec2(36.0, 52.0), Sense::hover());
+                crate::ui::brand::logo(52.0).paint_at(ui, Rect::from_center_size(r.center(), vec2(52.0 * 0.65, 52.0)));
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new(crate::ui::welcome::APP_NAME).font(ui::semibold(18.0)).color(app.theme.text));
                     ui.label(egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION"))).color(app.theme.text_muted));

@@ -3,23 +3,11 @@
 use crate::app::App;
 use crate::commands::{Command, info, shortcut_text};
 use crate::config::{relative_time, tildify};
-use crate::theme::{mix, with_alpha};
+use crate::theme::with_alpha;
 use crate::ui::{self, file_icons, ic};
 use egui::{Align2, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
 
-pub const APP_NAME: &str = "Dr. Rocket";
-
-/// The app mark: a rounded square with a λ, tinted with the theme's accents.
-pub fn paint_logo(ui: &Ui, rect: Rect, theme: &crate::theme::Theme) {
-    let a = theme.syntax.keyword.color;
-    let b = theme.syntax.function.color;
-    let p = ui.painter();
-    let r = (rect.width() * 0.26) as u8;
-    p.rect_filled(rect, CornerRadius::same(r), mix(a, b, 0.45));
-    // Soft highlight in the upper-left for depth.
-    p.rect_filled(Rect::from_min_size(rect.min, vec2(rect.width(), rect.height() * 0.5)), CornerRadius { nw: r, ne: r, sw: 0, se: 0 }, with_alpha(egui::Color32::WHITE, 18));
-    p.text(rect.center() + vec2(0.0, -rect.height() * 0.02), Align2::CENTER_CENTER, "λ", ui::semibold(rect.height() * 0.6), egui::Color32::WHITE);
-}
+pub use crate::ui::brand::APP_NAME;
 
 impl App {
     pub(crate) fn welcome_ui(&mut self, ui: &mut Ui, rect: Rect) {
@@ -29,10 +17,13 @@ impl App {
         let left = rect.center().x - col_w / 2.0;
         let mut y = rect.top() + (rect.height() * 0.12).max(36.0);
 
-        let logo = Rect::from_min_size(pos2(left, y), vec2(56.0, 56.0));
-        paint_logo(ui, logo, &theme);
-        ui.painter().text(pos2(left + 74.0, y + 14.0), Align2::LEFT_CENTER, APP_NAME, ui::semibold(26.0), theme.text);
-        ui.painter().text(pos2(left + 74.0, y + 42.0), Align2::LEFT_CENTER, "A fast, modern IDE for Racket", ui::ui_font(14.5), theme.text_muted);
+        let logo_h = 60.0;
+        let logo = crate::ui::brand::logo(logo_h);
+        let logo_w = logo.size().map(|s| s.x).unwrap_or(logo_h * 0.65);
+        logo.paint_at(ui, Rect::from_min_size(pos2(left, y - 2.0), vec2(logo_w, logo_h)));
+        let tx = left + logo_w + 18.0;
+        ui.painter().text(pos2(tx, y + 14.0), Align2::LEFT_CENTER, APP_NAME, ui::semibold(26.0), theme.text);
+        ui.painter().text(pos2(tx, y + 42.0), Align2::LEFT_CENTER, "A fast, modern IDE for Racket", ui::ui_font(14.5), theme.text_muted);
         y += 92.0;
 
         // Quick actions as cards in a 2x2 grid.

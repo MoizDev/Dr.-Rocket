@@ -26,14 +26,13 @@ impl App {
         let mut bar = ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.spacing_mut().item_spacing.x = 4.0;
 
-        // App mark: a λ rocket badge.
-        let (logo, _) = bar.allocate_exact_size(vec2(30.0, 30.0), Sense::hover());
-        let grad_a = theme.syntax.keyword.color;
-        let grad_b = theme.syntax.function.color;
-        bar.painter().rect_filled(logo, CornerRadius::same(8), crate::theme::mix(grad_a, grad_b, 0.45));
-        bar.painter().text(logo.center() + vec2(0.0, -0.5), Align2::CENTER_CENTER, "λ", ui::semibold(18.0), egui::Color32::WHITE);
+        // App mark: the Dr. Rocket logo.
+        let (logo, logo_resp) = bar.allocate_exact_size(vec2(24.0, 30.0), Sense::click());
+        crate::ui::brand::logo(26.0).paint_at(&bar, Rect::from_center_size(logo.center(), vec2(26.0 * 0.65, 26.0)));
+        if logo_resp.on_hover_text(crate::ui::brand::APP_NAME).clicked() {
+            self.run_command(Command::About);
+        }
         bar.add_space(8.0);
-
         // Project selector.
         let project = self.workspace.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "No Project".into());
         let pr = pill_button(&mut bar, &theme, None, &project, true, false);

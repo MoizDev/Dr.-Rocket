@@ -27,6 +27,10 @@ fn main() -> eframe::Result {
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
         .with_title_shown(false);
+    let viewport = match ui::brand::window_icon() {
+        Some(icon) => viewport.with_icon(icon),
+        None => viewport,
+    };
     // Automation windows float above everything so macOS keeps redrawing them.
     let automated = std::env::var("DRROCKET_AUTOMATION").is_ok();
     let viewport = if automated { viewport.with_window_level(egui::WindowLevel::AlwaysOnTop) } else { viewport };

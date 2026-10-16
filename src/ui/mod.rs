@@ -1,5 +1,6 @@
 //! UI foundation: fonts, theme -> egui style, design tokens, and shared widgets.
 
+pub mod brand;
 pub mod chrome;
 pub mod docks;
 pub mod icon_glyphs;
