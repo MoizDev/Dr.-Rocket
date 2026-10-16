@@ -42,9 +42,11 @@ fn main() -> eframe::Result {
         Some(icon) => viewport.with_icon(icon),
         None => viewport,
     };
-    // Automation windows float above everything so macOS keeps redrawing them.
+    // Automation windows must never take focus or cover other apps: they open inactive and
+    // behind normal windows (and invisible, see platform::setup_window). They keep painting
+    // anyway (RequestPaintWhileHidden in app.rs), which is all screenshots need.
     let automated = std::env::var("DRROCKET_AUTOMATION").is_ok();
-    let viewport = if automated { viewport.with_window_level(egui::WindowLevel::AlwaysOnTop) } else { viewport };
+    let viewport = if automated { viewport.with_active(false).with_window_level(egui::WindowLevel::AlwaysOnBottom) } else { viewport };
     let options = eframe::NativeOptions {
         viewport,
         persist_window: !automated,

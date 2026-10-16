@@ -31,6 +31,15 @@ pub fn setup_window(handle: &impl raw_window_handle::HasWindowHandle) {
     let toolbar = NSToolbar::new(mtm);
     window.setToolbar(Some(&toolbar));
     WINDOW.with(|w| *w.borrow_mut() = Some(window.clone()));
+    if std::env::var_os("DRROCKET_AUTOMATION").is_some() {
+        // Scripted runs happen while someone may be working: make the window invisible and
+        // click-through, and keep it out of Stage Manager, Mission Control and the window cycle.
+        use objc2_app_kit::NSWindowCollectionBehavior as B;
+        window.setAlphaValue(0.0);
+        window.setIgnoresMouseEvents(true);
+        window.setHasShadow(false);
+        window.setCollectionBehavior(B::Auxiliary | B::Transient | B::IgnoresCycle);
+    }
     window.setToolbarStyle(NSWindowToolbarStyle::Unified);
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarAppearsTransparent(true);
@@ -331,8 +340,13 @@ pub fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
     #[cfg(target_os = "macos")]
     {
         Some(Box::new(|builder| {
-            use winit::platform::macos::EventLoopBuilderExtMacOS;
+            use winit::platform::macos::{ActivationPolicy, EventLoopBuilderExtMacOS};
             builder.with_default_menu(false);
+            // Scripted runs must not steal keyboard focus from whatever the user is doing:
+            // no activation at launch, and no Dock or Cmd-Tab entry to switch to by accident.
+            if std::env::var_os("DRROCKET_AUTOMATION").is_some() {
+                builder.with_activate_ignoring_other_apps(false).with_activation_policy(ActivationPolicy::Accessory);
+            }
         }))
     }
     #[cfg(not(target_os = "macos"))]
