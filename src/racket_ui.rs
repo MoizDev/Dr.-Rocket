@@ -676,6 +676,7 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             tab.rk.busy = false;
         }
         RunEvent::Terminated { stderr, .. } => {
+            tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Debug);
             tab.rk.session = None;
             tab.rk.busy = false;
             tab.rk.waiting_input = false;
@@ -847,6 +848,7 @@ pub fn run(app: &mut App, cmd: Command) {
         }
         Command::Kill => {
             let tab = &mut app.tabs[i];
+            tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Debug);
             if tab.rk.session.take().is_some() {
                 tab.rk.busy = false;
                 tab.rk.waiting_input = false;

@@ -954,11 +954,14 @@ impl App {
 }
 
 impl eframe::App for App {
-    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         if let Some(mut auto) = self.automation.take() {
-            auto.step(self, ctx);
+            auto.step(self, ctx, raw);
             self.automation = Some(auto);
         }
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         // Close requests: confirm unsaved changes.
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.tabs.iter().any(|t| t.dirty()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);

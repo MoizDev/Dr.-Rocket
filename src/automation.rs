@@ -51,6 +51,7 @@ pub struct Automation {
     wait_frames: u64,
     shot_done: Option<Arc<AtomicBool>>,
     started: Option<f64>,
+    reset_modifiers: bool,
 }
 
 impl Automation {
@@ -58,7 +59,7 @@ impl Automation {
         let path = std::env::var("DRROCKET_AUTOMATION").ok()?;
         let text = std::fs::read_to_string(&path).ok()?;
         let script: Script = serde_json::from_str(&text).map_err(|e| eprintln!("automation script error: {e}")).ok()?;
-        Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None })
+        Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None, reset_modifiers: false })
     }
 
     pub fn window_size() -> Option<[f32; 2]> {
@@ -67,9 +68,15 @@ impl Automation {
         serde_json::from_str::<Script>(&text).ok()?.window
     }
 
-    pub fn step(&mut self, app: &mut App, ctx: &egui::Context) {
+    /// Advance the script. Called from `raw_input_hook`, so injected events enter egui exactly
+    /// like real OS input (pointer state, hover and clicks all update normally).
+    pub fn step(&mut self, app: &mut App, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let now = ctx.input(|i| i.time);
         self.started.get_or_insert(now);
+        if self.reset_modifiers {
+            raw.events.push(Event::ModifiersChanged(Modifiers::NONE));
+            self.reset_modifiers = false;
+        }
         ctx.request_repaint();
         if self.wait_frames > 0 {
             self.wait_frames -= 1;
@@ -99,23 +106,20 @@ impl Automation {
             Step::NewFile(_) => app.new_file(),
             Step::Type(t) => {
                 // One event per keystroke, like real typing; "\n" presses Enter.
-                ctx.input_mut(|i| {
-                    for ch in t.chars() {
-                        if ch == '\n' {
-                            i.events.push(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
-                        } else {
-                            i.events.push(Event::Text(ch.to_string()));
-                        }
+                for ch in t.chars() {
+                    if ch == '\n' {
+                        raw.events.push(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+                    } else {
+                        raw.events.push(Event::Text(ch.to_string()));
                     }
-                });
+                }
             }
             Step::Key(k) => {
                 if let Some((key, modifiers)) = parse_key(k) {
-                    ctx.input_mut(|i| {
-                        i.modifiers = modifiers;
-                        i.events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
-                        i.events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
-                    });
+                    raw.events.push(Event::ModifiersChanged(modifiers));
+                    raw.events.push(Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+                    raw.events.push(Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers });
+                    self.reset_modifiers = true;
                 } else {
                     eprintln!("automation: unknown key {k}");
                 }
@@ -132,17 +136,19 @@ impl Automation {
                 let pos = pos2(p[0], p[1]);
                 let button = if matches!(step, Step::RightClick(_)) { PointerButton::Secondary } else { PointerButton::Primary };
                 let times = if matches!(step, Step::DoubleClick(_)) { 2 } else { 1 };
-                ctx.input_mut(|i| {
-                    i.events.push(Event::PointerMoved(pos));
-                    for _ in 0..times {
-                        i.events.push(Event::PointerButton { pos, button, pressed: true, modifiers: Modifiers::NONE });
-                        i.events.push(Event::PointerButton { pos, button, pressed: false, modifiers: Modifiers::NONE });
-                    }
-                });
+                raw.events.push(Event::PointerMoved(pos));
+                for _ in 0..times {
+                    raw.events.push(Event::PointerButton { pos, button, pressed: true, modifiers: Modifiers::NONE });
+                    raw.events.push(Event::PointerButton { pos, button, pressed: false, modifiers: Modifiers::NONE });
+                }
             }
-            Step::Hover(p) => ctx.input_mut(|i| i.events.push(Event::PointerMoved(pos2(p[0], p[1])))),
-            Step::Scroll(d) => ctx.input_mut(|i| {
-                i.events.push(Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(d[0], d[1]), phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel, modifiers: Modifiers::NONE })
+            Step::Hover(p) => raw.events.push(Event::PointerMoved(pos2(p[0], p[1]))),
+            Step::Scroll(d) => raw.events.push(Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(d[0], d[1]),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Wheel,
+                modifiers: Modifiers::NONE,
             }),
             Step::WaitMs(ms) => self.wait_until_time = Some(now + *ms as f64 / 1000.0),
             Step::WaitFrames(n) => self.wait_frames = *n,
