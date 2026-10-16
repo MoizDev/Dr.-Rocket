@@ -110,6 +110,16 @@ pub struct StepperView {
     pub error: Option<String>,
 }
 
+impl StepperView {
+    /// Whether the closing "successfully evaluated" screen is shown as a step of its own.
+    fn has_finish_step(&self, count_finish: bool) -> bool {
+        count_finish && self.finished && self.error.is_none() && !matches!(self.steps.last(), Some(StepItem::Error { .. }))
+    }
+    fn total(&self, count_finish: bool) -> usize {
+        self.steps.len() + self.has_finish_step(count_finish) as usize
+    }
+}
+
 pub enum StepItem {
     Step(Step),
     Error { before: Vec<proto::StepExpr>, message: String, before_src: Option<proto::SrcSpan> },
@@ -1594,6 +1604,7 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let i = app.active;
     let font_size = (app.font_size() * 0.8).round().max(11.0);
     let mono = ui::mono(font_size);
+    let count_finish = app.settings.stepper_count_finish;
     if app.tabs[i].rk.stepper.is_none() {
         empty_state(ui, &theme, ic::STEP, "Algebraic Stepper", "Step through Beginning–Intermediate Student programs (⇧⌘E)");
         let r = ui.available_rect_before_wrap();
@@ -1611,7 +1622,7 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let mut restart = false;
     {
         let st = app.tabs[i].rk.stepper.as_ref().unwrap();
-        let n = st.steps.len();
+        let n = st.total(count_finish);
         let bar = Rect::from_min_size(rect.min + vec2(6.0, 4.0), vec2(rect.width() - 12.0, 34.0));
         let mut b = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
         b.spacing_mut().item_spacing.x = 2.0;
@@ -1648,7 +1659,8 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     if let Some(d) = nav {
         let tab = &mut app.tabs[i];
         let st = tab.rk.stepper.as_mut().unwrap();
-        let n = st.steps.len();
+        let n = st.total(count_finish);
+        st.current = st.current.min(n.saturating_sub(1));
         if n > 0 {
             let cur = st.current as isize;
             let next = match d {
@@ -1678,7 +1690,10 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         return;
     }
     let Some(step) = st.steps.get(st.current) else {
-        if !st.finished {
+        if st.has_finish_step(count_finish) {
+            child.add_space(6.0);
+            child.label(egui::RichText::new("All of the definitions have been successfully evaluated.").font(ui::ui_font(13.5)).color(theme.text_muted));
+        } else if !st.finished {
             child.spinner();
         }
         return;
@@ -1760,7 +1775,7 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 });
             }
         }
-        if st.finished && st.current + 1 == st.steps.len() {
+        if !count_finish && st.finished && st.current + 1 == st.steps.len() {
             ui.add_space(14.0);
             ui.label(egui::RichText::new("All of the definitions have been successfully evaluated.").font(ui::ui_font(12.5)).italics().color(theme.text_placeholder));
         }

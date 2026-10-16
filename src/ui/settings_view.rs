@@ -492,6 +492,9 @@ impl App {
         row(ui, &theme, "Binding arrows", "DrRacket-style arrows from bindings to their uses on hover", |ui| {
             toggle(ui, &theme, &mut s.show_binding_arrows);
         });
+        row(ui, &theme, "Count the stepper's finish screen", "Number steps like DrRacket: the final \"successfully evaluated\" screen is a step of its own", |ui| {
+            toggle(ui, &theme, &mut s.stepper_count_finish);
+        });
         let mut path = s.racket_path.clone().unwrap_or_default();
         row(ui, &theme, "Racket executable", "Leave empty to auto-detect", |ui| {
             ui.add(egui::TextEdit::singleline(&mut path).desired_width(220.0).hint_text("auto"));
