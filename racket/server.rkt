@@ -38,8 +38,13 @@
             ;; Everything the docs worker will touch is instantiated up front by the loader,
             ;; so the two workers never instantiate modules concurrently.
             (on-loader (λ ()
+                         ;; Includes the modules that deserializing the documentation index
+                         ;; loads (found by tracing `current-load/use-compiled`).
                          (for ([m '(drracket/private/syncheck/xref setup/xref scribble/xref
-                                    scribble/blueboxes scribble/manual-struct racket/serialize)])
+                                    scribble/blueboxes scribble/manual-struct racket/serialize
+                                    scribble/core scribble/html-properties scribble/latex-properties
+                                    scribble/render-struct scribble/private/literal-anchor
+                                    scribble/private/manual-class-struct setup/infotab setup/getinfo)])
                            (dynamic-require m #f))))
             (on-docs (λ ()
                        (force xref-promise)
