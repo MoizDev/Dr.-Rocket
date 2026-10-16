@@ -39,6 +39,16 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         persist_window: !automated,
+        // eframe defaults to a frame latency of 1, which on Metal halves the frame rate (60 -> 30
+        // fps) as soon as a frame has real work in it. Queue two frames, as egui-wgpu recommends.
+        // DRROCKET_NO_VSYNC renders unthrottled, for measuring (see DRROCKET_FRAME_STATS).
+        wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
+            surface: eframe::egui_wgpu::SurfaceConfig {
+                present_mode: if std::env::var_os("DRROCKET_NO_VSYNC").is_some() { eframe::wgpu::PresentMode::AutoNoVsync } else { eframe::wgpu::PresentMode::AutoVsync },
+                ..eframe::egui_wgpu::SurfaceConfig::HIGH_THROUGHPUT
+            },
+            ..Default::default()
+        },
         event_loop_builder: platform::event_loop_hook(),
         ..Default::default()
     };

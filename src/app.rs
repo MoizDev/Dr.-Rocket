@@ -204,11 +204,9 @@ impl Session {
     pub fn load() -> Self {
         std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
     }
-    pub fn save(&self) {
+    fn write(json: &str) {
         let _ = std::fs::create_dir_all(crate::config::config_dir());
-        if let Ok(s) = serde_json::to_string_pretty(self) {
-            let _ = crate::config::atomic_write(&Self::path(), s.as_bytes());
-        }
+        let _ = crate::config::atomic_write(&Self::path(), json.as_bytes());
     }
 }
 
@@ -296,8 +294,67 @@ pub struct App {
     pub frame_count: u64,
     pub terminals: Vec<TerminalTab>,
     pub racket: crate::racket_ui::RacketState,
-    /// `DRROCKET_FRAME_STATS=1`: (frames, total, max) of UI time, printed every 2 s.
-    frame_stats: Option<(u32, std::time::Duration, std::time::Duration, f64)>,
+    /// `DRROCKET_FRAME_STATS=1`: frame timing printed every 2 s.
+    frame_stats: Option<FrameStats>,
+    /// The session.json contents last written, and when it was last compared.
+    saved_session: String,
+    session_checked: f64,
+}
+
+/// Frame timing for `DRROCKET_FRAME_STATS`: our UI time, eframe's whole-frame CPU time
+/// (UI + tessellation + rendering), the gap between frames, and input events per frame.
+#[derive(Default)]
+struct FrameStats {
+    frames: u32,
+    ui_total: std::time::Duration,
+    ui_max: std::time::Duration,
+    cpu_total: f32,
+    cpu_max: f32,
+    gap_max: std::time::Duration,
+    scroll_events: u32,
+    atlas_fill: f32,
+    atlas_resets: u32,
+    last: Option<std::time::Instant>,
+    since: Option<std::time::Instant>,
+}
+
+impl FrameStats {
+    fn record(&mut self, ui: std::time::Duration, cpu: Option<f32>, scroll_events: u32, atlas_fill: f32) {
+        if atlas_fill + 0.05 < self.atlas_fill {
+            self.atlas_resets += 1;
+        }
+        self.atlas_fill = atlas_fill;
+        let now = std::time::Instant::now();
+        if let Some(last) = self.last {
+            self.gap_max = self.gap_max.max(now - last);
+        }
+        self.last = Some(now);
+        let since = *self.since.get_or_insert(now);
+        self.frames += 1;
+        self.ui_total += ui;
+        self.ui_max = self.ui_max.max(ui);
+        let cpu = cpu.unwrap_or(0.0);
+        self.cpu_total += cpu;
+        self.cpu_max = self.cpu_max.max(cpu);
+        self.scroll_events += scroll_events;
+        let elapsed = now - since;
+        if elapsed.as_secs_f32() >= 2.0 {
+            let n = self.frames.max(1);
+            eprintln!(
+                "frame stats: {:.0} fps | ui avg {:?} max {:?} | frame cpu avg {:.1}ms max {:.1}ms | longest gap {:?} | {} scroll events | font atlas {:.0}% full, {} resets",
+                self.frames as f32 / elapsed.as_secs_f32(),
+                self.ui_total / n,
+                self.ui_max,
+                self.cpu_total * 1000.0 / n as f32,
+                self.cpu_max * 1000.0,
+                self.gap_max,
+                self.scroll_events,
+                self.atlas_fill * 100.0,
+                self.atlas_resets
+            );
+            *self = FrameStats { last: self.last, atlas_fill: self.atlas_fill, ..Default::default() };
+        }
+    }
 }
 
 pub struct TerminalTab {
@@ -341,7 +398,9 @@ impl App {
             frame_count: 0,
             terminals: Vec::new(),
             racket: Default::default(),
-            frame_stats: std::env::var("DRROCKET_FRAME_STATS").ok().map(|_| (0, Default::default(), Default::default(), 0.0)),
+            frame_stats: std::env::var("DRROCKET_FRAME_STATS").ok().map(|_| FrameStats::default()),
+            saved_session: String::new(),
+            session_checked: 0.0,
         };
         app.apply_theme_overrides();
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
@@ -632,14 +691,35 @@ impl App {
         }
     }
 
-    pub fn save_session(&self) {
-        let s = Session {
+    fn session(&self) -> Session {
+        Session {
             project: self.workspace.as_ref().map(|w| w.root.clone()),
             files: self.tabs.iter().filter_map(|t| t.path.clone()).collect(),
             active: self.active,
             layout: self.layout.without_terminals(),
-        };
-        s.save();
+        }
+    }
+
+    pub fn save_session(&mut self) {
+        if let Ok(json) = serde_json::to_string_pretty(&self.session()) {
+            Session::write(&json);
+            self.saved_session = json;
+        }
+    }
+
+    /// Keep session.json current as files and panels change (cheap: writes only on change),
+    /// so a crash or a dev-loop restart reopens the same workspace.
+    fn save_session_if_changed(&mut self, now: f64) {
+        if self.automation.is_some() || now - self.session_checked < 1.0 {
+            return;
+        }
+        self.session_checked = now;
+        if let Ok(json) = serde_json::to_string_pretty(&self.session())
+            && json != self.saved_session
+        {
+            Session::write(&json);
+            self.saved_session = json;
+        }
     }
 
     // ------------------------------------------------------------------ commands
@@ -1109,10 +1189,11 @@ impl eframe::App for App {
         self.reload_changed_files();
         let now = ctx.input(|i| i.time);
         self.autosave(now);
+        self.save_session_if_changed(now);
         crate::racket_ui::poll(self, ctx);
     }
 
-    fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
         let started = std::time::Instant::now();
         let ctx = ui.ctx().clone();
         self.frame_count += 1;
@@ -1122,25 +1203,15 @@ impl eframe::App for App {
         self.modal_ui(&ctx);
         self.toasts_ui(&ctx);
         self.handle_dropped_files(&ctx);
-        if let Some((n, total, max, since)) = &mut self.frame_stats {
-            let dt = started.elapsed();
-            *n += 1;
-            *total += dt;
-            *max = (*max).max(dt);
-            let now = ctx.input(|i| i.time);
-            if now - *since > 2.0 {
-                eprintln!("frame stats: {n} frames, avg {:?}, max {:?}", *total / (*n).max(1), *max);
-                *n = 0;
-                *total = Default::default();
-                *max = Default::default();
-                *since = now;
+        if let Some(stats) = &mut self.frame_stats {
+            let scrolls = ctx.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::MouseWheel { .. })).count() as u32);
+            let fill = ctx.fonts(|f| f.font_atlas_fill_ratio());
+            stats.record(started.elapsed(), frame.info().cpu_usage, scrolls, fill);
+            // `DRROCKET_FRAME_STATS=continuous`: redraw every frame to measure render throughput.
+            if std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "continuous") {
+                ctx.request_repaint();
             }
         }
-    }
-
-    fn auto_save_interval(&self) -> std::time::Duration {
-        // Developer mode restarts the app on every rebuild; keep the session current.
-        std::time::Duration::from_secs(if self.dev_themes.is_some() { 1 } else { 30 })
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
