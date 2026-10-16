@@ -382,6 +382,10 @@ fn server_check_syntax_bluebox_docs_and_completions() {
     let unused = src.find("unused").unwrap();
     assert!(cs.colors.iter().any(|c| c.start == unused && c.style == "unused-identifier"));
     assert!(cs.tooltips.iter().any(|t| t.start == map_pos && t.text.contains("imported from racket")));
+    // Semantic coloring: a call to `f` (defined here) is lexically bound; `map` is imported.
+    let f_call = src.rfind("(f ").unwrap() + 1;
+    assert!(cs.colors.iter().any(|c| c.start == f_call && c.style == "lexically-bound"), "{:?}", cs.colors);
+    assert!(cs.colors.iter().any(|c| c.start == map_pos && c.style == "imported"), "{:?}", cs.colors);
 
     let ServerResponse::Bluebox(Some(bb)) = server_result(
         &mut server,
