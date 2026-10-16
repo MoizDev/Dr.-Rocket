@@ -1,0 +1,158 @@
+# Racketeer - design notes
+
+Racketeer is a native Racket IDE written in Rust (egui/eframe 0.37, wgpu). It replaces DrRacket:
+definitions + interactions, every DrRacket language level, the algebraic stepper, check syntax
+(binding arrows, rename, jump to definition), the debugger, macro stepper, profiler, coverage,
+test results, docs - inside a modern editor shell (file tree with Material icons, tabs, command
+palette, quick open, recent projects, themes from Zed, integrated terminals).
+
+## Process model
+
+All Racket-semantic work happens in Racket processes; the Rust side never guesses semantics.
+
+| Process | Lifetime | Script | Purpose |
+|---|---|---|---|
+| runner | one per Run (killed on next Run / Kill) | `racket/runner.rkt` | runs the program, then serves the REPL in the module's namespace; errortrace, coverage, profiler, debugger |
+| stepper | one per stepper session | `racket/stepper.rkt` | DrRacket's algebraic stepper model (`stepper/private/model`) run headlessly |
+| server | one per app, long-lived | `racket/server.rkt` | check syntax, docs/blueboxes, completions, macro stepper, module graph |
+
+The `.rkt` scripts are embedded in the binary (`include_str!`), written to
+`<cache>/racketeer/racket-<hash>/` on startup and compiled with `raco make` in the background.
+
+The Racket executable is found via settings `racket_path`, `$PATH`, `/opt/homebrew/bin`,
+`/usr/local/bin`, `/Applications/Racket*/bin`.
+
+## Wire protocol
+
+Newline-delimited JSON over the child's stdin/stdout. The runner reserves its real stdout for
+the protocol: user code's `current-output-port`/`current-error-port` are custom ports that forward
+text as `output` events. stderr of the child process is logged (diagnostics only).
+
+**Positions are 0-based character offsets into the source text as sent** (Racket's 1-based
+`syntax-position` minus one). For teaching languages the IDE sends the DrRacket metadata header
+followed by the buffer text, and passes `"offset": <header chars>` so that the backend subtracts it
+and all reported positions are relative to the visible buffer. Positions from other files carry
+their `path`; positions without a known file use `"path": null`.
+
+A srcloc object: `{"path": string|null, "line": n|null, "col": n|null, "pos": n|null, "span": n|null}`
+(`line` 1-based, `col` 0-based, `pos` 0-based char offset).
+
+### runner
+
+IDE -> runner:
+```
+{"cmd":"run","path":"/abs/f.rkt"|null,"source":"...","offset":0,
+ "language":{"kind":"module"} | {"kind":"toplevel","init":"r5rs"|"lang/plt-pretty-big"|...},
+ "options":{"instrument":"none"|"errortrace"|"coverage"|"profile"|"debug",
+            "submodules":["main","test"], "memory_limit_mb":256|null,
+            "breakpoints":[pos,...], "print_width":80}}
+{"cmd":"eval","id":7,"source":"(+ 1 2)"}
+{"cmd":"input","text":"hello\n"}          {"cmd":"input-eof"}
+{"cmd":"break"}
+{"cmd":"debug","action":"continue"|"step-into"|"step-over"|"step-out"|"pause"}
+{"cmd":"breakpoints","positions":[pos,...]}
+{"cmd":"complete","id":3,"prefix":"str"}
+```
+runner -> IDE:
+```
+{"ev":"started","racket_version":"9.3","language":"..."}
+{"ev":"output","stream":"out"|"err","text":"..."}
+{"ev":"value","text":"...","segments":[{"text":"..."}|{"png":"<base64>","width":w,"height":h}]}
+{"ev":"error","message":"...","kind":"read"|"syntax"|"runtime"|"break",
+ "srclocs":[srcloc...],"stack":[{"name":"f"|null, ...srcloc}]}
+{"ev":"tests","passed":n,"total":n,"text":"Ran 3 tests. 2 passed.",
+ "failures":[{"message":"...","srcloc":srcloc}]}
+{"ev":"coverage","covered":[[pos,span]...],"uncovered":[[pos,span]...]}
+{"ev":"profile","total_ms":n,"nodes":[{"name":..,"srcloc":..,"self_ms":..,"total_ms":..,
+ "callers":[idx...],"callees":[idx...]}]}
+{"ev":"paused","srcloc":srcloc,"locals":[{"name":"x","value":"3"}],
+ "stack":[{"name":..,"srcloc":..}],"result":"..."|null}
+{"ev":"resumed"}
+{"ev":"input-wanted"}
+{"ev":"completions","id":3,"items":["string-append",...]}
+{"ev":"ready","id":7|null}     ; definitions finished (id null) or an eval finished
+{"ev":"exit","code":0}
+```
+
+### stepper
+
+```
+IDE -> {"cmd":"step","path":..,"source":"<buffer text without header>","level":"beginner"|
+        "beginner-abbr"|"intermediate"|"intermediate-lambda"|"advanced"|"module",
+        "settings":{...htdp settings...},"teachpacks":[...],"width":72}
+IDE -> {"cmd":"more"}                       ; after a "paused" event
+<- {"ev":"step","index":i,"kind":"normal"|"user-application"|...,
+    "before":[{"text":"...","highlights":[[s,e],...]}],
+    "after":[{"text":"...","highlights":[[s,e],...]}],
+    "before_src":{"pos":p,"span":s}|null,"after_src":...|null}
+<- {"ev":"step-error","index":i,"before":[...],"message":"...","before_src":...}
+<- {"ev":"error","message":"..."}
+<- {"ev":"paused","count":n}                ; every 500 steps, waits for "more"
+<- {"ev":"finished","count":n}
+```
+Highlight ranges are 0-based char offsets into that expression's `text`.
+
+### server
+
+Requests carry an `id`; responses echo it. Requests run concurrently; a newer `check-syntax` for
+the same path cancels the older one.
+```
+{"id":1,"cmd":"check-syntax","path":..,"source":..,"offset":n}
+ -> {"id":1,"ok":true,"result":{
+      "arrows":[{"from":[s,e],"to":[s,e],"kind":"lexical"|"imported"|"tail"}],
+      "tooltips":[{"start":s,"end":e,"text":"..."}],
+      "colors":[{"start":s,"end":e,"style":"lexically-bound"|"imported"|"set!d"|"free-variable"|"unused-identifier"|...}],
+      "unused_requires":[[s,e]],
+      "docs":[{"start":s,"end":e,"label":"map","path":"/.../doc/reference/pairs.html","anchor":"..."}],
+      "jumps":[{"start":s,"end":e,"path":"/abs/other.rkt","id":"foo"}],
+      "definitions":[{"start":s,"end":e,"name":"foo"}],
+      "errors":[{"message":"...","srclocs":[srcloc...]}]}}
+{"id":2,"cmd":"bluebox","path":..,"source":..,"offset":n,"pos":p}
+ -> {"id":2,"ok":true,"result":{"lines":["(map proc lst ...+) -> list?", ...],"doc":{"path":..,"anchor":..}}|null}
+{"id":3,"cmd":"docs-search","query":"map","limit":50}
+ -> {"id":3,"ok":true,"result":[{"name":"map","libs":["racket/base"],"path":..,"anchor":..,"kind":"procedure"}]}
+{"id":4,"cmd":"completions","language":"racket"|"lang/htdp-beginner"|<module path>}
+ -> {"id":4,"ok":true,"result":["define","map",...]}
+{"id":5,"cmd":"macro-steps","path":..,"source":..,"offset":n}
+ -> {"id":5,"ok":true,"result":[{"type":"macro","name":"define","before":"...","after":"...",
+     "foci_before":[[s,e]],"foci_after":[[s,e]]}]}
+{"id":6,"cmd":"module-graph","path":..}
+ -> {"id":6,"ok":true,"result":{"nodes":[{"path":..,"label":..}],"edges":[[i,j]...]}}
+{"id":7,"cmd":"jump-target","path":"/abs/other.rkt","id":"foo"}
+ -> {"id":7,"ok":true,"result":{"pos":p}|null}
+{"cmd":"cancel","id":1}
+errors: {"id":1,"ok":false,"error":"..."}
+```
+
+## Language levels
+
+`src/racket/lang.rs` models every DrRacket language:
+
+- **The Racket Language** (module language; `#lang` line in the buffer).
+- **Teaching languages** (How to Design Programs): Beginning Student, Beginning Student with List
+  Abbreviations, Intermediate Student, Intermediate Student with lambda, Advanced Student.
+  Settings: case sensitivity, output style (constructor / quasiquote / write / print), fraction
+  style (mixed / repeating decimal / improper), show sharing, insert newlines, tracing,
+  teachpacks, true/false/empty as ids, enable tests.
+- **DeinProgramm** (Schreibe Dein Programm!): Anfänger, Fortgeschritten, mit Zuweisungen;
+  Die Macht der Abstraktion family when installed.
+- **Legacy**: R5RS, Pretty Big.
+
+Files saved in a teaching language carry DrRacket's three-line metadata header
+(`;; The first three lines ...` + `#reader(lib "htdp-beginner-reader.ss" "lang")((modname ..) ...)`),
+byte-compatible with DrRacket. The editor hides the header; it is regenerated on save and parsed
+on load, so files round-trip with DrRacket.
+
+## Rust module map
+
+```
+src/main.rs            entry, window, fonts
+src/app.rs             App: workspace state, layout, command dispatch
+src/config.rs          settings (seeded from Zed), recents, paths
+src/theme.rs           Zed theme loader
+src/icons.rs           Material file-icon theme + UI glyph font
+src/editor/            rope buffer, lexer, indenter, s-expression ops, editor widget
+src/racket/            racket discovery, protocol types, runner/stepper/server clients, lang.rs
+src/terminal/          terminal emulator widget (alacritty_terminal + portable PTY)
+src/ui/                panels: file tree, repl, stepper, palette, welcome, dialogs, status bar
+```
