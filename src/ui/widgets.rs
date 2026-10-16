@@ -196,11 +196,20 @@ pub fn truncated_label(ui: &Ui, pos: Pos2, text: &str, font: FontId, color: Colo
 /// Empty-state message with a big muted icon.
 pub fn empty_state(ui: &mut Ui, theme: &Theme, glyph: &str, title: &str, subtitle: &str) {
     let rect = ui.available_rect_before_wrap();
-    let c = rect.center();
+    // The subtitle wraps to the panel; extra lines push the icon and title up, so whatever a
+    // caller puts below (at a fixed offset) stays clear.
+    let sub = (!subtitle.is_empty()).then(|| {
+        let mut job = egui::text::LayoutJob::simple(subtitle.to_string(), ui_font(13.0), theme.text_placeholder, (rect.width() - 40.0).max(80.0));
+        job.halign = egui::Align::Center;
+        ui.painter().layout_job(job)
+    });
+    let extra = sub.as_ref().map(|g| (g.size().y - 17.0).max(0.0)).unwrap_or(0.0);
+    let c = rect.center() - vec2(0.0, extra);
     ui.painter().text(c - vec2(0.0, 34.0), Align2::CENTER_CENTER, glyph, icon_font(40.0), with_alpha(theme.text_muted, 110));
     ui.painter().text(c + vec2(0.0, 6.0), Align2::CENTER_CENTER, title, medium(15.0), theme.text_muted);
-    if !subtitle.is_empty() {
-        ui.painter().text(c + vec2(0.0, 28.0), Align2::CENTER_CENTER, subtitle, ui_font(13.0), theme.text_placeholder);
+    if let Some(g) = sub {
+        // A centered job lays out around x = 0.
+        ui.painter().galley(pos2(rect.center().x, c.y + 20.0), g, theme.text_placeholder);
     }
 }
 
