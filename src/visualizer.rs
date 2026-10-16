@@ -76,6 +76,8 @@ pub struct VisualizerView {
     last_advance: f64,
     zoom: f32,
     pan: Vec2,
+    /// Keep the whole diagram in view (until the user pans or zooms).
+    pub auto_fit: bool,
     anim: HashMap<Key, Anim>,
     layout: Option<(usize, Layout)>,
     images: HashMap<u64, Arc<[u8]>>,
@@ -93,6 +95,7 @@ impl Default for VisualizerView {
             last_advance: 0.0,
             zoom: 1.0,
             pan: vec2(16.0, 16.0),
+            auto_fit: true,
             anim: HashMap::new(),
             layout: None,
             images: HashMap::new(),
@@ -547,22 +550,69 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme) -
     }
     let Some((laid_step, lay)) = view.layout.take() else { return false };
 
-    // Pan (drag) and zoom (pinch / ⌘-scroll).
-    let resp = ui.interact(rect, egui::Id::unique("viz-canvas"), Sense::drag());
+    // Pan (drag, trackpad) and zoom (pinch / ⌘-scroll). Clicking the diagram takes keyboard
+    // focus from the editor so ← → and Space drive the visualizer.
+    let resp = ui.interact(rect, egui::Id::unique("viz-canvas"), Sense::click_and_drag());
+    if resp.clicked() || resp.drag_started() {
+        ui.ctx().memory_mut(|m| {
+            if let Some(f) = m.focused() {
+                m.surrender_focus(f);
+            }
+        });
+    }
     if resp.dragged() {
         view.pan += resp.drag_delta();
+        view.auto_fit = false;
     }
     if resp.hovered() {
         let z = ui.input(|i| i.zoom_delta());
         if z != 1.0 {
             let pointer = ui.input(|i| i.pointer.hover_pos()).unwrap_or(rect.center());
             let old = view.zoom;
-            view.zoom = (view.zoom * z).clamp(0.3, 2.5);
+            view.zoom = (view.zoom * z).clamp(0.2, 2.5);
             let anchor = pointer - rect.min.to_vec2() - view.pan;
             view.pan -= anchor.to_vec2() * (view.zoom / old - 1.0);
+            view.auto_fit = false;
         } else {
-            let scroll = ui.input(|i| i.smooth_scroll_delta);
-            view.pan += scroll;
+            // Wheel / trackpad only: egui also turns arrow keys into scrolling.
+            let wheel: Vec2 = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|e| match e {
+                        egui::Event::MouseWheel { unit, delta, .. } => Some(match unit {
+                            egui::MouseWheelUnit::Point => *delta,
+                            egui::MouseWheelUnit::Line => *delta * 24.0,
+                            egui::MouseWheelUnit::Page => *delta * rect.height(),
+                        }),
+                        _ => None,
+                    })
+                    .fold(Vec2::ZERO, |a, b| a + b)
+            });
+            if wheel != Vec2::ZERO {
+                view.pan += wheel;
+                view.auto_fit = false;
+            }
+        }
+    }
+    // Auto-fit: ease the zoom and pan toward showing the whole diagram.
+    let mut fitting = false;
+    if view.auto_fit {
+        let bounds = lay.frames.iter().map(|f| f.rect).chain(lay.objects.values().map(|o| o.rect.expand2(vec2(0.0, 24.0)))).fold(Rect::NOTHING, |a, b| a.union(b));
+        if bounds.is_positive() {
+            let margin = 18.0;
+            let fit = ((rect.width() - 2.0 * margin) / bounds.width()).min((rect.height() - 2.0 * margin) / bounds.height()).clamp(0.25, 1.0);
+            let target_pan = vec2(margin, margin) - bounds.min.to_vec2() * fit;
+            let k = 0.18;
+            let dz = fit - view.zoom;
+            let dp = target_pan - view.pan;
+            if dz.abs() > 0.002 || dp.length() > 0.5 {
+                view.zoom += dz * k;
+                view.pan += dp * k;
+                fitting = true;
+            } else {
+                view.zoom = fit;
+                view.pan = target_pan;
+            }
         }
     }
 
@@ -717,7 +767,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme) -
     }
     child_ui.painter().set(arrows_slot, Shape::Vec(shapes));
     view.layout = Some((laid_step, lay));
-    animating
+    animating || fitting
 }
 
 #[allow(clippy::too_many_arguments)]

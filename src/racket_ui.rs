@@ -1881,6 +1881,9 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         if icon_button_sized(&mut rb, &theme, ic::REPLAY, "Record again", 30.0, 19.0, None, false).clicked() {
             rerun = true;
         }
+        if icon_button_sized(&mut rb, &theme, ic::OPEN_IN_FULL, "Fit diagram", 30.0, 18.0, None, v.auto_fit).clicked() {
+            v.auto_fit = true;
+        }
         let speed_label = match v.speed {
             s if s < 1.5 => "1×",
             s if s < 3.0 => "2×",

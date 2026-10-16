@@ -118,8 +118,13 @@
       (let ([t (user-text whole)])
         (and t (regexp-match? #rx"^[(\\[](lambda|λ)[ \n\t\r]" t)))))
 
+(define (annotate-body body tail?)
+  ;; The last expression of a body inherits the body's tail position.
+  (for/list ([b (in-list body)] [k (in-naturals 1)])
+    (annotate-expr b #f (and tail? (= k (length body))))))
+
 (define (annotate-lambda-clause formals body name whole)
-  (define bodies (map (λ (b) (annotate-expr b #f)) body))
+  (define bodies (annotate-body body #t))
   (cond
     [(and (user-function? whole name) (pair? body))
      (define first-body (last body))
@@ -132,15 +137,17 @@
                           (#%plain-lambda () #,@bodies)))]
     [else (cons formals bodies)]))
 
-(define (annotate-bindings stx ids-list body rebuild-form)
+(define (annotate-bindings stx ids-list body tail?)
   ;; let-values / letrec-values: record user-visible local names in the current frame.
   (define shown (filter user-syntax? (append* ids-list)))
-  (define bodies (map (λ (b) (annotate-expr b #f)) body))
+  (define bodies (annotate-body body tail?))
   (if (null? shown)
       bodies
       (cons #`(#%plain-app '#,viz-bind! #,(getters shown)) bodies)))
 
-(define (annotate-expr e name)
+;; `tail?`: e is in tail position of a user function, so a call here replaces the caller's
+;; frame (Racket runs tail calls without growing the stack, and so does the visualizer).
+(define (annotate-expr e name [tail? #f])
   (kernel-syntax-case e #f
     [id (identifier? e) e]
     [(#%plain-lambda formals body ...)
@@ -157,27 +164,30 @@
                           (if site
                               #`(#%plain-app '#,viz-test #,t* '#,(pos-of site) '#,(span-of site))
                               t*))
-                        (annotate-expr #'a #f)
-                        (annotate-expr #'b #f))))]
-    [(begin x ...) (rebuild e (cons (car (syntax-e e)) (map (λ (x) (annotate-expr x #f)) (syntax->list #'(x ...)))))]
-    [(begin0 x ...) (rebuild e (cons (car (syntax-e e)) (map (λ (x) (annotate-expr x #f)) (syntax->list #'(x ...)))))]
+                        (annotate-expr #'a #f tail?)
+                        (annotate-expr #'b #f tail?))))]
+    [(begin x ...) (rebuild e (cons (car (syntax-e e)) (annotate-body (syntax->list #'(x ...)) tail?)))]
+    [(begin0 x ...)
+     ;; `(begin0 e)` (how teaching languages wrap function bodies) keeps e in tail position.
+     (let ([xs (syntax->list #'(x ...))])
+       (rebuild e (cons (car (syntax-e e)) (for/list ([x (in-list xs)]) (annotate-expr x #f (and tail? (= 1 (length xs))))))))]
     [(let-values ([(id ...) rhs] ...) body ...)
      (let ([idss (map syntax->list (syntax->list #'((id ...) ...)))])
        (rebuild e (list* (car (syntax-e e))
                          (rebind #'([(id ...) rhs] ...) idss)
-                         (annotate-bindings e idss (syntax->list #'(body ...)) #f))))]
+                         (annotate-bindings e idss (syntax->list #'(body ...)) tail?))))]
     [(letrec-values ([(id ...) rhs] ...) body ...)
      (let ([idss (map syntax->list (syntax->list #'((id ...) ...)))])
        (rebuild e (list* (car (syntax-e e))
                          (rebind #'([(id ...) rhs] ...) idss)
-                         (annotate-bindings e idss (syntax->list #'(body ...)) #f))))]
+                         (annotate-bindings e idss (syntax->list #'(body ...)) tail?))))]
     [(set! id rhs)
      (let ([set (rebuild e (list (car (syntax-e e)) #'id (annotate-expr #'rhs #f)))])
        (if (user-syntax? #'id)
            #`(begin #,set (#%plain-app '#,viz-set! '#,(symbol->string (syntax-e #'id)) (#%plain-lambda () id) '#,(pos-of e) '#,(span-of e)))
            set))]
     [(with-continuation-mark k v b)
-     (rebuild e (list (car (syntax-e e)) (annotate-expr #'k #f) (annotate-expr #'v #f) (annotate-expr #'b #f)))]
+     (rebuild e (list (car (syntax-e e)) (annotate-expr #'k #f) (annotate-expr #'v #f) (annotate-expr #'b #f tail?)))]
     [(#%plain-app x ...)
      (let ([parts (map (λ (x) (annotate-expr x #f)) (syntax->list #'(x ...)))]
            [text (user-text e)])
@@ -185,10 +195,10 @@
            ;; Remember the call site (after the arguments are evaluated) for the call step.
            (let ([temps (generate-temporaries parts)])
              #`(let-values #,(for/list ([t (in-list temps)] [p (in-list parts)]) #`[(#,t) #,p])
-                 (#%plain-app '#,viz-site! '#,(pos-of e) '#,(span-of e))
+                 (#%plain-app '#,viz-site! '#,(pos-of e) '#,(span-of e) '#,tail?)
                  #,(rebuild e (cons (car (syntax-e e)) temps))))
            (rebuild e (cons (car (syntax-e e)) parts))))]
-    [(#%expression x) (rebuild e (list (car (syntax-e e)) (annotate-expr #'x #f)))]
+    [(#%expression x) (rebuild e (list (car (syntax-e e)) (annotate-expr #'x #f tail?)))]
     [_ e]))
 
 (define (rebind clauses idss)
@@ -248,10 +258,10 @@
 ;; ---------------------------------------------------------------------------
 ;; Recording
 
-(struct frame (name args [locals #:mutable] pos span))
-;; The most recent user-written application about to run (pos . span).
+(struct frame (name args [locals #:mutable] pos span [replaced? #:mutable #:auto]) #:auto-value #f)
+;; The most recent user-written application about to run: (list pos span tail?).
 (define current-site #f)
-(define (viz-site! pos span) (set! current-site (cons pos span)))
+(define (viz-site! pos span tail?) (set! current-site (list pos span tail?)))
 (define stack '()) ; newest first
 (define globals '()) ; newest first: (name . getter)
 (define recording? #f)
@@ -276,9 +286,12 @@
   (cond
     [(not recording?) (thunk)]
     [else
-     (define site (or current-site (cons pos span)))
+     (define site (or current-site (list pos span #f)))
      (set! current-site #f)
-     (define f (frame name args '() (car site) (cdr site)))
+     (define f (frame name args '() (car site) (cadr site)))
+     ;; A tail call replaces the caller's frame (it returns whatever this call returns).
+     (when (and (caddr site) (pair? stack))
+       (set-frame-replaced?! (car stack) #t))
      (set! stack (cons f stack))
      (record! "call" (frame-pos f) (frame-span f) name #f)
      (apply values
@@ -286,7 +299,8 @@
              void
              (λ ()
                (define vals (call-with-values thunk list))
-               (record! "return" (frame-pos f) (frame-span f) name (if (= 1 (length vals)) (hasheq 'value (car vals)) #f))
+               (unless (frame-replaced? f)
+                 (record! "return" (frame-pos f) (frame-span f) name (if (= 1 (length vals)) (hasheq 'value (car vals)) #f)))
                vals)
              (λ () (set! stack (remq f stack)))))]))
 
@@ -353,7 +367,7 @@
          (list (car g) (ref (with-handlers ([(λ (e) #t) (λ (e) (void))]) ((cdr g)))))))
      (define globals-json (vars (reverse globals)))
      (define frames-json
-       (for/list ([f (in-list (reverse stack))])
+       (for/list ([f (in-list (reverse stack))] #:unless (frame-replaced? f))
          (hasheq 'name (frame-name f)
                  'vars (vars (append (frame-args f) (frame-locals f))))))
      (define msg

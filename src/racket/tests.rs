@@ -747,3 +747,19 @@ fn visualizer_records_calls_questions_returns_and_heap_objects() {
     assert!(!end.globals.iter().any(|(n, _)| n == "make-node"), "generated names stay hidden");
     assert!(events.iter().any(|e| matches!(e, RunEvent::VizEnd { truncated: false, .. })));
 }
+
+/// Tail calls replace the caller's frame, as Racket runs them: an accumulator loop shows
+/// one frame, while non-tail recursion stacks up.
+#[test]
+fn visualizer_tail_calls_do_not_grow_the_stack() {
+    let b = need_racket!();
+    let src = "#lang htdp/bsl\n(define (sum-acc l acc)\n  (cond\n    [(empty? l) acc]\n    [else (sum-acc (rest l) (+ acc (first l)))]))\n(define (sum l)\n  (cond\n    [(empty? l) 0]\n    [else (+ (first l) (sum (rest l)))]))\n(define a (sum-acc (list 1 2 3) 0))\n(define b (sum (list 1 2 3)))\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::Visualize)).unwrap();
+    let events = run_until(&s, ready(None));
+    let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
+    let deepest = |name: &str| steps.iter().filter(|s| s.frames.last().is_some_and(|f| f.name == name)).map(|s| s.frames.len()).max().unwrap();
+    assert_eq!(deepest("sum-acc"), 1, "tail-recursive loop keeps one frame");
+    assert_eq!(deepest("sum"), 4, "(sum (rest l)) is not a tail call");
+    // The loop's result comes back once, from the frame that computed it.
+    assert_eq!(steps.iter().filter(|s| s.kind == "return" && s.name.as_deref() == Some("sum-acc")).count(), 1);
+}
