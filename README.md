@@ -28,7 +28,8 @@ integrated terminals and themes. Teaching-language files stay byte-compatible wi
 - **Algebraic stepper** (⇧⌘E) with before/after highlighting, mirrored in the source
 - **Check syntax**, running continuously in the background: binding arrows, unused bindings and
   requires, hover info, rename (F2), go to definition across files (F12 / ⌘-click)
-- **Debugger** (⇧⌘D): gutter breakpoints, step into/over/out, locals and call stack
+- **Debugger** (⇧⌘D): gutter breakpoints, step into/over/out, locals and call stack. As in
+  DrRacket, required modules open in other tabs are debugged too, using their unsaved text
 - **Tests**: check-expect and rackunit results, with ✓/✗ chips on each test line
 - **Test coverage**, **profiler**, **macro stepper** (⇧⌘M) and **module browser**
 - **Docs**: the signature "blue box" for the call at the cursor, hover docs, and search over all
@@ -42,7 +43,8 @@ integrated terminals and themes. Teaching-language files stay byte-compatible wi
   command palette (⇧⌘P)
 - Docks you can rearrange: put any panel, terminals included, in the left, right or bottom dock
 - Integrated terminals (⌃`), with full colour, mouse support and scrollback
-- Themes: built-in themes plus every Zed theme you have installed. The default is Moiz One Dark.
+- Themes: built-in themes plus every Zed theme you have installed. The default, Moiz One Dark, is
+  the One Dark Darker Zed theme (a test checks the colours match it exactly).
 - Fira Code with ligatures, rainbow brackets with palette presets, rainbow indentation
   highlights, a smooth configurable caret, sticky scroll, multi-cursor, completion,
   find/replace, autosave and session restore

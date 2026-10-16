@@ -45,12 +45,16 @@ IDE -> runner:
  "language":{"kind":"module"} | {"kind":"toplevel","init":"r5rs"|"lang/plt-pretty-big"|...},
  "options":{"instrument":"none"|"errortrace"|"coverage"|"profile"|"debug",
             "submodules":["main","test"], "memory_limit_mb":256|null,
-            "breakpoints":[pos,...], "print_width":80}}
+            "breakpoints":[pos,...], "print_width":80, "trace":false,
+            "debug_modules":[{"path":"/abs/helper.rkt","source":"...","offset":0,
+                              "breakpoints":[pos,...]}]}}
+; debug_modules: other open files. When the program requires one, the runner loads it from
+; the editor text with debugger annotations (DrRacket debugs required modules open in tabs).
 {"cmd":"eval","id":7,"source":"(+ 1 2)"}
 {"cmd":"input","text":"hello\n"}          {"cmd":"input-eof"}
 {"cmd":"break"}
 {"cmd":"debug","action":"continue"|"step-into"|"step-over"|"step-out"|"pause"}
-{"cmd":"breakpoints","positions":[pos,...]}
+{"cmd":"breakpoints","positions":[pos,...],"path":"/abs/helper.rkt"|absent}
 {"cmd":"complete","id":3,"prefix":"str"}
 ```
 runner -> IDE:

@@ -13,6 +13,8 @@
          source-offset
          source-line-offset
          main-source
+         set-module-offset!
+         simplify-path*
          same-source?
          srcloc->jsexpr
          syntax->srcloc-jsexpr
@@ -68,6 +70,14 @@
 ;; The source name used when reading the main program (a path or a symbol).
 (define main-source (make-parameter #f))
 
+;; Hidden-header offsets of other files (debugged teaching-language modules):
+;; simplified path -> (cons char-offset line-offset).
+(define module-offsets (make-hash))
+(define (set-module-offset! path chars lines)
+  (hash-set! module-offsets (simplify-path* path) (cons chars lines)))
+(define (module-offset src)
+  (and (path? src) (hash-ref module-offsets (simplify-path* src) #f)))
+
 (define (same-source? a b)
   (cond
     [(and (path? a) (path? b))
@@ -91,12 +101,14 @@
   (cond
     [(not pos) (json-null)]
     [(same-source? src (main-source)) (max 0 (- pos 1 (source-offset)))]
+    [(module-offset src) => (λ (o) (max 0 (- pos 1 (car o))))]
     [else (- pos 1)]))
 
 (define (adjust-line src line)
   (cond
     [(not line) (json-null)]
     [(same-source? src (main-source)) (max 1 (- line (source-line-offset)))]
+    [(module-offset src) => (λ (o) (max 1 (- line (cdr o))))]
     [else line]))
 
 (define (srcloc-source->jsexpr src)

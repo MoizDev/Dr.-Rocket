@@ -643,3 +643,36 @@ fn teaching_language_tracing_reports_calls_by_depth() {
     assert!(depths.windows(2).any(|w| w[1] > w[0]), "expected nested calls: {trace:?}");
     assert_eq!(values(&events), vec!["2"]);
 }
+
+#[test]
+fn debugger_stops_in_required_modules_open_in_other_tabs() {
+    let b = need_racket!();
+    let dir = scratch_dir().join("multi-debug");
+    std::fs::create_dir_all(&dir).unwrap();
+    let helper_path = dir.join("helper.rkt");
+    // The file on disk differs from the "editor" text: the debugger must use the editor text.
+    std::fs::write(&helper_path, "#lang racket\n(provide double)\n(define (double y) 0)\n").unwrap();
+    let helper_src = "#lang racket\n(provide double)\n(define (double y)\n  (* y 2))\n";
+    let main_path = dir.join("main.rkt");
+    let main_src = "#lang racket\n(require \"helper.rkt\")\n(double 21)\n";
+    std::fs::write(&main_path, main_src).unwrap();
+    let bp = helper_src.find("(* y 2)").unwrap();
+    let mut config = module_config(Some(main_path), main_src, Instrument::Debug);
+    config.options.debug_modules = vec![DebugModule {
+        path: helper_path.to_string_lossy().into_owned(),
+        source: helper_src.into(),
+        offset: 0,
+        breakpoints: vec![bp],
+    }];
+    let mut s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, |e| matches!(e, RunEvent::Paused(_)));
+    let RunEvent::Paused(p) = events.last().unwrap() else { unreachable!() };
+    let paused_in = std::path::Path::new(p.srcloc.path.as_deref().expect("path")).canonicalize().unwrap();
+    assert_eq!(paused_in, helper_path.canonicalize().unwrap());
+    assert_eq!(p.srcloc.pos, Some(bp));
+    assert_eq!(p.srcloc.line, Some(4));
+    assert!(p.locals.iter().any(|l| l.name == "y" && l.value == "21"), "{:?}", p.locals);
+    s.debug(DebugAction::Continue);
+    let events = run_until(&s, ready(None));
+    assert_eq!(values(&events), vec!["42"], "the editor text of helper.rkt was used");
+}

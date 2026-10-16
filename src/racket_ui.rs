@@ -520,13 +520,24 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
         app.toast("Racket was not found. Install Racket or set its path in Settings.", ToastKind::Error);
         return;
     };
+    // DrRacket debugs required modules that are open in other tabs; send their current text.
+    let debug_modules: Vec<proto::DebugModule> = if instrument == Instrument::Debug {
+        app.tabs
+            .iter()
+            .enumerate()
+            .filter(|(k, t)| *k != i && t.path.is_some())
+            .map(|(_, t)| {
+                let (source, offset) = lang::program_text(t.language, &t.lang_settings, t.path.as_deref(), &t.editor.doc.text());
+                proto::DebugModule { path: path_string(t).unwrap_or_default(), source, offset, breakpoints: breakpoint_positions(t) }
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let tab = &mut app.tabs[i];
     tab.rk.session = None; // kills the previous program (and its windows)
     let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
-    let breakpoints: Vec<usize> = tab.editor.deco.breakpoints.iter().map(|&l| {
-        let b = &tab.editor.doc.buffer;
-        b.line_start(l) + b.indentation(l)
-    }).collect();
+    let breakpoints = breakpoint_positions(tab);
     let config = RunConfig {
         path: tab.path.clone(),
         source,
@@ -538,6 +549,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             breakpoints,
             print_width: 80,
             trace: tab.language.is_teaching() && tab.lang_settings.tracing,
+            debug_modules,
             ..Default::default()
         },
     };
@@ -578,6 +590,23 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
     }
 }
 
+/// Breakpoint positions (start of each marked line's first expression).
+fn breakpoint_positions(tab: &Tab) -> Vec<usize> {
+    let b = &tab.editor.doc.buffer;
+    tab.editor.deco.breakpoints.iter().map(|&l| b.line_start(l) + b.indentation(l)).collect()
+}
+
+fn same_file(a: &Path, b: &Path) -> bool {
+    a == b || matches!((a.canonicalize(), b.canonicalize()), (Ok(x), Ok(y)) if x == y)
+}
+
+/// Remove the debugger's "current expression" highlight from every tab.
+fn clear_debug_marks(app: &mut App) {
+    for t in app.tabs.iter_mut() {
+        t.editor.deco.marks.retain(|m| m.kind != MarkKind::Debug);
+    }
+}
+
 fn poll_session(app: &mut App, i: usize, ctx: &egui::Context) {
     let Some(session) = app.tabs[i].rk.session.as_ref() else { return };
     let events = session.drain();
@@ -603,6 +632,30 @@ fn decode_image(ctx: &egui::Context, img: &proto::ImageData, key: usize) -> Opti
 fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) {
     if std::env::var_os("DRROCKET_TRACE").is_some() {
         eprintln!("run event: {ev:?}");
+    }
+    match &ev {
+        RunEvent::Paused(state) => {
+            clear_debug_marks(app);
+            // The pause may be inside another open file (a required module): show it there.
+            let target = if is_local(&app.tabs[i], &state.srcloc) {
+                Some(i)
+            } else {
+                state.srcloc.path.as_deref().and_then(|p| app.tabs.iter().position(|t| t.path.as_deref().is_some_and(|tp| same_file(tp, Path::new(p)))))
+            };
+            if let Some(j) = target
+                && let Some((s, e)) = state.srcloc.range()
+            {
+                let t = &mut app.tabs[j];
+                t.editor.deco.marks.push(Mark { range: s..e.max(s + 1), kind: MarkKind::Debug });
+                t.editor.reveal(s..s);
+                app.active = j;
+            }
+            app.tabs[i].rk.paused = Some(state.clone());
+            app.layout.show(PanelItem::Debugger, Dock::Right);
+            return;
+        }
+        RunEvent::Resumed | RunEvent::Ready { .. } | RunEvent::Terminated { .. } => clear_debug_marks(app),
+        _ => {}
     }
     let now = ctx.input(|inp| inp.time);
     let tab = &mut app.tabs[i];
@@ -678,17 +731,7 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             tab.rk.profile = Some(report);
             app.layout.show(PanelItem::Profiler, Dock::Right);
         }
-        RunEvent::Paused(state) => {
-            tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Debug);
-            if is_local(tab, &state.srcloc)
-                && let Some((s, e)) = state.srcloc.range()
-            {
-                tab.editor.deco.marks.push(Mark { range: s..e.max(s + 1), kind: MarkKind::Debug });
-                tab.editor.reveal(s..s);
-            }
-            tab.rk.paused = Some(state);
-            app.layout.show(PanelItem::Debugger, Dock::Right);
-        }
+        RunEvent::Paused(_) => {}
         RunEvent::Resumed => {
             tab.rk.paused = None;
             tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Debug);
@@ -899,8 +942,8 @@ pub fn run(app: &mut App, cmd: Command) {
             }
         }
         Command::Kill => {
+            clear_debug_marks(app);
             let tab = &mut app.tabs[i];
-            tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Debug);
             if tab.rk.session.take().is_some() {
                 tab.rk.busy = false;
                 tab.rk.waiting_input = false;
@@ -1086,9 +1129,18 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
             if !tab.editor.deco.breakpoints.remove(&line) {
                 tab.editor.deco.breakpoints.insert(line);
             }
-            let positions: Vec<usize> = tab.editor.deco.breakpoints.iter().map(|&l| tab.editor.doc.buffer.line_start(l) + tab.editor.doc.buffer.indentation(l)).collect();
+            let positions = breakpoint_positions(tab);
             if let Some(s) = tab.rk.session.as_mut() {
                 s.set_breakpoints(&positions);
+            } else if let Some(path) = path_string(tab) {
+                // This file may be a module debugged by another tab's session.
+                for t in app.tabs.iter_mut() {
+                    if t.rk.instrument == Instrument::Debug
+                        && let Some(s) = t.rk.session.as_mut()
+                    {
+                        s.set_module_breakpoints(&path, &positions);
+                    }
+                }
             }
         }
         EditorAction::RunSelection => {
@@ -1160,10 +1212,10 @@ pub fn status_text(app: &App) -> (String, Color32) {
     {
         return ("Preparing Racket tools…".into(), theme.text_muted);
     }
+    if !app.tabs.is_empty() && app.tabs[debug_owner(app)].rk.paused.is_some() {
+        return ("Paused".into(), theme.warning);
+    }
     if let Some(t) = app.active_tab() {
-        if t.rk.paused.is_some() {
-            return ("Paused".into(), theme.warning);
-        }
         if t.rk.waiting_input {
             return ("Waiting for input".into(), theme.info);
         }
@@ -1864,13 +1916,37 @@ fn docs_panel(app: &mut App, ui: &mut Ui) {
 
 // ---------------------------------------------------------------------------------- debugger
 
+/// The tab whose debug session the debugger UI shows: the active tab if it is debugging,
+/// otherwise the session that may have paused in this tab's file (a required module).
+fn debug_owner(app: &App) -> usize {
+    let debugging = |t: &Tab| t.rk.session.is_some() && t.rk.instrument == Instrument::Debug;
+    if debugging(&app.tabs[app.active]) {
+        return app.active;
+    }
+    app.tabs.iter().position(debugging).unwrap_or(app.active)
+}
+
+/// Show a source location, switching to the tab that has its file open.
+fn reveal_srcloc(app: &mut App, owner: usize, loc: &Srcloc) {
+    let Some(pos) = loc.pos else { return };
+    let j = if is_local(&app.tabs[owner], loc) {
+        Some(owner)
+    } else {
+        loc.path.as_deref().and_then(|p| app.tabs.iter().position(|t| t.path.as_deref().is_some_and(|tp| same_file(tp, Path::new(p)))))
+    };
+    if let Some(j) = j {
+        app.active = j;
+        app.tabs[j].editor.reveal(pos..pos);
+    }
+}
+
 fn debugger_panel(app: &mut App, ui: &mut Ui) {
     if no_tab(app, ui, ic::BUG_REPORT, "Debugger", "") {
         return;
     }
     let theme = app.theme.clone();
     let tk = app.tokens();
-    let i = app.active;
+    let i = debug_owner(app);
     let running = app.tabs[i].rk.session.is_some() && app.tabs[i].rk.instrument == Instrument::Debug;
     if !running {
         empty_state(ui, &theme, ic::BUG_REPORT, "Debugger", "Click the gutter to set breakpoints, then Debug (⇧⌘D)");
@@ -1885,13 +1961,14 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
         return;
     }
     let paused = app.tabs[i].rk.paused.clone();
+    let busy = app.tabs[i].rk.busy;
     let mut action = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         let p = paused.is_some();
         for (glyph, tip, act, enabled) in [
             (ic::PLAY_ARROW, "Continue", DebugAction::Continue, p),
-            (ic::PAUSE, "Pause", DebugAction::Pause, !p),
+            (ic::PAUSE, "Pause", DebugAction::Pause, !p && busy),
             (ic::STEP_OVER, "Step Over", DebugAction::StepOver, p),
             (ic::STEP_INTO, "Step Into", DebugAction::StepInto, p),
             (ic::STEP_OUT, "Step Out", DebugAction::StepOut, p),
@@ -1902,7 +1979,13 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
             }
         }
         ui.add_space(8.0);
-        let (t, c) = if p { ("Paused", theme.warning) } else { ("Running", theme.success) };
+        let (t, c) = if p {
+            ("Paused", theme.warning)
+        } else if busy {
+            ("Running", theme.success)
+        } else {
+            ("Finished", theme.text_muted)
+        };
         ui.label(egui::RichText::new(t).font(ui::medium(13.0)).color(c));
     });
     if let Some(a) = action
@@ -1911,6 +1994,7 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
         s.debug(a);
     }
     let Some(state) = paused else { return };
+    let mut jump = None;
     ui.add_space(6.0);
     egui::ScrollArea::vertical().id_salt("debugger").auto_shrink([false, false]).show(ui, |ui| {
         if let Some(r) = &state.result {
@@ -1941,12 +2025,12 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
                 ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, format!("line {line}"), ui::ui_font(12.0), theme.text_placeholder);
             }
             if resp.clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(Id::unique("dbg-jump"), f.srcloc.pos.unwrap_or(0)));
+                jump = Some(f.srcloc.clone());
             }
         }
     });
-    if let Some(pos) = ui.ctx().data_mut(|d| d.remove_temp::<usize>(Id::unique("dbg-jump"))) {
-        app.tabs[i].editor.reveal(pos..pos);
+    if let Some(loc) = jump {
+        reveal_srcloc(app, i, &loc);
     }
 }
 

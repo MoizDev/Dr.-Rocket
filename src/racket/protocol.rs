@@ -69,6 +69,20 @@ pub struct RunOptions {
     pub print_width: usize,
     /// Trace function calls (DrRacket's teaching-language "Tracing" option).
     pub trace: bool,
+    /// With [`Instrument::Debug`]: other open files to debug if the program requires them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub debug_modules: Vec<DebugModule>,
+}
+
+/// Another file to debug (its current editor text, which may be unsaved).
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct DebugModule {
+    pub path: String,
+    pub source: String,
+    /// Length in chars of a hidden DrRacket header at the start of `source`.
+    pub offset: usize,
+    /// Breakpoints (0-based char positions in the visible buffer).
+    pub breakpoints: Vec<usize>,
 }
 
 impl Default for RunOptions {
@@ -80,6 +94,7 @@ impl Default for RunOptions {
             breakpoints: Vec::new(),
             print_width: 80,
             trace: false,
+            debug_modules: Vec::new(),
         }
     }
 }
@@ -118,6 +133,9 @@ pub(crate) enum RunnerCommand<'a> {
     },
     Breakpoints {
         positions: &'a [usize],
+        /// `None` for the main program, else another debugged file.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<&'a str>,
     },
     Complete {
         id: u64,

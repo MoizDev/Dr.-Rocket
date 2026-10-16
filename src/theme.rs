@@ -599,6 +599,22 @@ mod tests {
         assert_eq!(t.terminal.ansi[1], Color32::from_rgb(0xe0, 0x55, 0x61));
     }
 
+    /// Moiz One Dark is the user's Zed "One Dark Darker" theme under a new name: every style
+    /// value must match the original (checked when the Zed theme is installed).
+    #[test]
+    fn default_theme_is_one_dark_darker() {
+        let Some(path) = dirs::home_dir().map(|h| h.join(".config/zed/themes/one-dark-darker.json")) else { return };
+        let Ok(original) = std::fs::read_to_string(&path) else { return };
+        let parse = |s: &str| serde_json::from_str::<Value>(&strip_json_comments(s)).unwrap();
+        let (ours, theirs) = (parse(BUNDLED[0].1), parse(&original));
+        let (ours, theirs) = (ours["themes"].as_array().unwrap(), theirs["themes"].as_array().unwrap());
+        assert_eq!(ours.len(), theirs.len());
+        for (a, b) in ours.iter().zip(theirs) {
+            assert_eq!(a["appearance"], b["appearance"]);
+            assert_eq!(a["style"], b["style"], "Moiz One Dark differs from One Dark Darker");
+        }
+    }
+
     #[test]
     fn all_bundled_themes_parse() {
         for (name, json) in BUNDLED {

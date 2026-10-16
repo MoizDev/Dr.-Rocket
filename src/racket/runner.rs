@@ -98,7 +98,12 @@ impl RunSession {
 
     /// Replace the debugger's breakpoints (char positions in the visible buffer).
     pub fn set_breakpoints(&mut self, positions: &[usize]) {
-        self.send(&RunnerCommand::Breakpoints { positions });
+        self.send(&RunnerCommand::Breakpoints { positions, path: None });
+    }
+
+    /// Update breakpoints in another debugged file (see `RunOptions::debug_modules`).
+    pub fn set_module_breakpoints(&mut self, path: &str, positions: &[usize]) {
+        self.send(&RunnerCommand::Breakpoints { positions, path: Some(path) });
     }
 
     /// Ask for identifiers in the REPL namespace starting with `prefix`; answered by

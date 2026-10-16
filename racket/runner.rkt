@@ -480,7 +480,7 @@
          [("input-eof") (close-output-port input-pipe-out)]
          [("break") (when user-thread (break-thread user-thread))]
          [("debug") (debug-command! (hash-ref cmd 'action "continue"))]
-         [("breakpoints") (set-breakpoints! (hash-ref cmd 'positions '()))]
+         [("breakpoints") (set-breakpoints! (hash-ref cmd 'positions '()) (hash-ref cmd 'path #f))]
          [("complete") (complete! cmd)]
          [else (void)])
        (loop)])))
@@ -501,15 +501,24 @@
 ;; Debugger (gui-debugger annotator)
 
 (define debug-mode 'run)        ; 'run | 'step-into | (cons 'over depth) | (cons 'out depth) | 'pause
-(define breakpoints (make-hash)) ; racket 1-based positions
-(define requested-breakpoints '())
-(define break-positions '())     ; valid break positions from the annotator
+;; Breakpoints are keyed by (cons source-key racket-position): several files can be debugged.
+(define breakpoints (make-hash))
+;; source-key -> requested IDE positions (0-based, visible buffer)
+(define requested-breakpoints (make-hash))
+;; source-key -> valid break positions reported by the annotator
+(define break-positions (make-hash))
 (define top-level-vars '())     ; (list (cons id rd/wr))
 (define debug-key* #f)
 (define mark-source* #f)
 (define mark-bindings* #f)
 (define mark-binding-binding* #f)
 (define mark-binding-value* #f)
+;; Other open files to debug when the program requires them (DrRacket debugs required
+;; modules that are open in other tabs): simplified path -> (vector source offset)
+(define debug-modules (make-hash))
+
+(define (source-key src)
+  (if (path? src) (simplify-path* src) src))
 
 (define (debug-command! action)
   (define a (string->symbol action))
@@ -517,17 +526,29 @@
       (set! debug-mode 'pause)
       (async-channel-put debug-actions a)))
 
-(define (snap-breakpoint pos)
+(define (key-offset key)
+  (cond
+    [(same-source? key (main-source)) (source-offset)]
+    [(hash-ref debug-modules key #f) => (λ (v) (vector-ref v 1))]
+    [else 0]))
+
+(define (snap-breakpoint key pos)
   ;; IDE position (0-based, visible buffer) -> nearest valid racket position at or after it.
-  (define rp (+ pos 1 (source-offset)))
-  (define candidates (filter (λ (p) (>= p rp)) break-positions))
+  (define rp (+ pos 1 (key-offset key)))
+  (define candidates (filter (λ (p) (>= p rp)) (hash-ref break-positions key '())))
   (if (null? candidates) rp (apply min candidates)))
 
-(define (set-breakpoints! positions)
-  (set! requested-breakpoints (filter exact-nonnegative-integer? (if (list? positions) positions '())))
-  (hash-clear! breakpoints)
-  (for ([p (in-list requested-breakpoints)])
-    (hash-set! breakpoints (snap-breakpoint p) #t)))
+(define (apply-breakpoints! key)
+  (for ([k (in-list (hash-keys breakpoints))] #:when (equal? (car k) key))
+    (hash-remove! breakpoints k))
+  (for ([p (in-list (hash-ref requested-breakpoints key '()))])
+    (hash-set! breakpoints (cons key (snap-breakpoint key p)) #t)))
+
+;; `path` is #f for the main program.
+(define (set-breakpoints! positions [path #f])
+  (define key (if (string? path) (source-key (string->path path)) (source-key (main-source))))
+  (hash-set! requested-breakpoints key (filter exact-nonnegative-integer? (if (list? positions) positions '())))
+  (apply-breakpoints! key))
 
 (define (load-debugger!)
   (define marks (λ (s) (dynamic-require 'gui-debugger/marks s)))
@@ -578,9 +599,9 @@
           [else 'run]))
   (emit* (hasheq 'ev "resumed")))
 
-(define (should-pause? marks pos)
+(define (should-pause? marks src pos)
   (define depth (length marks))
-  (or (and pos (hash-ref breakpoints pos #f))
+  (or (and pos (hash-ref breakpoints (cons (source-key src) pos) #f))
       (match-mode depth)))
 
 (define (match-mode depth)
@@ -594,12 +615,14 @@
 (define (debug-annotate expanded source-name)
   (define annotate-for-single-stepping
     (dynamic-require 'gui-debugger/annotator 'annotate-for-single-stepping))
+  (define key (source-key source-name))
   (define (break? src)
-    (λ (pos) (or (not (eq? debug-mode 'run)) (hash-ref breakpoints pos #f))))
+    (define k (source-key src))
+    (λ (pos) (or (not (eq? debug-mode 'run)) (hash-ref breakpoints (cons k pos) #f))))
   (define (break-before top-mark ccm)
     (define marks (cons top-mark (continuation-mark-set->list ccm debug-key*)))
-    (define pos (syntax-position (mark-source* top-mark)))
-    (when (should-pause? marks pos)
+    (define src (mark-source* top-mark))
+    (when (should-pause? marks (syntax-source src) (syntax-position src))
       (pause! marks #f))
     #f)
   (define (break-after top-mark ccm . vals)
@@ -613,9 +636,30 @@
      (λ (type bound binding) (void))
      (λ (mod var rd/wr) (set! top-level-vars (cons (cons var rd/wr) top-level-vars)))
      source-name))
-  (set! break-positions (sort posns <))
-  (set-breakpoints! requested-breakpoints)
+  (hash-set! break-positions key (sort posns <))
+  (apply-breakpoints! key)
   annotated)
+
+;; A load handler that debug-annotates the other open files when the program requires them
+;; (like DrRacket's eval/annotations), reading their current editor text.
+(define (make-debug-loader old-load)
+  (λ (fn m)
+    (define key (and (path? fn) (source-key fn)))
+    (define entry (and key (hash-ref debug-modules key #f)))
+    (cond
+      [(and entry m
+            ;; a submodule request for a module that's already declared: nothing to do
+            (not (and (pair? m) (module-declared? fn #f))))
+       (define-values (base _name _dir?) (split-path fn))
+       (define port (open-input-string (vector-ref entry 0)))
+       (port-count-lines! port)
+       (define stx
+         (parameterize ([read-accept-reader #t] [read-accept-lang #t] [read-accept-compiled #f])
+           (with-module-reading-parameterization (λ () (read-syntax fn port)))))
+       (define checked (or (check-module-form stx 'ignored fn) stx))
+       (parameterize ([current-load-relative-directory (if (path? base) base (current-directory))])
+         (eval (debug-annotate (expand checked) fn)))]
+      [else (old-load fn m)])))
 
 ;; ---------------------------------------------------------------------------
 ;; Running the program
@@ -811,8 +855,18 @@
   (define instrument (string->symbol (setting options 'instrument "errortrace")))
   (define submodules (map string->symbol (filter string? (setting options 'submodules '("main" "test")))))
   (set! print-width (let ([w (setting options 'print_width 80)]) (if (exact-positive-integer? w) w 80)))
-  (set! requested-breakpoints (filter exact-nonnegative-integer? (setting options 'breakpoints '())))
+  (hash-set! requested-breakpoints (source-key source-name) (filter exact-nonnegative-integer? (setting options 'breakpoints '())))
   (set! trace? (eq? (setting options 'trace #f) #t))
+  (hash-clear! debug-modules)
+  (for ([m (in-list (setting options 'debug_modules '()))] #:when (hash? m))
+    (define p (hash-ref m 'path #f))
+    (when (and (string? p) (not (string=? p "")))
+      (define path (simplify-path* (string->path p)))
+      (define src (string-of-source (hash-ref m 'source "")))
+      (define off (let ([o (hash-ref m 'offset 0)]) (if (exact-nonnegative-integer? o) (min o (string-length src)) 0)))
+      (hash-set! debug-modules path (vector src off))
+      (set-module-offset! path off (for/sum ([c (in-string src 0 off)]) (if (char=? c #\newline) 1 0)))
+      (hash-set! requested-breakpoints path (filter exact-nonnegative-integer? (hash-ref m 'breakpoints '())))))
   (source-offset offset)
   (source-line-offset (for/sum ([c (in-string source 0 offset)]) (if (char=? c #\newline) 1 0)))
   (main-source source-name)
@@ -872,7 +926,9 @@
 (define (run-user! source source-name language instrument submodules user-out user-err)
   (with-handlers ([(λ (e) #t) report-error!])
     (init-value-support!)
-    (when (eq? instrument 'debug) (load-debugger!))
+    (when (eq? instrument 'debug)
+      (load-debugger!)
+      (current-load/use-compiled (make-debug-loader (current-load/use-compiled))))
     (instrument-namespace! instrument))
   (define kind (setting language 'kind "module"))
   (define mod-name (if (path? source-name) source-name (string->symbol "unsaved-editor")))
