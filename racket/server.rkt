@@ -358,7 +358,11 @@
     (on-loader (λ () ((dynamic-require 'scribble/blueboxes 'fetch-blueboxes-strs)
                       tag #:blueboxes-cache (force blueboxes-cache)))))
   (and strs (pair? strs)
-       (hasheq 'lines (cdr strs) 'kind (car strs) 'doc (tag->doc tag))))
+       ;; Scribble lays blue boxes out with non-breaking spaces; plain spaces render the same.
+       (hasheq 'lines (for/list ([l (in-list (cdr strs))])
+                        (string-replace l (string (integer->char #xA0)) " "))
+               'kind (car strs)
+               'doc (tag->doc tag))))
 
 ;; The identifier text around `pos` (0-based, visible buffer).
 (define (identifier-at source pos)
