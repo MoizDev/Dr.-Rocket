@@ -37,6 +37,8 @@ impl LanguageDialog {
 pub enum PromptKind {
     Rename { tab: u64, ranges: Vec<(usize, usize)> },
     InstallPackage,
+    UpdatePackage,
+    RemovePackage,
     NewFile { dir: std::path::PathBuf },
     NewFolder { dir: std::path::PathBuf },
     RenamePath { path: std::path::PathBuf },
@@ -64,6 +66,12 @@ impl Prompt {
     pub fn rename_path(path: std::path::PathBuf) -> Self {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         Self { kind: PromptKind::RenamePath { path }, title: format!("Rename “{name}”"), hint: "new name".into(), text: name, focus: true }
+    }
+    pub fn update_package() -> Self {
+        Self { kind: PromptKind::UpdatePackage, title: "Update Package".into(), hint: "Package name, or leave empty to update all".into(), text: String::new(), focus: true }
+    }
+    pub fn remove_package() -> Self {
+        Self { kind: PromptKind::RemovePackage, title: "Remove Package".into(), hint: "Package name".into(), text: String::new(), focus: true }
     }
     pub fn install_package() -> Self {
         Self { kind: PromptKind::InstallPackage, title: "Install Package".into(), hint: "Package name or URL, e.g. threading".into(), text: String::new(), focus: true }
@@ -118,6 +126,17 @@ impl App {
                     let name = p.text.trim().to_string();
                     if !name.is_empty() {
                         crate::racket_ui::install_package(self, &name);
+                    }
+                }
+                PromptKind::UpdatePackage => {
+                    let name = p.text.trim().to_string();
+                    let args = if name.is_empty() { vec!["--all".to_string()] } else { vec![name] };
+                    crate::racket_ui::raco_pkg(self, "update", args);
+                }
+                PromptKind::RemovePackage => {
+                    let name = p.text.trim().to_string();
+                    if !name.is_empty() {
+                        crate::racket_ui::raco_pkg(self, "remove", vec![name]);
                     }
                 }
                 PromptKind::NewFile { dir } => {

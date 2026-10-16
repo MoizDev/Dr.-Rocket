@@ -916,6 +916,39 @@ impl App {
                     t.editor.doc.type_text("λ", false);
                 }
             }
+            Command::Revert => {
+                let Some(path) = self.active_tab().and_then(|t| t.path.clone()) else { return };
+                match self.read_source(&path) {
+                    Ok((text, wxme)) => {
+                        let (_, _, body) = crate::racket_ui::load_text(self, Some(&path), &text);
+                        if let Some(t) = self.active_tab_mut() {
+                            if let Some(w) = wxme {
+                                t.editor.doc.images.load(&w.images);
+                            }
+                            // One undoable edit: ⌘Z brings the discarded changes back.
+                            let b = &mut t.editor.doc.buffer;
+                            let len = b.len();
+                            b.apply(vec![crate::editor::buffer::Replace { range: 0..len, text: body }], None, crate::editor::buffer::EditKind::Other);
+                            b.mark_saved();
+                            t.lang_changed = false;
+                        }
+                    }
+                    Err(e) => self.toast(format!("Could not read {}: {e}", path.display()), ToastKind::Error),
+                }
+            }
+            Command::Print => {
+                let light = self.themes.get_or_default("One Light");
+                let Some(t) = self.tabs.get_mut(self.active) else { return };
+                let title = t.title();
+                let page = crate::print::html(&title, &mut t.editor.doc, &light);
+                let path = std::env::temp_dir().join(format!("dr-rocket-print-{}.html", t.id));
+                match std::fs::write(&path, page) {
+                    Ok(()) => {
+                        let _ = open::that(&path);
+                    }
+                    Err(e) => self.toast(format!("Could not prepare printing: {e}"), ToastKind::Error),
+                }
+            }
             Command::InsertImage => {
                 if self.active_tab().is_none_or(|t| t.editor.read_only) {
                     return;

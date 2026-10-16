@@ -1007,7 +1007,7 @@ fn show_step_marks(tab: &mut Tab) {
 // Commands
 
 pub fn run(app: &mut App, cmd: Command) {
-    if app.tabs.is_empty() && !matches!(cmd, Command::SearchDocs | Command::InstallPackage) {
+    if app.tabs.is_empty() && !matches!(cmd, Command::SearchDocs | Command::InstallPackage | Command::UpdatePackage | Command::RemovePackage | Command::ShowPackages) {
         app.toast("Open a Racket file first", ToastKind::Info);
         return;
     }
@@ -1081,6 +1081,10 @@ pub fn run(app: &mut App, cmd: Command) {
             run_in_terminal(app, &raco, &["exe".into(), "-o".into(), out.to_string_lossy().into_owned(), path.to_string_lossy().into_owned()]);
         }
         Command::InstallPackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::install_package()),
+        Command::UpdatePackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::update_package()),
+        Command::RemovePackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::remove_package()),
+        Command::ShowPackages => raco_pkg(app, "show", vec!["--all".into()]),
+        Command::SaveInteractions => save_interactions(app, i),
         Command::ModuleBrowser => {
             let include_libs = app.tabs[i].rk.modules.as_ref().is_some_and(|m| m.include_libs);
             request_modules(app, i, include_libs);
@@ -1115,8 +1119,48 @@ pub fn run_in_terminal(app: &mut App, program: &str, args: &[String]) {
 }
 
 pub fn install_package(app: &mut App, name: &str) {
+    raco_pkg(app, "install", vec!["--auto".into(), name.to_string()]);
+}
+
+/// `raco pkg <action> args…` in a terminal, so the output (and any questions) are visible.
+pub fn raco_pkg(app: &mut App, action: &str, args: Vec<String>) {
+    ensure_backend(app);
     let raco = app.racket.install.as_ref().and_then(|r| r.raco()).map(|p| p.to_string_lossy().into_owned()).unwrap_or_else(|| "raco".into());
-    run_in_terminal(app, &raco, &["pkg".into(), "install".into(), "--auto".into(), name.to_string()]);
+    let mut all = vec!["pkg".to_string(), action.to_string()];
+    all.extend(args);
+    run_in_terminal(app, &raco, &all);
+}
+
+/// The interactions transcript as plain text.
+pub fn transcript_text(tab: &Tab) -> String {
+    let mut out = String::new();
+    for e in &tab.rk.transcript {
+        let line = match e {
+            Entry::Banner(s) | Entry::Info(s) => s.clone(),
+            Entry::Input(s) => format!("> {s}"),
+            Entry::Output { text, .. } => text.trim_end_matches('\n').to_string(),
+            Entry::Value(parts) => parts.iter().map(|p| match p { ValuePart::Text(t) => t.clone(), ValuePart::Image(..) => "[image]".into() }).collect(),
+            Entry::Error(r, _) => r.message.clone(),
+            Entry::Tests(t) => t.text.clone(),
+        };
+        out.push_str(&line);
+        out.push('\n');
+    }
+    out
+}
+
+fn save_interactions(app: &mut App, i: usize) {
+    let tab = &app.tabs[i];
+    let name = tab.path.as_ref().and_then(|p| p.file_stem()).map(|s| format!("{}-interactions.txt", s.to_string_lossy())).unwrap_or_else(|| "interactions.txt".into());
+    let mut dlg = rfd::FileDialog::new().set_file_name(&name);
+    if let Some(dir) = tab.path.as_ref().and_then(|p| p.parent()) {
+        dlg = dlg.set_directory(dir);
+    }
+    let Some(path) = dlg.save_file() else { return };
+    let text = transcript_text(tab);
+    if let Err(e) = crate::config::atomic_write(&path, text.as_bytes()) {
+        app.toast(format!("Could not save: {e}"), ToastKind::Error);
+    }
 }
 
 /// Apply a new language (from the Choose Language dialog) to the active tab.

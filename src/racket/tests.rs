@@ -822,7 +822,7 @@ fn stepper_shows_images() {
         images: Default::default(),
     };
     let events = step_until(&StepperSession::start(b, &request).unwrap());
-    let last = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).last().unwrap();
+    let last = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).next_back().unwrap();
     let result = last.after.last().unwrap().text.clone();
     let c = result.chars().next().unwrap();
     assert!(crate::editor::images::is_image_char(c), "{result:?}");
