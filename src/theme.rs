@@ -161,21 +161,29 @@ pub fn parse_color(s: &str) -> Option<Color32> {
     }
 }
 
+// Note: `Color32` stores premultiplied alpha, so these helpers work on the unmultiplied
+// sRGBA values to blend correctly.
+
 /// Composite `top` (possibly translucent) over an opaque `bottom`.
 pub fn over(bottom: Color32, top: Color32) -> Color32 {
-    let a = top.a() as f32 / 255.0;
+    let [br, bg, bb, _] = bottom.to_srgba_unmultiplied();
+    let [tr, tg, tb, ta] = top.to_srgba_unmultiplied();
+    let a = ta as f32 / 255.0;
     let mix = |b: u8, t: u8| (b as f32 * (1.0 - a) + t as f32 * a).round() as u8;
-    Color32::from_rgb(mix(bottom.r(), top.r()), mix(bottom.g(), top.g()), mix(bottom.b(), top.b()))
+    Color32::from_rgb(mix(br, tr), mix(bg, tg), mix(bb, tb))
 }
 
-/// Linear mix between two colors.
+/// Linear mix between two colors (in unmultiplied sRGBA).
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let (a, b) = (a.to_srgba_unmultiplied(), b.to_srgba_unmultiplied());
     let m = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Color32::from_rgba_unmultiplied(m(a.r(), b.r()), m(a.g(), b.g()), m(a.b(), b.b()), m(a.a(), b.a()))
+    Color32::from_rgba_unmultiplied(m(a[0], b[0]), m(a[1], b[1]), m(a[2], b[2]), m(a[3], b[3]))
 }
 
+/// The same color with a different (straight) alpha.
 pub fn with_alpha(c: Color32, alpha: u8) -> Color32 {
-    Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), alpha)
+    let [r, g, b, _] = c.to_srgba_unmultiplied();
+    Color32::from_rgba_unmultiplied(r, g, b, alpha)
 }
 
 struct Style<'a> {
@@ -595,6 +603,17 @@ mod tests {
             reg.add_family(json, ThemeSource::Bundled);
             assert!(!reg.themes.is_empty(), "{name} did not parse");
         }
+    }
+
+    #[test]
+    fn blending_respects_premultiplied_alpha() {
+        let bg = Color32::from_rgb(0, 0, 0);
+        let half_white = Color32::from_rgba_unmultiplied(255, 255, 255, 128);
+        let o = over(bg, half_white);
+        assert!((o.r() as i32 - 128).abs() <= 1, "{o:?}");
+        assert_eq!(with_alpha(half_white, 255), Color32::WHITE);
+        let m = mix(Color32::BLACK, Color32::WHITE, 0.5);
+        assert!((m.r() as i32 - 128).abs() <= 1);
     }
 
     #[test]

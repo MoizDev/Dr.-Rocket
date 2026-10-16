@@ -1,6 +1,12 @@
 //! UI foundation: fonts, theme -> egui style, design tokens, and shared widgets.
 
+pub mod chrome;
+pub mod docks;
 pub mod icon_glyphs;
+pub mod palette;
+pub mod settings_view;
+pub mod sidebar;
+pub mod welcome;
 pub mod widgets;
 
 use crate::theme::{Theme, mix, with_alpha};
@@ -31,6 +37,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     add(&mut fonts, "inter-semibold", include_bytes!("../../assets/fonts/Inter-SemiBold.ttf"));
     add(&mut fonts, "fira", include_bytes!("../../assets/fonts/FiraCode-Regular.ttf"));
     add(&mut fonts, "fira-medium", include_bytes!("../../assets/fonts/FiraCode-Medium.ttf"));
+    add(&mut fonts, "fira-bold", include_bytes!("../../assets/fonts/FiraCode-Bold.ttf"));
     add(&mut fonts, "symbols", include_bytes!("../../assets/fonts/MaterialSymbolsOutlined.ttf"));
     add(&mut fonts, "symbols-filled", include_bytes!("../../assets/fonts/MaterialSymbolsFilled.ttf"));
 
@@ -49,6 +56,7 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name(FAMILY_MEDIUM.into()), family("inter-medium"));
     fonts.families.insert(FontFamily::Name(FAMILY_SEMIBOLD.into()), family("inter-semibold"));
     fonts.families.insert(FontFamily::Name("mono-medium".into()), vec!["fira-medium".into(), "inter".into()]);
+    fonts.families.insert(FontFamily::Name(crate::terminal::BOLD_FONT_FAMILY.into()), vec!["fira-bold".into(), "fira".into(), "inter".into()]);
     fonts.families.insert(FontFamily::Name(FAMILY_ICONS.into()), vec!["symbols".into()]);
     fonts.families.insert(FontFamily::Name(FAMILY_ICONS_FILLED.into()), vec!["symbols-filled".into()]);
     ctx.set_fonts(fonts);

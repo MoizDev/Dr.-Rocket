@@ -140,7 +140,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::ZoomReset, label: "Reset Zoom", group: "View", icon: ic::FORMAT_SIZE, shortcut: sc(CMD, Key::Num0) },
     CommandInfo { cmd: Command::SelectTheme, label: "Select Theme…", group: "View", icon: ic::PALETTE, shortcut: sc(cmd_shift(), Key::K) },
     CommandInfo { cmd: Command::ToggleRainbowBrackets, label: "Toggle Rainbow Brackets", group: "View", icon: ic::DATA_ARRAY, shortcut: None },
-    CommandInfo { cmd: Command::ToggleBindingArrows, label: "Toggle Binding Arrows", group: "View", icon: ic::SOUTH_EAST, shortcut: None },
+    CommandInfo { cmd: Command::ToggleBindingArrows, label: "Toggle Binding Arrows", group: "View", icon: ic::EAST, shortcut: None },
     CommandInfo { cmd: Command::Settings, label: "Settings", group: "App", icon: ic::SETTINGS, shortcut: sc(CMD, Key::Comma) },
     CommandInfo { cmd: Command::KeyboardShortcuts, label: "Keyboard Shortcuts", group: "App", icon: ic::KEYBOARD, shortcut: None },
     CommandInfo { cmd: Command::About, label: "About Racketeer", group: "App", icon: ic::INFO, shortcut: None },

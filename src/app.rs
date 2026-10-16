@@ -11,58 +11,170 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum LeftView {
+/// Something that can be shown in a dock.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum PanelItem {
     Files,
     Outline,
     Search,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum RightView {
     Interactions,
     Stepper,
     Tests,
     Macros,
     Docs,
+    Problems,
+    Terminal(u64),
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum BottomView {
-    Terminal,
-    Problems,
+impl PanelItem {
+    pub fn label(&self) -> &'static str {
+        match self {
+            PanelItem::Files => "Files",
+            PanelItem::Outline => "Outline",
+            PanelItem::Search => "Search",
+            PanelItem::Interactions => "Interactions",
+            PanelItem::Stepper => "Stepper",
+            PanelItem::Tests => "Tests",
+            PanelItem::Macros => "Macro Stepper",
+            PanelItem::Docs => "Docs",
+            PanelItem::Problems => "Problems",
+            PanelItem::Terminal(_) => "Terminal",
+        }
+    }
+    pub fn icon(&self) -> &'static str {
+        use crate::ui::ic;
+        match self {
+            PanelItem::Files => ic::FOLDER,
+            PanelItem::Outline => ic::TOC,
+            PanelItem::Search => ic::SEARCH,
+            PanelItem::Interactions => ic::TERMINAL,
+            PanelItem::Stepper => ic::STEP,
+            PanelItem::Tests => ic::SCIENCE,
+            PanelItem::Macros => ic::AUTO_FIX_HIGH,
+            PanelItem::Docs => ic::MENU_BOOK,
+            PanelItem::Problems => ic::ERROR,
+            PanelItem::Terminal(_) => ic::TERMINAL,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Dock {
+    Left,
+    Right,
+    Bottom,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DockState {
+    pub open: bool,
+    pub size: f32,
+    pub items: Vec<PanelItem>,
+    pub active: usize,
+}
+
+impl DockState {
+    pub fn active_item(&self) -> Option<PanelItem> {
+        self.items.get(self.active).or(self.items.first()).copied()
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Layout {
-    pub left_open: bool,
-    pub left_w: f32,
-    pub right_open: bool,
-    pub right_w: f32,
-    pub bottom_open: bool,
-    pub bottom_h: f32,
-    pub left_view: LeftView,
-    pub right_view: RightView,
-    pub bottom_view: BottomView,
-    /// DrRacket-style: interactions below the definitions instead of beside them.
+    pub left: DockState,
+    pub right: DockState,
+    pub bottom: DockState,
+    /// DrRacket-style: the right dock is shown below the definitions instead of beside them.
     pub interactions_below: bool,
 }
 
 impl Default for Layout {
     fn default() -> Self {
         Self {
-            left_open: true,
-            left_w: 260.0,
-            right_open: true,
-            right_w: 520.0,
-            bottom_open: false,
-            bottom_h: 260.0,
-            left_view: LeftView::Files,
-            right_view: RightView::Interactions,
-            bottom_view: BottomView::Terminal,
+            left: DockState { open: true, size: 260.0, items: vec![PanelItem::Files, PanelItem::Outline, PanelItem::Search], active: 0 },
+            right: DockState {
+                open: true,
+                size: 520.0,
+                items: vec![PanelItem::Interactions, PanelItem::Stepper, PanelItem::Tests, PanelItem::Macros, PanelItem::Docs],
+                active: 0,
+            },
+            bottom: DockState { open: false, size: 260.0, items: vec![PanelItem::Problems], active: 0 },
             interactions_below: false,
         }
+    }
+}
+
+impl Layout {
+    pub fn dock(&self, d: Dock) -> &DockState {
+        match d {
+            Dock::Left => &self.left,
+            Dock::Right => &self.right,
+            Dock::Bottom => &self.bottom,
+        }
+    }
+    pub fn dock_mut(&mut self, d: Dock) -> &mut DockState {
+        match d {
+            Dock::Left => &mut self.left,
+            Dock::Right => &mut self.right,
+            Dock::Bottom => &mut self.bottom,
+        }
+    }
+    pub fn find(&self, item: PanelItem) -> Option<(Dock, usize)> {
+        for d in [Dock::Left, Dock::Right, Dock::Bottom] {
+            if let Some(i) = self.dock(d).items.iter().position(|x| *x == item) {
+                return Some((d, i));
+            }
+        }
+        None
+    }
+    /// Open the dock containing `item` and make it active (adding it to `default` if absent).
+    pub fn show(&mut self, item: PanelItem, default: Dock) {
+        let (d, i) = match self.find(item) {
+            Some(x) => x,
+            None => {
+                let ds = self.dock_mut(default);
+                ds.items.push(item);
+                (default, ds.items.len() - 1)
+            }
+        };
+        let ds = self.dock_mut(d);
+        ds.open = true;
+        ds.active = i;
+    }
+    pub fn is_visible(&self, item: PanelItem) -> bool {
+        self.find(item).is_some_and(|(d, i)| self.dock(d).open && self.dock(d).active == i)
+    }
+    pub fn remove(&mut self, item: PanelItem) {
+        for d in [Dock::Left, Dock::Right, Dock::Bottom] {
+            let ds = self.dock_mut(d);
+            if let Some(i) = ds.items.iter().position(|x| *x == item) {
+                ds.items.remove(i);
+                if ds.active >= ds.items.len() {
+                    ds.active = ds.items.len().saturating_sub(1);
+                }
+                if ds.items.is_empty() {
+                    ds.open = false;
+                }
+            }
+        }
+    }
+    pub fn move_to(&mut self, item: PanelItem, to: Dock) {
+        self.remove(item);
+        let ds = self.dock_mut(to);
+        ds.items.push(item);
+        ds.active = ds.items.len() - 1;
+        ds.open = true;
+    }
+    /// Drop terminals (not persisted) before saving.
+    pub fn without_terminals(&self) -> Layout {
+        let mut l = self.clone();
+        for d in [Dock::Left, Dock::Right, Dock::Bottom] {
+            let ds = l.dock_mut(d);
+            ds.items.retain(|i| !matches!(i, PanelItem::Terminal(_)));
+            ds.active = ds.active.min(ds.items.len().saturating_sub(1));
+        }
+        l
     }
 }
 
@@ -165,6 +277,13 @@ pub struct App {
     pub quit_confirmed: bool,
     pub automation: Option<crate::automation::Automation>,
     pub frame_count: u64,
+    pub terminals: Vec<TerminalTab>,
+}
+
+pub struct TerminalTab {
+    pub id: u64,
+    pub view: crate::terminal::TerminalView,
+    pub focus: bool,
 }
 
 impl App {
@@ -197,6 +316,7 @@ impl App {
             quit_confirmed: false,
             automation: crate::automation::Automation::from_env(),
             frame_count: 0,
+            terminals: Vec::new(),
         };
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
         if restore {
@@ -319,8 +439,7 @@ impl App {
     pub fn open_folder(&mut self, path: &Path) {
         self.workspace = Some(Workspace::open(path, &self.ctx));
         self.recents.add_project(path);
-        self.layout.left_open = true;
-        self.layout.left_view = LeftView::Files;
+        self.layout.show(PanelItem::Files, Dock::Left);
     }
 
     pub fn save_tab(&mut self, idx: usize, save_as: bool) -> bool {
@@ -416,7 +535,7 @@ impl App {
             project: self.workspace.as_ref().map(|w| w.root.clone()),
             files: self.tabs.iter().filter_map(|t| t.path.clone()).collect(),
             active: self.active,
-            layout: self.layout.clone(),
+            layout: self.layout.without_terminals(),
         };
         s.save();
     }
@@ -496,24 +615,22 @@ impl App {
                     }
                 }
             }
-            Command::ToggleLeftPanel => self.layout.left_open = !self.layout.left_open,
-            Command::ToggleRightPanel => self.layout.right_open = !self.layout.right_open,
-            Command::ToggleBottomPanel => self.layout.bottom_open = !self.layout.bottom_open,
-            Command::ShowFiles => self.show_left(LeftView::Files),
-            Command::ShowOutline => self.show_left(LeftView::Outline),
+            Command::ToggleLeftPanel => self.layout.left.open = !self.layout.left.open,
+            Command::ToggleRightPanel => self.layout.right.open = !self.layout.right.open,
+            Command::ToggleBottomPanel => self.layout.bottom.open = !self.layout.bottom.open,
+            Command::ShowFiles => self.toggle_item(PanelItem::Files, Dock::Left),
+            Command::ShowOutline => self.toggle_item(PanelItem::Outline, Dock::Left),
             Command::ShowSearch => {
-                self.show_left(LeftView::Search);
+                self.layout.show(PanelItem::Search, Dock::Left);
                 self.sidebar.focus_search = true;
             }
+            Command::NewTerminal => self.new_terminal(Dock::Bottom),
             Command::FocusEditor => {
                 if let Some(t) = self.active_tab_mut() {
                     t.editor.request_focus();
                 }
             }
-            Command::FocusInteractions => {
-                self.layout.right_open = true;
-                self.layout.right_view = RightView::Interactions;
-            }
+            Command::FocusInteractions => self.layout.show(PanelItem::Interactions, Dock::Right),
             Command::MoveInteractions => self.layout.interactions_below = !self.layout.interactions_below,
             Command::ZoomIn => self.zoom = (self.zoom + 0.1).min(2.5),
             Command::ZoomOut => self.zoom = (self.zoom - 0.1).max(0.5),
@@ -545,13 +662,39 @@ impl App {
         }
     }
 
-    fn show_left(&mut self, v: LeftView) {
-        if self.layout.left_open && self.layout.left_view == v && v != LeftView::Search {
-            self.layout.left_open = false;
+    /// Show `item`, or hide its dock if it is already the visible item.
+    fn toggle_item(&mut self, item: PanelItem, default: Dock) {
+        if self.layout.is_visible(item) {
+            if let Some((d, _)) = self.layout.find(item) {
+                self.layout.dock_mut(d).open = false;
+            }
         } else {
-            self.layout.left_open = true;
-            self.layout.left_view = v;
+            self.layout.show(item, default);
         }
+    }
+
+    pub fn new_terminal(&mut self, dock: Dock) {
+        let cwd = self
+            .workspace
+            .as_ref()
+            .map(|w| w.root.clone())
+            .or_else(|| self.active_tab().and_then(|t| t.path.as_ref()).and_then(|p| p.parent().map(Path::to_path_buf)))
+            .or_else(dirs::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        match crate::terminal::TerminalView::spawn(&cwd, self.settings.shell.as_deref(), &self.ctx) {
+            Ok(view) => {
+                let id = self.next_id;
+                self.next_id += 1;
+                self.terminals.push(TerminalTab { id, view, focus: true });
+                self.layout.show(PanelItem::Terminal(id), dock);
+            }
+            Err(e) => self.toast(format!("Could not start terminal: {e}"), ToastKind::Error),
+        }
+    }
+
+    pub fn close_terminal(&mut self, id: u64) {
+        self.terminals.retain(|t| t.id != id);
+        self.layout.remove(PanelItem::Terminal(id));
     }
 
     /// Racket commands are wired to the backend in `racket_ui.rs`.
@@ -613,59 +756,62 @@ impl App {
 
         let body = Rect::from_min_max(pos2(full.left() + GAP, title.bottom()), pos2(full.right() - GAP, status.top()));
         let ctx = ui.ctx().clone();
-        let left_t = ctx.animate_bool_with_time(Id::new("left-anim"), self.layout.left_open, 0.16);
-        let right_t = ctx.animate_bool_with_time(Id::new("right-anim"), self.layout.right_open, 0.16);
-        let bottom_t = ctx.animate_bool_with_time(Id::new("bottom-anim"), self.layout.bottom_open, 0.16);
+        let has = |d: &DockState| d.open && !d.items.is_empty();
+        let left_t = ctx.animate_bool_with_time(Id::new("left-anim"), has(&self.layout.left), 0.16);
+        let right_t = ctx.animate_bool_with_time(Id::new("right-anim"), has(&self.layout.right), 0.16);
+        let bottom_t = ctx.animate_bool_with_time(Id::new("bottom-anim"), has(&self.layout.bottom), 0.16);
         let ease = |t: f32| 1.0 - (1.0 - t).powi(3);
 
         let max_side = (body.width() * 0.45).max(200.0);
-        self.layout.left_w = self.layout.left_w.clamp(180.0, max_side);
-        self.layout.right_w = self.layout.right_w.clamp(280.0, max_side.max(300.0));
-        let left_w = self.layout.left_w * ease(left_t);
-        let right_w = if self.layout.interactions_below { 0.0 } else { self.layout.right_w * ease(right_t) };
+        self.layout.left.size = self.layout.left.size.clamp(180.0, max_side);
+        self.layout.right.size = self.layout.right.size.clamp(280.0, max_side.max(300.0));
+        let left_w = self.layout.left.size * ease(left_t);
+        let below = self.layout.interactions_below;
+        let right_w = if below { 0.0 } else { self.layout.right.size * ease(right_t) };
 
         let mut x = body.left();
         if left_w > 1.0 {
-            let r = Rect::from_min_max(pos2(x - (self.layout.left_w - left_w), body.top()), pos2(x + left_w, body.bottom()));
-            let r = Rect::from_min_max(pos2(r.left().max(body.left() - self.layout.left_w), r.top()), r.max);
-            let clip = Rect::from_min_max(pos2(body.left(), body.top()), pos2(x + left_w, body.bottom()));
-            self.island(ui, r, clip, |app, ui, rect| app.sidebar_ui(ui, rect));
+            let full_w = self.layout.left.size;
+            let r = Rect::from_min_max(pos2(x + left_w - full_w, body.top()), pos2(x + left_w, body.bottom()));
+            let clip = Rect::from_min_max(body.min, pos2(x + left_w, body.bottom()));
+            self.island(ui, r, clip, |app, ui, rect| app.dock_ui(ui, rect, Dock::Left));
             x += left_w;
             let split = Rect::from_min_max(pos2(x, body.top()), pos2(x + GAP, body.bottom()));
             let d = self.splitter(ui, split, "left", true);
-            self.layout.left_w += d;
+            self.layout.left.size += d;
             x += GAP;
         }
         let mut right_x = body.right();
         if right_w > 1.0 {
-            let r = Rect::from_min_max(pos2(body.right() - right_w, body.top()), pos2(body.right() - right_w + self.layout.right_w, body.bottom()));
+            let full_w = self.layout.right.size;
+            let r = Rect::from_min_max(pos2(body.right() - right_w, body.top()), pos2(body.right() - right_w + full_w, body.bottom()));
             let clip = Rect::from_min_max(pos2(body.right() - right_w, body.top()), body.max);
-            self.island(ui, r, clip, |app, ui, rect| app.right_panel_ui(ui, rect));
+            self.island(ui, r, clip, |app, ui, rect| app.dock_ui(ui, rect, Dock::Right));
             right_x = body.right() - right_w - GAP;
             let split = Rect::from_min_max(pos2(right_x, body.top()), pos2(right_x + GAP, body.bottom()));
             let d = self.splitter(ui, split, "right", true);
-            self.layout.right_w -= d;
+            self.layout.right.size -= d;
         }
         let center = Rect::from_min_max(pos2(x, body.top()), pos2(right_x, body.bottom()));
-        // Bottom panel (and DrRacket-style interactions below) live under the editor.
-        let below_h = if self.layout.interactions_below && self.layout.right_open { self.layout.right_w.min(center.height() * 0.6) } else { 0.0 };
-        let bottom_h = self.layout.bottom_h.clamp(120.0, (center.height() * 0.7).max(140.0)) * ease(bottom_t);
+        // Bottom dock, and the right dock when DrRacket-style "below" layout is on.
+        let bottom_h = self.layout.bottom.size.clamp(120.0, (center.height() * 0.7).max(140.0)) * ease(bottom_t);
         let mut editor_bottom = center.bottom();
         if bottom_h > 1.0 {
             let r = Rect::from_min_max(pos2(center.left(), center.bottom() - bottom_h), center.max);
-            self.island(ui, r, r, |app, ui, rect| app.bottom_panel_ui(ui, rect));
+            self.island(ui, r, r, |app, ui, rect| app.dock_ui(ui, rect, Dock::Bottom));
             editor_bottom = r.top() - GAP;
             let split = Rect::from_min_max(pos2(center.left(), editor_bottom), pos2(center.right(), editor_bottom + GAP));
             let d = self.splitter(ui, split, "bottom", false);
-            self.layout.bottom_h -= d;
+            self.layout.bottom.size -= d;
         }
-        if below_h > 1.0 {
-            let r = Rect::from_min_max(pos2(center.left(), editor_bottom - below_h), pos2(center.right(), editor_bottom));
-            self.island(ui, r, r, |app, ui, rect| app.right_panel_ui(ui, rect));
+        if below && right_t > 0.0 {
+            let h = self.layout.right.size.min(center.height() * 0.6) * ease(right_t);
+            let r = Rect::from_min_max(pos2(center.left(), editor_bottom - h), pos2(center.right(), editor_bottom));
+            self.island(ui, r, r, |app, ui, rect| app.dock_ui(ui, rect, Dock::Right));
             editor_bottom = r.top() - GAP;
             let split = Rect::from_min_max(pos2(center.left(), editor_bottom), pos2(center.right(), editor_bottom + GAP));
             let d = self.splitter(ui, split, "below", false);
-            self.layout.right_w -= d;
+            self.layout.right.size -= d;
         }
         let editor_rect = Rect::from_min_max(center.min, pos2(center.right(), editor_bottom));
         self.island(ui, editor_rect, editor_rect, |app, ui, rect| app.editor_island(ui, rect));
