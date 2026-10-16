@@ -5,7 +5,7 @@
 set -u
 cd "$(dirname "$0")/.."
 ROOT="$PWD"
-BIN="$ROOT/target/debug/drrocket"
+BIN="$ROOT/target/devfast/drrocket"
 STAMP="$(mktemp -t drrocket-dev)"
 PID=""
 
@@ -19,7 +19,7 @@ stop() {
 }
 trap 'stop; rm -f "$STAMP"; exit 0' INT TERM
 
-cargo build || exit 1
+cargo build --profile devfast || exit 1
 touch "$STAMP"
 start "$@"
 echo "dev: running (pid $PID). Watching src/, racket/, assets/ (themes reload live)."
@@ -29,7 +29,7 @@ while true; do
   [ -z "$changed" ] && continue
   touch "$STAMP"
   echo "dev: $changed changed, rebuilding..."
-  if cargo build; then
+  if cargo build --profile devfast; then
     stop
     start "$@"
     echo "dev: restarted (pid $PID)"

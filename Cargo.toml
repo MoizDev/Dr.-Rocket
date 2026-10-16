@@ -50,3 +50,12 @@ opt-level = 3
 
 [dev-dependencies]
 resvg = "0.45"
+
+# tools/dev.sh: release-speed code with fast incremental rebuilds (no LTO, no debug checks).
+[profile.devfast]
+inherits = "release"
+lto = false
+codegen-units = 256
+incremental = true
+strip = false
+debug = "line-tables-only"
