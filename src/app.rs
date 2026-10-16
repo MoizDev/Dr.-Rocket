@@ -274,6 +274,7 @@ pub enum ToastKind {
 }
 
 pub struct App {
+    dev_themes: Option<crate::dev::ThemeWatcher>,
     pub settings: Settings,
     pub themes: ThemeRegistry,
     pub theme: Theme,
@@ -318,6 +319,7 @@ impl App {
         let mut recents = Recents::load();
         recents.prune();
         let mut app = App {
+            dev_themes: crate::dev::ThemeWatcher::start(&cc.egui_ctx),
             settings,
             themes,
             theme,
@@ -1057,6 +1059,10 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.dev_themes.as_ref().is_some_and(|w| w.changed()) {
+            self.themes = ThemeRegistry::load();
+            self.apply_theme_overrides();
+        }
         if self.automation.is_some() {
             // Scripted runs keep rendering even when macOS considers the window occluded
             // (display asleep, other Space). Holds for one frame, so send it every frame.
@@ -1128,6 +1134,11 @@ impl eframe::App for App {
                 *since = now;
             }
         }
+    }
+
+    fn auto_save_interval(&self) -> std::time::Duration {
+        // Developer mode restarts the app on every rebuild; keep the session current.
+        std::time::Duration::from_secs(if self.dev_themes.is_some() { 1 } else { 30 })
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {

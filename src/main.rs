@@ -4,6 +4,7 @@ mod app;
 mod automation;
 mod commands;
 mod config;
+mod dev;
 mod editor;
 mod fuzzy;
 mod platform;

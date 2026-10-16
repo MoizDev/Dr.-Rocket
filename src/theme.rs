@@ -465,8 +465,9 @@ pub struct ThemeRegistry {
 impl ThemeRegistry {
     pub fn load() -> Self {
         let mut reg = ThemeRegistry::default();
-        for (_, json) in BUNDLED {
-            reg.add_family(json, ThemeSource::Bundled);
+        for (file, json) in BUNDLED {
+            let live = crate::dev::bundled_theme(file);
+            reg.add_family(live.as_deref().unwrap_or(json), ThemeSource::Bundled);
         }
         for dir in zed_theme_dirs() {
             reg.add_dir(&dir, ThemeSource::Zed);
