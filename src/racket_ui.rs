@@ -872,18 +872,6 @@ fn show_step_marks(tab: &mut Tab) {
     let _ = a;
 }
 
-#[cfg(test)]
-mod tests {
-    use super::short_test_message;
-
-    #[test]
-    fn condenses_check_expect_messages() {
-        assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
-        assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
-        assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
-    }
-}
-
 // =====================================================================================
 // Commands
 
@@ -2162,4 +2150,16 @@ pub fn call_box(app: &mut App, ui: &Ui, ed_rect: Rect) {
     }
     let _ = name;
     let _ = view::hover_card;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_test_message;
+
+    #[test]
+    fn condenses_check_expect_messages() {
+        assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
+        assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
+        assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
+    }
 }

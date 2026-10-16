@@ -79,7 +79,7 @@ mod open_files {
     /// Teach the app delegate (winit's) to accept `application:openURLs:`.
     fn add_open_urls_to_delegate(mtm: MainThreadMarker) {
         let app = NSApplication::sharedApplication(mtm);
-        let Some(delegate) = (unsafe { app.delegate() }) else { return };
+        let Some(delegate) = app.delegate() else { return };
         let obj: &AnyObject = delegate.as_ref();
         let cls: &AnyClass = obj.class();
         // SAFETY: matches `-(void)application:(NSApplication*)app openURLs:(NSArray<NSURL*>*)urls`
