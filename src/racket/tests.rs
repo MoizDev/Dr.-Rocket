@@ -733,14 +733,14 @@ fn visualizer_records_calls_questions_returns_and_heap_objects() {
     let call = steps.iter().find(|s| s.kind == "call").unwrap();
     let site = &src[call.pos.unwrap()..call.pos.unwrap() + call.span];
     assert_eq!(site, "(insert empty 5)");
-    assert_eq!(call.frames.len(), 1);
+    assert_eq!(call.live_frames().count(), 1);
     assert_eq!(call.frames[0].name, "insert");
     assert_eq!(call.frames[0].vars[1], ("k".to_string(), VizRef::Prim { v: "5".into(), k: "num".into() }));
     let question = steps.iter().find(|s| s.kind == "question").unwrap();
     assert_eq!(&src[question.pos.unwrap()..question.pos.unwrap() + question.span], "(empty? t)");
     assert_eq!(question.value, Some(VizRef::Prim { v: "#true".into(), k: "bool".into() }));
     // Recursion: the second insert recurses into the left subtree (two frames deep).
-    assert!(steps.iter().any(|s| s.kind == "call" && s.frames.len() == 2));
+    assert!(steps.iter().any(|s| s.kind == "call" && s.live_frames().count() == 2));
     // Nodes are heap objects with field names from define-struct; t1 is a global.
     let node = steps.iter().flat_map(|s| s.objects.iter()).find(|o| o.k == "struct").unwrap();
     assert_eq!(node.name.as_deref(), Some("node"));
@@ -761,7 +761,7 @@ fn visualizer_tail_calls_do_not_grow_the_stack() {
     let s = RunSession::start(b, &module_config(None, src, Instrument::Visualize)).unwrap();
     let events = run_until(&s, ready(None));
     let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
-    let deepest = |name: &str| steps.iter().filter(|s| s.frames.last().is_some_and(|f| f.name == name)).map(|s| s.frames.len()).max().unwrap();
+    let deepest = |name: &str| steps.iter().filter(|s| s.live_frames().last().is_some_and(|f| f.name == name)).map(|s| s.live_frames().count()).max().unwrap();
     assert_eq!(deepest("sum-acc"), 1, "tail-recursive loop keeps one frame");
     assert_eq!(deepest("sum"), 4, "(sum (rest l)) is not a tail call");
     // The loop's result comes back once, from the frame that computed it.
@@ -857,7 +857,9 @@ fn visualizer_records_r5rs_programs() {
     let events = run_until(&s, ready(None));
     let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
     assert!(steps.iter().filter(|s| s.kind == "call").count() >= 4, "every rev call is recorded");
-    assert_eq!(steps.iter().map(|s| s.frames.len()).max(), Some(1), "rev's tail calls keep one frame");
+    assert_eq!(steps.iter().map(|s| s.live_frames().count()).max(), Some(1), "rev's tail calls keep one frame");
+    // The replaced frames are still sent (for context), marked as replaced.
+    assert!(steps.iter().any(|s| s.frames.iter().any(|f| f.replaced)));
     // The result is a list of cons cells: 3, 2, 1.
     let end = steps.last().unwrap();
     let r = end.globals.iter().find(|(n, _)| n == "r").map(|(_, v)| v.clone()).unwrap();

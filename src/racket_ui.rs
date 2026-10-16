@@ -2065,25 +2065,60 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         run(app, Command::Visualize);
         return;
     }
-    // Explanation card at the bottom, the diagram in between.
-    let explain_h = 74.0;
-    let canvas = Rect::from_min_max(pos2(rect.left(), rect.top() + 56.0), pos2(rect.right(), rect.bottom() - explain_h - 8.0));
-    ui.painter().hline(rect.left()..=rect.right(), canvas.top() - 1.0, Stroke::new(1.0, tk.island_border));
+    // The diagram, a draggable divider, then the explanation (and the output so far).
     let tab = &mut app.tabs[i];
+    let v = tab.rk.viz.as_mut().unwrap();
+    v.explain_h = v.explain_h.clamp(90.0, (rect.height() - 200.0).max(90.0));
+    let divider_y = rect.bottom() - v.explain_h - 8.0;
+    let canvas = Rect::from_min_max(pos2(rect.left(), rect.top() + 56.0), pos2(rect.right(), divider_y - 4.0));
+    ui.painter().hline(rect.left()..=rect.right(), canvas.top() - 1.0, Stroke::new(1.0, tk.island_border));
+    let grip = Rect::from_center_size(pos2(rect.center().x, divider_y), vec2(rect.width(), 10.0));
+    let gresp = ui.interact(grip, Id::unique("viz-divider"), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
+    if gresp.dragged() {
+        v.explain_h -= gresp.drag_delta().y;
+    }
+    ui.painter().hline(rect.left()..=rect.right(), divider_y, Stroke::new(1.0, if gresp.hovered() || gresp.dragged() { theme.text_accent } else { tk.island_border }));
+    ui.painter().rect_filled(Rect::from_center_size(pos2(rect.center().x, divider_y), vec2(28.0, 4.0)), CornerRadius::same(2), if gresp.hovered() { theme.text_accent } else { tk.hover });
+
     let text_of = {
         let buffer = &tab.editor.doc.buffer;
         let n = buffer.len();
         move |pos: usize, span: usize| -> String { buffer.slice(pos.min(n)..(pos + span).min(n)) }
     };
-    let v = tab.rk.viz.as_mut().unwrap();
     let explanation = v.step().map(|s| crate::visualizer::explain(v, s, &text_of));
     let kind = v.step().map(|s| s.kind.clone()).unwrap_or_default();
+    let output = crate::visualizer::output_until(v, v.current);
     let truncated = v.trace.truncated && v.current + 1 == v.trace.steps.len();
-    if crate::visualizer::draw(v, ui, canvas, &theme) {
+    if crate::visualizer::draw(v, ui, canvas, &theme, &text_of) {
         ui.ctx().request_repaint();
     }
-    let card = Rect::from_min_max(pos2(rect.left() + 10.0, rect.bottom() - explain_h - 4.0), pos2(rect.right() - 10.0, rect.bottom() - 6.0));
-    ui.painter().rect(card, CornerRadius::same(8), mix(tk.island, theme.text, 0.03), Stroke::new(1.0, tk.island_border), egui::StrokeKind::Inside);
+    // Zoom control: − 100% +  (click the percentage to fit the diagram again).
+    {
+        let bar = Rect::from_min_size(pos2(canvas.right() - 132.0, canvas.bottom() - 40.0), vec2(120.0, 30.0));
+        ui.painter().rect(bar, CornerRadius::same(8), tk.popup, Stroke::new(1.0, tk.subtle_border), egui::StrokeKind::Inside);
+        let third = bar.width() / 3.6;
+        let minus = Rect::from_min_size(bar.min, vec2(third, bar.height()));
+        let plus = Rect::from_min_size(pos2(bar.right() - third, bar.top()), vec2(third, bar.height()));
+        let pct = Rect::from_min_max(pos2(minus.right(), bar.top()), pos2(plus.left(), bar.bottom()));
+        let anchor = canvas.size() / 2.0;
+        for (r, label, id) in [(minus, "−", "viz-zoom-out"), (plus, "+", "viz-zoom-in")] {
+            let resp = ui.interact(r, Id::unique(id), Sense::click());
+            if resp.hovered() {
+                ui.painter().rect_filled(r.shrink(3.0), CornerRadius::same(6), tk.hover);
+            }
+            ui.painter().text(r.center(), Align2::CENTER_CENTER, label, ui::medium(16.0), theme.text);
+            if resp.clicked() {
+                v.zoom_by(if label == "+" { 1.2 } else { 1.0 / 1.2 }, anchor);
+            }
+        }
+        let presp = ui.interact(pct, Id::unique("viz-zoom-fit"), Sense::click()).on_hover_text("Fit the diagram");
+        ui.painter().text(pct.center(), Align2::CENTER_CENTER, format!("{:.0}%", v.zoom() * 100.0), ui::medium(12.5), if presp.hovered() { theme.text_accent } else { theme.text_muted });
+        if presp.clicked() {
+            v.auto_fit = true;
+        }
+    }
+    // Explanation: the step's code, a headline, and the values as chips; then the output.
+    let area = Rect::from_min_max(pos2(rect.left() + 10.0, divider_y + 8.0), pos2(rect.right() - 10.0, rect.bottom() - 6.0));
     let (badge, color) = match kind.as_str() {
         "call" => ("CALL", theme.syntax.function.color),
         "return" => ("RETURN", theme.success),
@@ -2092,12 +2127,51 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         "set" => ("SET!", theme.warning),
         _ => ("DONE", theme.text_muted),
     };
-    ui.painter().text(card.min + vec2(12.0, 15.0), Align2::LEFT_CENTER, badge, ui::semibold(10.5), color);
-    if let Some(e) = explanation {
-        let headline = if truncated { format!("{}  (recording stopped after {} steps)", e.headline, v.trace.max_steps) } else { e.headline };
-        truncated_label(ui, card.min + vec2(12.0, 36.0), &headline, ui::medium(13.5), theme.text, card.width() - 24.0);
-        truncated_label(ui, card.min + vec2(12.0, 57.0), &e.detail, ui::mono(12.5), theme.text_muted, card.width() - 24.0);
-    }
+    let mut eui = ui.new_child(UiBuilder::new().max_rect(area));
+    eui.set_clip_rect(area);
+    egui::ScrollArea::vertical().id_salt("viz-explain").auto_shrink([false, false]).show(&mut eui, |ui| {
+        let w = ui.available_width();
+        let chip = |ui: &Ui, text: &str, bg: Color32, fg: Color32| -> egui::text::LayoutJob {
+            let mut job = egui::text::LayoutJob::default();
+            job.append(text, 0.0, egui::TextFormat { font_id: ui::mono(13.0), color: fg, background: bg, ..Default::default() });
+            let _ = ui;
+            job
+        };
+        if let Some(e) = &explanation {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(badge).font(ui::semibold(10.5)).color(color));
+                if !e.code.is_empty() {
+                    let code = if e.code.chars().count() > 80 { format!("{}…", e.code.chars().take(79).collect::<String>()) } else { e.code.clone() };
+                    ui.label(chip(ui, &format!(" {code} "), tk.hover, theme.text));
+                }
+            });
+            ui.add_space(4.0);
+            let headline = if truncated { format!("{}  (recording stopped after {} steps)", e.headline, v.trace.max_steps) } else { e.headline.clone() };
+            ui.label(egui::RichText::new(headline).font(ui::medium(14.0)).color(theme.text));
+            ui.add_space(2.0);
+            for line in &e.lines {
+                let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: w - 8.0, ..Default::default() }, ..Default::default() };
+                for piece in line {
+                    match piece {
+                        crate::visualizer::Piece::Text(t) => job.append(t, 0.0, egui::TextFormat { font_id: ui::ui_font(13.5), color: theme.text_muted, ..Default::default() }),
+                        crate::visualizer::Piece::Code(t) => job.append(&format!(" {t} "), 0.0, egui::TextFormat { font_id: ui::mono(13.0), color: theme.text, background: tk.hover, ..Default::default() }),
+                        crate::visualizer::Piece::Value(t) => job.append(&format!(" {t} "), 0.0, egui::TextFormat { font_id: ui::mono(13.0), color: theme.text, background: with_alpha(theme.text_accent, 60), ..Default::default() }),
+                    }
+                }
+                ui.label(job);
+            }
+        }
+        if !output.is_empty() {
+            ui.add_space(8.0);
+            ui.label(egui::RichText::new("OUTPUT SO FAR").font(ui::semibold(10.5)).color(theme.text_placeholder));
+            let shown: Vec<&str> = output.trim_end_matches('\n').lines().collect();
+            let tail = shown[shown.len().saturating_sub(12)..].join("\n");
+            egui::Frame::NONE.fill(mix(tk.island, Color32::BLACK, 0.25)).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(10, 6)).show(ui, |ui| {
+                ui.set_width(w - 20.0);
+                ui.label(egui::RichText::new(tail).font(ui::mono(12.5)).color(theme.text));
+            });
+        }
+    });
     // Highlight the step's code in the editor.
     let step_range = v.step().and_then(|s| s.pos.map(|p| p..p + s.span.max(1)));
     if v.highlighted != Some(v.current) {

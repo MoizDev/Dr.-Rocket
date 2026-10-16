@@ -756,6 +756,15 @@ impl EditorView {
             if let Some(b) = border {
                 self.paint_range_underline(&tp, m.range.start, m.range.end, first, last, with_alpha(b, 200));
             }
+            // The visualizer's current line gets an arrow in the gutter.
+            if m.kind == MarkKind::Viz {
+                let line = self.doc.buffer.line_of(m.range.start);
+                if (first..=last).contains(&line) {
+                    let cy = self.line_y(line) + line_h / 2.0;
+                    let x = text_left - 6.0;
+                    ui.painter_at(rect).add(egui::Shape::convex_polygon(vec![pos2(x, cy), pos2(x - 7.0, cy - 5.0), pos2(x - 7.0, cy + 5.0)], theme.text_accent, Stroke::NONE));
+                }
+            }
         }
 
         // Occurrences of the identifier at the cursor.

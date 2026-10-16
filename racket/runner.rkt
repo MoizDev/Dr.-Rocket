@@ -40,6 +40,7 @@
   (call-with-semaphore out-lock flush-pending!/locked))
 
 (define (buffer-output! stream str)
+  (viz-note-output! str)
   (unless (string=? str "")
     (call-with-semaphore
      out-lock
@@ -356,6 +357,8 @@
                    [(eq? (global-port-print-handler) default-global-print) (pretty-print v)]
                    [else (print v)]))))))
       (define trimmed (trim-trailing-newline segments))
+      ;; Printed results are the program's output too (as the visualizer shows it).
+      (viz-note-output! (string-append (apply string-append (for/list ([s trimmed]) (hash-ref s 'text (if (hash-ref s 'png #f) "[image]" "")))) "\n"))
       (emit* (hasheq 'ev "value"
                      'text (apply string-append (for/list ([s trimmed]) (hash-ref s 'text "")))
                      'segments trimmed)))))

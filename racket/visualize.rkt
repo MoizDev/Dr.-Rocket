@@ -20,7 +20,8 @@
          viz-finish!
          set-viz-emitter!
          set-viz-image-encoder!
-         set-viz-max-steps!)
+         set-viz-max-steps!
+         viz-note-output!)
 
 ;; ---------------------------------------------------------------------------
 ;; Configuration (set by the runner)
@@ -159,7 +160,12 @@
   (kernel-syntax-case e #f
     [id (identifier? e) e]
     [(#%plain-lambda formals body ...)
-     (rebuild e (cons (car (syntax-e e)) (annotate-lambda-clause #'formals (syntax->list #'(body ...)) name e)))]
+     (let ([lam (rebuild e (cons (car (syntax-e e)) (annotate-lambda-clause #'formals (syntax->list #'(body ...)) name e)))])
+       (if (user-function? e name)
+           ;; Register the closure as a user function (so applications of it aren't recorded
+           ;; as primitive operations); keep its name for printing and error messages.
+           #`(#%plain-app '#,viz-register! #,(if name (syntax-property lam 'inferred-name (syntax-e name)) lam))
+           lam))]
     [(case-lambda [formals body ...] ...)
      (rebuild e (cons (car (syntax-e e))
                       (for/list ([f (in-list (syntax->list #'(formals ...)))]
@@ -204,7 +210,11 @@
            (let ([temps (generate-temporaries parts)])
              #`(let-values #,(for/list ([t (in-list temps)] [p (in-list parts)]) #`[(#,t) #,p])
                  (#%plain-app '#,viz-site! '#,(pos-of e) '#,(span-of e) '#,tail?)
-                 #,(rebuild e (cons (car (syntax-e e)) temps))))
+                 ;; Primitive operations are recorded with their arguments and result; calls
+                 ;; to the user's functions run directly (keeping tail calls tail calls).
+                 (if (#%plain-app '#,viz-primitive? #,(car temps))
+                     (#%plain-app '#,viz-compute '#,(pos-of e) '#,(span-of e) #,(car temps) (#%plain-app list #,@(cdr temps)))
+                     #,(rebuild e (cons (car (syntax-e e)) temps)))))
            (rebuild e (cons (car (syntax-e e)) parts))))]
     [(#%expression x) (rebuild e (list (car (syntax-e e)) (annotate-expr #'x #f tail?)))]
     [_ e]))
@@ -270,6 +280,29 @@
 ;; The most recent user-written application about to run: (list pos span tail?).
 (define current-site #f)
 (define (viz-site! pos span tail?) (set! current-site (list pos span tail?)))
+
+;; The user's functions (closures of instrumented lambdas); everything else applied at a user
+;; call site is a primitive operation.
+(define user-procs (make-weak-hasheq))
+(define (viz-register! f) (hash-set! user-procs f #t) f)
+(define (viz-primitive? f)
+  (and recording? (procedure? f) (not (hash-ref user-procs f #f))))
+
+;; Primitive operations since the last step: (list pos span args result), newest first.
+(define pending-evals '())
+(define (viz-compute pos span f args)
+  (call-with-values
+   (λ () (apply f args))
+   (λ results
+     (when (and recording? (= 1 (length results)))
+       (set! pending-evals (take (cons (list pos span args (car results)) pending-evals)
+                                 (min 12 (add1 (length pending-evals))))))
+     (apply values results))))
+
+;; Program output since the last step.
+(define pending-output (open-output-string))
+(define (viz-note-output! str)
+  (when recording? (write-string str pending-output)))
 (define stack '()) ; newest first
 (define globals '()) ; newest first: (name . getter)
 (define recording? #f)
@@ -281,6 +314,8 @@
   (set! globals '())
   (set! step-count 0)
   (set! truncated? #f)
+  (set! pending-evals '())
+  (set! pending-output (open-output-string))
   (set! recording? #t)
   (emitter (hasheq 'ev "viz-start" 'max_steps max-steps)))
 
@@ -375,9 +410,22 @@
          (list (car g) (ref (with-handlers ([(λ (e) #t) (λ (e) (void))]) ((cdr g)))))))
      (define globals-json (vars (reverse globals)))
      (define frames-json
-       (for/list ([f (in-list (reverse stack))] #:unless (frame-replaced? f))
+       ;; Frames replaced by a tail call are sent too (marked), so the IDE can show where the
+       ;; running call came from without pretending the stack grew.
+       (for/list ([f (in-list (reverse stack))])
          (hasheq 'name (frame-name f)
+                 'replaced (frame-replaced? f)
+                 'nargs (length (frame-args f))
+                 'pos (or (frame-pos f) (json-null))
+                 'span (or (frame-span f) 0)
                  'vars (vars (append (frame-args f) (frame-locals f))))))
+     (define evals
+       (for/list ([e (in-list (reverse pending-evals))])
+         (hasheq 'pos (or (car e) (json-null)) 'span (cadr e)
+                 'args (map ref (caddr e)) 'value (ref (cadddr e)))))
+     (set! pending-evals '())
+     (define output (get-output-string pending-output))
+     (set! pending-output (open-output-string))
      (define msg
        (for/fold ([h (hasheq 'ev "viz-step"
                              'index step-count
@@ -386,7 +434,9 @@
                              'span (or span 0)
                              'name (or name (json-null))
                              'globals globals-json
-                             'frames frames-json)])
+                             'frames frames-json
+                             'evals evals
+                             'output output)])
                  ([(k v) (in-hash (or extra (hasheq)))])
          (hash-set h k (if (eq? k 'value) (ref v) v))))
      (set! step-count (add1 step-count))

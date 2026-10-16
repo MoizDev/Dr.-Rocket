@@ -392,6 +392,13 @@ pub struct VizObject {
 pub struct VizFrame {
     pub name: String,
     pub vars: Vec<(String, VizRef)>,
+    /// Replaced by a tail call: it's gone in Racket, but shown faded for context.
+    pub replaced: bool,
+    /// The first `nargs` of `vars` are the arguments; the rest are local definitions.
+    pub nargs: usize,
+    /// Where the call that made this frame is in the program.
+    pub pos: Option<usize>,
+    pub span: usize,
 }
 
 /// One recorded step: what happened, the call stack and globals, and changed objects.
@@ -410,6 +417,27 @@ pub struct VizStep {
     /// Oldest first.
     pub frames: Vec<VizFrame>,
     pub objects: Vec<VizObject>,
+    /// Primitive operations evaluated since the previous step, in order.
+    pub evals: Vec<VizEval>,
+    /// What the program printed since the previous step.
+    pub output: String,
+}
+
+/// A primitive operation at a call site in the user's code, e.g. `(sub1 n)` with 4 → 3.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VizEval {
+    pub pos: Option<usize>,
+    pub span: usize,
+    pub args: Vec<VizRef>,
+    pub value: Option<VizRef>,
+}
+
+impl VizStep {
+    /// The frames that are really on the stack (not replaced by tail calls).
+    pub fn live_frames(&self) -> impl Iterator<Item = &VizFrame> {
+        self.frames.iter().filter(|f| !f.replaced)
+    }
 }
 
 // ---------------------------------------------------------------------------
