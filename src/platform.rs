@@ -325,7 +325,7 @@ mod menu {
         main.addItem(&submenu(mtm, app_name, &app_menu));
 
         for spec in specs.iter().filter(|s| s.title != "App") {
-            let m = unsafe { NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(spec.title)) };
+            let m = NSMenu::initWithTitle(NSMenu::alloc(mtm), &NSString::from_str(spec.title));
             add_entries(&m, &spec.entries);
             main.addItem(&submenu(mtm, spec.title, &m));
             if spec.title == "Window" {
