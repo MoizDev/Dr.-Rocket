@@ -4,14 +4,13 @@
 
 use egui::Color32;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 /// Default theme name.
-pub const DEFAULT_THEME: &str = "One Dark Darker";
+pub const DEFAULT_THEME: &str = "Moiz One Dark";
 
 const BUNDLED: &[(&str, &str)] = &[
-    ("one-dark-darker.json", include_str!("../assets/themes/one-dark-darker.json")),
+    ("moiz-one-dark.json", include_str!("../assets/themes/moiz-one-dark.json")),
     ("one-dark.json", include_str!("../assets/themes/one-dark.json")),
     ("one-light.json", include_str!("../assets/themes/one-light.json")),
     ("drracket.json", include_str!("../assets/themes/drracket.json")),
@@ -424,6 +423,8 @@ fn opaque(c: Color32, base: Color32) -> Color32 {
 #[derive(Clone, Debug)]
 pub struct ThemeEntry {
     pub theme: Theme,
+    /// The theme's `style` JSON, used to skip identical copies imported from Zed.
+    style_json: String,
     /// Where it came from, for the theme picker.
     pub source: ThemeSource,
 }
@@ -479,9 +480,11 @@ impl ThemeRegistry {
         let Some(list) = v.get("themes").and_then(Value::as_array) else { return };
         for t in list {
             if let Some(theme) = Theme::from_zed(t) {
-                // First registration of a name wins (bundled before Zed copies).
-                if !self.themes.iter().any(|e| e.theme.name == theme.name) {
-                    self.themes.push(ThemeEntry { theme, source: source.clone() });
+                let style_json = t.get("style").map(|s| s.to_string()).unwrap_or_default();
+                // First registration of a name wins (bundled before Zed copies), and a Zed
+                // theme identical to a bundled one (e.g. the source of Moiz One Dark) is skipped.
+                if !self.themes.iter().any(|e| e.theme.name == theme.name || e.style_json == style_json) {
+                    self.themes.push(ThemeEntry { theme, style_json, source: source.clone() });
                 }
             }
         }

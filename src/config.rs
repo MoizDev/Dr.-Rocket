@@ -61,7 +61,7 @@ impl Default for Settings {
             buffer_font_size: 16.0,
             ui_font_size: 14.0,
             terminal_font_size: 15.0,
-            line_height: 1.55,
+            line_height: 1.6,
             cursor_shape: CursorShape::Bar,
             cursor_blink: true,
             rainbow_brackets: true,
@@ -141,11 +141,6 @@ impl Settings {
         }
         if let Some(b) = v.pointer("/indent_guides/enabled").and_then(|x| x.as_bool()) {
             s.indent_guides = b;
-        }
-        if let Some(t) = v.pointer("/theme/dark").and_then(|x| x.as_str()) {
-            s.theme = t.to_string();
-        } else if let Some(t) = v.get("theme").and_then(|x| x.as_str()) {
-            s.theme = t.to_string();
         }
         Some(s)
     }

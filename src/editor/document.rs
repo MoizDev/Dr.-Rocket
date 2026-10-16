@@ -8,11 +8,13 @@ use std::ops::Range;
 
 pub struct Document {
     pub buffer: Buffer,
-    tokens: Vec<Token>,
+    tokens: std::sync::Arc<Vec<Token>>,
     chars: Vec<char>,
     synced_version: u64,
     /// Stack of selections for "shrink selection" after "expand selection".
     expand_stack: Vec<Selections>,
+    /// Edits applied since the last `take_edit_log`, for shifting decorations.
+    edit_log: Vec<(Range<usize>, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,7 +44,7 @@ impl Lines for Buffer {
 
 impl Document {
     pub fn new(text: &str) -> Self {
-        let mut d = Self { buffer: Buffer::new(text), tokens: Vec::new(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new() };
+        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new() };
         d.sync();
         d.buffer.take_changes();
         d
@@ -55,10 +57,11 @@ impl Document {
             return;
         }
         let changes = self.buffer.take_changes();
+        self.edit_log.extend(changes.iter().cloned());
         let incremental = self.synced_version != u64::MAX && !changes.is_empty() && changes.len() <= 16;
         if !incremental {
             self.chars = self.buffer.rope().chars().collect();
-            self.tokens = lexer::lex_chars(&self.chars);
+            self.tokens = std::sync::Arc::new(lexer::lex_chars(&self.chars));
             self.synced_version = self.buffer.version();
             return;
         }
@@ -94,8 +97,14 @@ impl Document {
             self.chars = self.buffer.rope().chars().collect();
         }
         let delta = self.chars.len() as isize - old_len as isize;
-        lexer::relex(&mut self.tokens, &self.chars, lo, hi, delta);
+        lexer::relex(std::sync::Arc::make_mut(&mut self.tokens), &self.chars, lo, hi, delta);
         self.synced_version = self.buffer.version();
+    }
+
+    /// Edits since the last call: (range in pre-edit coordinates, inserted length), in order.
+    pub fn take_edit_log(&mut self) -> Vec<(Range<usize>, usize)> {
+        self.sync();
+        std::mem::take(&mut self.edit_log)
     }
 
     pub fn tokens(&mut self) -> &[Token] {
@@ -105,6 +114,12 @@ impl Document {
     /// Tokens without re-syncing (caller guarantees `sync` was called this frame).
     pub fn tokens_cached(&self) -> &[Token] {
         &self.tokens
+    }
+
+    /// A cheap shared handle to the current tokens (no copy).
+    pub fn tokens_shared(&mut self) -> std::sync::Arc<Vec<Token>> {
+        self.sync();
+        self.tokens.clone()
     }
     pub fn chars(&self) -> &[char] {
         &self.chars

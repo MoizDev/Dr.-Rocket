@@ -2,9 +2,11 @@
 
 mod config;
 mod editor;
+mod fuzzy;
 mod racket;
 mod terminal;
 mod theme;
+mod ui;
 
 fn main() -> eframe::Result {
     let options = eframe::NativeOptions::default();
