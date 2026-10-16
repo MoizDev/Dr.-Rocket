@@ -1954,7 +1954,7 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         return;
     }
     // Explanation card at the bottom, the diagram in between.
-    let explain_h = 58.0;
+    let explain_h = 74.0;
     let canvas = Rect::from_min_max(pos2(rect.left(), rect.top() + 56.0), pos2(rect.right(), rect.bottom() - explain_h - 8.0));
     ui.painter().hline(rect.left()..=rect.right(), canvas.top() - 1.0, Stroke::new(1.0, tk.island_border));
     let tab = &mut app.tabs[i];
@@ -1964,7 +1964,7 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         move |pos: usize, span: usize| -> String { buffer.slice(pos.min(n)..(pos + span).min(n)) }
     };
     let v = tab.rk.viz.as_mut().unwrap();
-    let explanation = v.step().map(|s| crate::visualizer::explain(v, s, &text_of)).unwrap_or_default();
+    let explanation = v.step().map(|s| crate::visualizer::explain(v, s, &text_of));
     let kind = v.step().map(|s| s.kind.clone()).unwrap_or_default();
     let truncated = v.trace.truncated && v.current + 1 == v.trace.steps.len();
     if crate::visualizer::draw(v, ui, canvas, &theme) {
@@ -1980,9 +1980,12 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         "set" => ("SET!", theme.warning),
         _ => ("DONE", theme.text_muted),
     };
-    ui.painter().text(card.min + vec2(12.0, 14.0), Align2::LEFT_CENTER, badge, ui::semibold(10.5), color);
-    let text = if truncated { format!("{explanation}  (recording stopped after {} steps)", v.trace.max_steps) } else { explanation };
-    truncated_label(ui, card.min + vec2(12.0, 36.0), &text, ui::mono(13.0), theme.text, card.width() - 24.0);
+    ui.painter().text(card.min + vec2(12.0, 15.0), Align2::LEFT_CENTER, badge, ui::semibold(10.5), color);
+    if let Some(e) = explanation {
+        let headline = if truncated { format!("{}  (recording stopped after {} steps)", e.headline, v.trace.max_steps) } else { e.headline };
+        truncated_label(ui, card.min + vec2(12.0, 36.0), &headline, ui::medium(13.5), theme.text, card.width() - 24.0);
+        truncated_label(ui, card.min + vec2(12.0, 57.0), &e.detail, ui::mono(12.5), theme.text_muted, card.width() - 24.0);
+    }
     // Highlight the step's code in the editor.
     let step_range = v.step().and_then(|s| s.pos.map(|p| p..p + s.span.max(1)));
     if v.highlighted != Some(v.current) {

@@ -832,53 +832,229 @@ fn draw_plain(pp: &Pen, ui: &Ui, o: &VizObject, r: Rect, radius: CornerRadius, b
 
 // ------------------------------------------------------------------------------- explanation
 
-/// A one-line, plain-language description of a step. `code` reads source text by range.
-pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize) -> String) -> String {
-    let describe = |r: &VizRef| -> String {
-        match r {
-            VizRef::Prim { v, .. } => v.clone(),
-            VizRef::Object { id } => match view.trace.object(*id, step.index) {
-                Some(o) => match o.k.as_str() {
-                    "struct" => format!("a {}", o.name.as_deref().unwrap_or("struct")),
-                    "cons" => "a list".into(),
-                    "vector" => format!("a vector of {}", o.len.unwrap_or(o.items.len())),
-                    "image" => "an image".into(),
-                    k => format!("a {k}"),
-                },
-                None => "a value".into(),
-            },
+/// A step in plain language: a headline, and the values involved.
+pub struct Explanation {
+    pub headline: String,
+    pub detail: String,
+}
+
+/// A value written the way the language would show it, shortened to about `max` characters:
+/// `(list 3 2 1)`, `(make-node '() 5 (make-node …))`, `"hi"`.
+pub fn show_value(view: &VisualizerView, r: &VizRef, step: usize, max: usize) -> String {
+    fn go(view: &VisualizerView, r: &VizRef, step: usize, depth: usize, out: &mut String, max: usize) {
+        if out.chars().count() > max {
+            return;
         }
-    };
+        let id = match r {
+            VizRef::Prim { v, .. } => {
+                out.push_str(v);
+                return;
+            }
+            VizRef::Object { id } => *id,
+        };
+        let Some(o) = view.trace.object(id, step) else {
+            out.push('…');
+            return;
+        };
+        if depth > 3 {
+            out.push('…');
+            return;
+        }
+        match o.k.as_str() {
+            "cons" => {
+                // A proper list prints as (list …); anything else as nested cons.
+                let mut items = Vec::new();
+                let mut cur = Some(o);
+                let mut proper = false;
+                while let Some(c) = cur {
+                    if c.k != "cons" || items.len() > 50 {
+                        break;
+                    }
+                    items.push(c.first.clone());
+                    match &c.rest {
+                        Some(VizRef::Object { id }) => cur = view.trace.object(*id, step),
+                        Some(VizRef::Prim { k, .. }) if k == "empty" => {
+                            proper = true;
+                            cur = None;
+                        }
+                        _ => cur = None,
+                    }
+                }
+                if !proper {
+                    out.push_str("(cons ");
+                    if let Some(f) = &o.first {
+                        go(view, f, step, depth + 1, out, max);
+                    }
+                    out.push(' ');
+                    if let Some(rest) = &o.rest {
+                        go(view, rest, step, depth + 1, out, max);
+                    }
+                    out.push(')');
+                    return;
+                }
+                out.push_str("(list");
+                for item in items.iter().flatten() {
+                    if out.chars().count() > max {
+                        out.push_str(" …");
+                        break;
+                    }
+                    out.push(' ');
+                    go(view, item, step, depth + 1, out, max);
+                }
+                out.push(')');
+            }
+            "struct" => {
+                out.push_str(&format!("(make-{}", o.name.as_deref().unwrap_or("struct")));
+                for (_, f) in &o.fields {
+                    if out.chars().count() > max {
+                        out.push_str(" …");
+                        break;
+                    }
+                    out.push(' ');
+                    go(view, f, step, depth + 1, out, max);
+                }
+                out.push(')');
+            }
+            "vector" => {
+                out.push_str("(vector");
+                for f in &o.items {
+                    out.push(' ');
+                    go(view, f, step, depth + 1, out, max);
+                }
+                out.push(')');
+            }
+            "box" => {
+                out.push_str("(box ");
+                if let Some(f) = o.items.first() {
+                    go(view, f, step, depth + 1, out, max);
+                }
+                out.push(')');
+            }
+            "image" => out.push_str("an image"),
+            "hash" => out.push_str(&format!("a hash table of {} entries", o.pairs.len())),
+            _ => out.push_str(o.text.as_deref().unwrap_or("…")),
+        }
+    }
+    let mut out = String::new();
+    go(view, r, step, 0, &mut out, max);
+    if out.chars().count() > max + 12 {
+        let cut: String = out.chars().take(max).collect();
+        format!("{cut}…")
+    } else {
+        out
+    }
+}
+
+/// Explain a step for a student. `code` reads source text by range.
+pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize) -> String) -> Explanation {
+    let show = |r: &VizRef| show_value(view, r, step.index, 60);
     let src = || step.pos.map(|p| code(p, step.span)).unwrap_or_default();
+    let name = step.name.clone().unwrap_or_else(|| "λ".into());
+    let prev = step.index.checked_sub(1).and_then(|k| view.trace.steps.get(k));
+    let caller = prev.and_then(|p| p.frames.last()).map(|f| f.name.clone());
     match step.kind.as_str() {
         "call" => {
-            let frame = step.frames.last();
-            let args: Vec<String> = frame.map(|f| f.vars.iter().map(|(n, v)| format!("{n} = {}", describe(v))).collect()).unwrap_or_default();
-            let name = step.name.as_deref().unwrap_or("λ");
-            if args.is_empty() { format!("Calling {name}") } else { format!("Calling {name} with {}", args.join(", ")) }
-        }
-        "return" => format!("{} returns {}", step.name.as_deref().unwrap_or("λ"), step.value.as_ref().map(describe).unwrap_or_else(|| "nothing".into())),
-        "question" => {
-            let answer = step.value.as_ref().map(describe).unwrap_or_default();
-            let verdict = match answer.as_str() {
-                "#true" => "so this branch is taken",
-                "#false" => "so this branch is skipped",
-                _ => "",
+            let args = step.frames.last().map(|f| f.vars.iter().map(|(n, v)| format!("{n} = {}", show(v))).collect::<Vec<_>>().join("    ")).unwrap_or_default();
+            let depth = step.frames.len();
+            let prev_depth = prev.map(|p| p.frames.len()).unwrap_or(0);
+            let tail = depth > 0 && depth <= prev_depth && prev.is_some_and(|p| p.kind != "return");
+            let headline = match (caller.as_deref() == Some(name.as_str()), tail) {
+                (true, true) => format!("{name} calls itself again. It's a tail call, so the new call replaces the current one"),
+                (true, false) => format!("{name} calls itself on a smaller problem. A new frame goes on the stack"),
+                (false, true) => format!("Calling {name} as a tail call (it replaces the current frame)"),
+                (false, false) => format!("Calling {name}"),
             };
-            format!("{} is {answer}{}{verdict}", src(), if verdict.is_empty() { "" } else { ", " })
+            Explanation { headline, detail: if args.is_empty() { "no arguments".into() } else { args } }
         }
-        "define" => format!("Defined {}", step.name.as_deref().unwrap_or("")),
-        "set" => format!("{} is now {}", step.name.as_deref().unwrap_or(""), step.value.as_ref().map(describe).unwrap_or_default()),
-        "end" => {
-            if step.failed == Some(true) {
-                "The program stopped with an error (see Interactions).".into()
-            } else {
-                "The program finished.".into()
+        "return" => {
+            let value = step.value.as_ref().map(show).unwrap_or_else(|| "nothing".into());
+            let back_to = step.frames.len().checked_sub(2).and_then(|k| step.frames.get(k)).map(|f| f.name.clone());
+            let headline = match back_to {
+                Some(b) if b == name => format!("This {name} call is done; its answer goes back to the {name} call that asked for it"),
+                Some(b) => format!("{name} is done; its answer goes back to {b}"),
+                None => format!("{name} is done"),
+            };
+            Explanation { headline, detail: format!("returns {value}") }
+        }
+        "question" => {
+            let answer = step.value.as_ref().map(show).unwrap_or_default();
+            let question = src();
+            match answer.as_str() {
+                "#true" => Explanation { headline: format!("Is {question} true? Yes"), detail: "so the answer of this cond clause is what we evaluate next".into() },
+                "#false" => Explanation { headline: format!("Is {question} true? No"), detail: "so cond skips this clause and tries the next one".into() },
+                _ => Explanation { headline: format!("Checking {question}"), detail: format!("it evaluates to {answer}") },
             }
         }
-        k => k.to_string(),
+        "define" => {
+            let values: Vec<String> = step
+                .globals
+                .iter()
+                .filter(|(n, _)| step.name.as_deref().is_some_and(|names| names.split(", ").any(|x| x == n)))
+                .map(|(n, v)| match v {
+                    VizRef::Prim { k, .. } if k == "fn" => format!("{n} is a function (it runs when it is called)"),
+                    _ => format!("{n} = {}", show(v)),
+                })
+                .collect();
+            Explanation { headline: format!("Defining {name}"), detail: values.join("    ") }
+        }
+        "set" => Explanation { headline: format!("{name} changes"), detail: format!("{name} is now {}", step.value.as_ref().map(show).unwrap_or_default()) },
+        "end" => {
+            if step.failed == Some(true) {
+                Explanation { headline: "The program stopped with an error".into(), detail: "see the Interactions panel for the message".into() }
+            } else {
+                Explanation { headline: "The program finished".into(), detail: format!("{} steps", view.trace.steps.len()) }
+            }
+        }
+        k => Explanation { headline: k.to_string(), detail: String::new() },
     }
 }
 
 /// Icons for the toolbar (re-exported for the panel).
 pub const ICON: &str = ic::ACCOUNT_TREE;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::racket::protocol::VizFrame;
+
+    fn prim(v: &str, k: &str) -> VizRef {
+        VizRef::Prim { v: v.into(), k: k.into() }
+    }
+    fn cell(id: u64, first: VizRef, rest: VizRef) -> VizObject {
+        VizObject { id, k: "cons".into(), first: Some(first), rest: Some(rest), ..Default::default() }
+    }
+    fn frame(name: &str, vars: Vec<(&str, VizRef)>) -> VizFrame {
+        VizFrame { name: name.into(), vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect() }
+    }
+
+    /// (rvrs '(1 2) '()) -> (rvrs '(2) '(1)): a tail call with real values in the message.
+    #[test]
+    fn explains_tail_recursion_with_values() {
+        let mut view = VisualizerView::default();
+        let list12 = vec![cell(1, prim("1", "num"), VizRef::Object { id: 2 }), cell(2, prim("2", "num"), prim("'()", "empty"))];
+        view.trace.push(VizStep { index: 0, kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 1 }), ("acc", prim("'()", "empty"))])], objects: list12, ..Default::default() });
+        view.trace.push(VizStep { index: 1, kind: "question".into(), frames: vec![frame("rvrs", vec![])], value: Some(prim("#false", "bool")), pos: Some(0), span: 11, ..Default::default() });
+        let acc = vec![cell(3, prim("1", "num"), prim("'()", "empty"))];
+        view.trace.push(VizStep { index: 2, kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 2 }), ("acc", VizRef::Object { id: 3 })])], objects: acc, ..Default::default() });
+        let code = |_: usize, _: usize| "(empty? lst)".to_string();
+
+        let first = explain(&view, &view.trace.steps[0], &code);
+        assert_eq!(first.headline, "Calling rvrs");
+        assert_eq!(first.detail, "lst = (list 1 2)    acc = '()");
+        let q = explain(&view, &view.trace.steps[1], &code);
+        assert_eq!(q.headline, "Is (empty? lst) true? No");
+        let again = explain(&view, &view.trace.steps[2], &code);
+        assert!(again.headline.starts_with("rvrs calls itself again. It's a tail call"), "{}", again.headline);
+        assert_eq!(again.detail, "lst = (list 2)    acc = (list 1)");
+    }
+
+    #[test]
+    fn shows_structs_and_improper_pairs() {
+        let mut view = VisualizerView::default();
+        let node = VizObject { id: 1, k: "struct".into(), name: Some("node".into()), fields: vec![("left".into(), prim("'()", "empty")), ("key".into(), prim("5", "num")), ("right".into(), prim("'()", "empty"))], ..Default::default() };
+        let pair = cell(2, prim("1", "num"), prim("2", "num"));
+        view.trace.push(VizStep { objects: vec![node, pair], ..Default::default() });
+        assert_eq!(show_value(&view, &VizRef::Object { id: 1 }, 0, 60), "(make-node '() 5 '())");
+        assert_eq!(show_value(&view, &VizRef::Object { id: 2 }, 0, 60), "(cons 1 2)");
+    }
+}
