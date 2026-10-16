@@ -960,7 +960,7 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
             let tail = depth > 0 && depth <= prev_depth && prev.is_some_and(|p| p.kind != "return");
             let headline = match (caller.as_deref() == Some(name.as_str()), tail) {
                 (true, true) => format!("{name} calls itself again. It's a tail call, so the new call replaces the current one"),
-                (true, false) => format!("{name} calls itself on a smaller problem. A new frame goes on the stack"),
+                (true, false) => format!("{name} calls itself (recursion). A new frame goes on the stack"),
                 (false, true) => format!("Calling {name} as a tail call (it replaces the current frame)"),
                 (false, false) => format!("Calling {name}"),
             };
@@ -979,9 +979,27 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
         "question" => {
             let answer = step.value.as_ref().map(show).unwrap_or_default();
             let question = src();
+            // What asked the question, from the code just before it: a `cond` clause opens
+            // with `[` (or `(`) right before the question, `if` / `and` / `or` name themselves.
+            let before = step.pos.map(|p| code(p.saturating_sub(12), p.min(12))).unwrap_or_default();
+            let before = before.trim_end();
+            let form = if before.ends_with("(if") {
+                "if"
+            } else if before.ends_with("(and") || before.ends_with("(or") {
+                "and/or"
+            } else if before.ends_with('[') || before.ends_with('(') {
+                "cond"
+            } else {
+                ""
+            };
+            let (yes, no) = match form {
+                "cond" => ("so the answer of this cond clause is what we evaluate next", "so cond skips this clause and tries the next one"),
+                "if" => ("so if evaluates its then-branch", "so if evaluates its else-branch"),
+                _ => ("", ""),
+            };
             match answer.as_str() {
-                "#true" => Explanation { headline: format!("Is {question} true? Yes"), detail: "so the answer of this cond clause is what we evaluate next".into() },
-                "#false" => Explanation { headline: format!("Is {question} true? No"), detail: "so cond skips this clause and tries the next one".into() },
+                "#true" => Explanation { headline: format!("Is {question} true? Yes"), detail: yes.into() },
+                "#false" => Explanation { headline: format!("Is {question} true? No"), detail: no.into() },
                 _ => Explanation { headline: format!("Checking {question}"), detail: format!("it evaluates to {answer}") },
             }
         }
@@ -1036,13 +1054,23 @@ mod tests {
         view.trace.push(VizStep { index: 1, kind: "question".into(), frames: vec![frame("rvrs", vec![])], value: Some(prim("#false", "bool")), pos: Some(0), span: 11, ..Default::default() });
         let acc = vec![cell(3, prim("1", "num"), prim("'()", "empty"))];
         view.trace.push(VizStep { index: 2, kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 2 }), ("acc", VizRef::Object { id: 3 })])], objects: acc, ..Default::default() });
-        let code = |_: usize, _: usize| "(empty? lst)".to_string();
+        let program = "(empty? lst)";
+        let code = |p: usize, n: usize| program.chars().skip(p).take(n).collect::<String>();
 
         let first = explain(&view, &view.trace.steps[0], &code);
         assert_eq!(first.headline, "Calling rvrs");
         assert_eq!(first.detail, "lst = (list 1 2)    acc = '()");
         let q = explain(&view, &view.trace.steps[1], &code);
         assert_eq!(q.headline, "Is (empty? lst) true? No");
+        // What follows a question depends on the form asking it.
+        let cond = "(cond\n  [(empty? l) 0]";
+        let iff = "(if (empty? l) 0 1)";
+        for (prog, expect) in [(cond, "cond skips"), (iff, "else-branch")] {
+            let pos = prog.find("(empty?").unwrap();
+            let step = VizStep { index: 1, kind: "question".into(), value: Some(prim("#false", "bool")), pos: Some(pos), span: 11, ..Default::default() };
+            let code = |p: usize, n: usize| prog.chars().skip(p).take(n).collect::<String>();
+            assert!(explain(&view, &step, &code).detail.contains(expect), "{prog}");
+        }
         let again = explain(&view, &view.trace.steps[2], &code);
         assert!(again.headline.starts_with("rvrs calls itself again. It's a tail call"), "{}", again.headline);
         assert_eq!(again.detail, "lst = (list 2)    acc = (list 1)");
