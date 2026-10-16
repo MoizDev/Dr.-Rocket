@@ -612,3 +612,34 @@ fn latency_report() {
         eprintln!("check-syntax #{i}: {:?}", t.elapsed());
     }
 }
+
+#[test]
+fn teaching_language_tracing_reports_calls_by_depth() {
+    let b = need_racket!();
+    let body = "(define (len l) (cond [(empty? l) 0] [else (+ 1 (len (rest l)))]))\n(len (list 7 8))\n";
+    let mut settings = Language::Beginner.default_settings();
+    settings.tracing = true;
+    let (source, offset) = lang::program_text(Language::Beginner, &settings, None, body);
+    let config = RunConfig {
+        path: None,
+        source,
+        offset,
+        language: Language::Beginner.run_language(),
+        options: RunOptions { trace: true, ..RunOptions::default() },
+    };
+    let s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, ready(None));
+    let trace: String = events
+        .iter()
+        .filter_map(|e| match e {
+            RunEvent::Output { stream: Stream::Trace, text, .. } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    let lines: Vec<&str> = trace.lines().collect();
+    assert!(lines.iter().any(|l| l.trim_start().starts_with("(len")), "trace: {trace:?}");
+    // Recursive calls are indented deeper than the outermost call.
+    let depths: Vec<usize> = lines.iter().filter(|l| l.trim_start().starts_with("(len")).map(|l| l.len() - l.trim_start().len()).collect();
+    assert!(depths.windows(2).any(|w| w[1] > w[0]), "expected nested calls: {trace:?}");
+    assert_eq!(values(&events), vec!["2"]);
+}

@@ -67,6 +67,8 @@ pub struct RunOptions {
     pub breakpoints: Vec<usize>,
     /// Column width used to pretty-print results.
     pub print_width: usize,
+    /// Trace function calls (DrRacket's teaching-language "Tracing" option).
+    pub trace: bool,
 }
 
 impl Default for RunOptions {
@@ -77,6 +79,7 @@ impl Default for RunOptions {
             memory_limit_mb: None,
             breakpoints: Vec::new(),
             print_width: 80,
+            trace: false,
         }
     }
 }
@@ -127,6 +130,8 @@ pub(crate) enum RunnerCommand<'a> {
 pub enum Stream {
     Out,
     Err,
+    /// Function-call tracing output (teaching languages' Tracing option).
+    Trace,
 }
 
 /// A PNG image produced by the program (e.g. a `2htdp/image` value).

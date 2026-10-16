@@ -4,6 +4,8 @@
 ;; See DESIGN.md ("runner") for the protocol.
 
 (require json
+         racket/unit
+         (only-in trace/stacktrace stacktrace@ stacktrace^ stacktrace-imports^)
          racket/async-channel
          racket/list
          racket/port
@@ -678,6 +680,43 @@
       ((rt-require 'errortrace/errortrace-lib 'coverage-counts-enabled) #t))
     (current-compile (make-handler))))
 
+;; Teaching-language tracing (DrRacket's "Tracing" option): annotate the program with
+;; trace/stacktrace and stream each call, indented by call depth, as `trace` output.
+(define trace-ellipsis-cutoff 200)
+
+(define (trace-print-call inferred-name original? src args improper? depth)
+  (define name (cond [(identifier? inferred-name) (syntax-e inferred-name)]
+                     [inferred-name (object-name inferred-name)]
+                     [else #f]))
+  (when name
+    (define sp (open-output-string))
+    (write-string (make-string depth #\space) sp)
+    (fprintf sp "(~a" name)
+    (let loop ([args args])
+      (cond
+        [(null? args) (void)]
+        [(and (null? (cdr args)) improper?) (fprintf sp " . ~v" (car args))]
+        [else (fprintf sp " ~v" (car args)) (loop (cdr args))]))
+    (write-string ")" sp)
+    (define line (get-output-string sp))
+    (buffer-output! "trace"
+                    (string-append
+                     (if (> (string-length line) trace-ellipsis-cutoff)
+                         (string-append (substring line 0 trace-ellipsis-cutoff) " ...")
+                         line)
+                     "\n"))))
+
+(define (make-trace-annotate calltrace-key print-call-trace)
+  (define-values/invoke-unit stacktrace@ (import stacktrace-imports^) (export stacktrace^))
+  annotate)
+
+(define trace-annotate
+  (let ([annotate #f])
+    (λ (stx)
+      (unless annotate
+        (set! annotate (make-trace-annotate #`(quote #,(gensym 'drrocket-calltrace)) trace-print-call)))
+      (annotate stx))))
+
 ;; Like DrRacket, a character's coverage is that of the innermost instrumented expression
 ;; containing it. We paint expressions outermost-first and report maximal runs.
 (define (emit-coverage!)
@@ -773,6 +812,7 @@
   (define submodules (map string->symbol (filter string? (setting options 'submodules '("main" "test")))))
   (set! print-width (let ([w (setting options 'print_width 80)]) (if (exact-positive-integer? w) w 80)))
   (set! requested-breakpoints (filter exact-nonnegative-integer? (setting options 'breakpoints '())))
+  (set! trace? (eq? (setting options 'trace #f) #t))
   (source-offset offset)
   (source-line-offset (for/sum ([c (in-string source 0 offset)]) (if (char=? c #\newline) 1 0)))
   (main-source source-name)
@@ -827,6 +867,8 @@
   (exit 1))
 
 ;; Runs in the user thread.
+(define trace? #f)
+
 (define (run-user! source source-name language instrument submodules user-out user-err)
   (with-handlers ([(λ (e) #t) report-error!])
     (init-value-support!)
@@ -862,9 +904,10 @@
         (λ ()
           (define stx (read-module-syntax port source-name))
           (parameterize ([current-module-declare-name (make-resolved-module-path mod-name)])
-            (eval (if (eq? instrument 'debug)
-                      (debug-annotate (expand stx) source-name)
-                      stx)))
+            (eval (cond
+                    [(eq? instrument 'debug) (debug-annotate (expand stx) source-name)]
+                    [trace? (trace-annotate (expand stx))]
+                    [else stx])))
           (run-configure-runtime! mod-path)
           (set! fraction-view (if (pretty-print-exact-as-decimal) 'decimal 'mixed))
           (current-print (make-value-printer (current-print)))

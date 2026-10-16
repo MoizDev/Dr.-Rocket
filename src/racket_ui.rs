@@ -88,7 +88,7 @@ impl LangMemory {
 pub enum Entry {
     Banner(String),
     Input(String),
-    Output { text: String, err: bool },
+    Output { text: String, stream: proto::Stream },
     Value(Vec<ValuePart>),
     /// An error; `from_definitions` is false for errors raised by an interaction.
     Error(ErrorReport, bool),
@@ -191,9 +191,9 @@ impl RacketTab {
 
     fn push(&mut self, e: Entry) {
         // Coalesce consecutive output of the same stream.
-        if let Entry::Output { text, err } = &e
-            && let Some(Entry::Output { text: last, err: le }) = self.transcript.last_mut()
-            && le == err
+        if let Entry::Output { text, stream } = &e
+            && let Some(Entry::Output { text: last, stream: ls }) = self.transcript.last_mut()
+            && ls == stream
         {
             last.push_str(text);
             const CAP: usize = 400_000;
@@ -532,7 +532,14 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
         source,
         offset,
         language: tab.language.run_language(),
-        options: RunOptions { instrument, memory_limit_mb: Some(1024), breakpoints, print_width: 80, ..Default::default() },
+        options: RunOptions {
+            instrument,
+            memory_limit_mb: Some(1024),
+            breakpoints,
+            print_width: 80,
+            trace: tab.language.is_teaching() && tab.lang_settings.tracing,
+            ..Default::default()
+        },
     };
     let session = match app.racket.idle.take() {
         Some(idle) => RunSession::start_with(idle, &config),
@@ -606,7 +613,6 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             }
         }
         RunEvent::Output { stream, text, image } => {
-            let err = stream == proto::Stream::Err;
             if let Some(img) = image {
                 let k = tab.rk.transcript.len() + (now * 1000.0) as usize;
                 if let Some(part) = decode_image(ctx, &img, k) {
@@ -614,7 +620,7 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
                 }
             }
             if !text.is_empty() {
-                tab.rk.push(Entry::Output { text, err });
+                tab.rk.push(Entry::Output { text, stream });
             }
         }
         RunEvent::Value { text, segments } => {
@@ -773,7 +779,7 @@ fn submit(app: &mut App, i: usize) {
     if tab.rk.waiting_input {
         if let Some(s) = tab.rk.session.as_mut() {
             s.send_input(&format!("{text}\n"));
-            tab.rk.push(Entry::Output { text: format!("{text}\n"), err: false });
+            tab.rk.push(Entry::Output { text: format!("{text}\n"), stream: proto::Stream::Out });
         }
         tab.rk.input.set_text("");
         tab.rk.waiting_input = false;
@@ -1369,15 +1375,18 @@ fn transcript_entry(ui: &mut Ui, e: &Entry, theme: &crate::theme::Theme, tk: &To
                 ui.add(egui::Label::new(job).wrap());
             });
         }
-        Entry::Output { text, err } => {
-            let color = if *err { theme.error } else { theme.editor_fg };
+        Entry::Output { text, stream } => {
+            let err = *stream == proto::Stream::Err;
+            let trace = *stream == proto::Stream::Trace;
+            let color = if err { theme.error } else if trace { theme.text_muted } else { theme.editor_fg };
             let shown = if text.lines().count() > 3000 {
                 let skip = text.lines().count() - 3000;
                 format!("… {skip} earlier lines hidden …\n{}", text.lines().skip(skip).collect::<Vec<_>>().join("\n"))
             } else {
                 text.trim_end_matches('\n').to_string()
             };
-            let mut job = egui::text::LayoutJob::single_section(shown, egui::TextFormat { font_id: mono.clone(), color, italics: *err, ..Default::default() });
+            let font = if trace { egui::FontId::new(mono.size * 0.88, mono.family.clone()) } else { mono.clone() };
+            let mut job = egui::text::LayoutJob::single_section(shown, egui::TextFormat { font_id: font, color, italics: err, ..Default::default() });
             job.wrap.max_width = w;
             ui.label(job);
         }
