@@ -601,8 +601,8 @@ mod tests {
     }
 
     /// Moiz One Dark is the user's Zed "One Dark Darker" theme under a new name, with two
-    /// requested change: its #181a1f surfaces are #0f1015 (and the active line, #2c313c, is a
-    /// subtler #191c23 to suit). Every other style value must match
+    /// requested changes: its #181a1f surfaces are #0f1015, and the active line is a subtler
+    /// #191c23 instead of #2c313c. Every other style value must match
     /// the original (checked when the Zed theme is installed).
     #[test]
     fn default_theme_is_one_dark_darker() {
