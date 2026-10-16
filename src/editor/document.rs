@@ -15,6 +15,8 @@ pub struct Document {
     expand_stack: Vec<Selections>,
     /// Edits applied since the last `take_edit_log`, for shifting decorations.
     edit_log: Vec<(Range<usize>, usize)>,
+    /// Outline cached per buffer version (the status bar asks every frame).
+    outline_cache: Option<(u64, std::sync::Arc<Vec<OutlineItem>>)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -44,7 +46,7 @@ impl Lines for Buffer {
 
 impl Document {
     pub fn new(text: &str) -> Self {
-        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new() };
+        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new(), outline_cache: None };
         d.sync();
         d.buffer.take_changes();
         d
@@ -830,9 +832,21 @@ impl Document {
         text
     }
 
-    /// Top-level definitions for the outline / "(define ...)" menu: (name, kind, position).
-    pub fn outline(&mut self) -> Vec<OutlineItem> {
+    /// Top-level definitions for the outline / "(define ...)" menu, cached per version.
+    pub fn outline(&mut self) -> std::sync::Arc<Vec<OutlineItem>> {
         self.sync();
+        let v = self.buffer.version();
+        if let Some((cv, o)) = &self.outline_cache
+            && *cv == v
+        {
+            return o.clone();
+        }
+        let o = std::sync::Arc::new(self.compute_outline());
+        self.outline_cache = Some((v, o.clone()));
+        o
+    }
+
+    fn compute_outline(&mut self) -> Vec<OutlineItem> {
         let toks = &self.tokens;
         let mut out = Vec::new();
         let mut i = 0;
@@ -900,6 +914,12 @@ impl Document {
                 }
             }
         }
+    }
+
+    /// The first `n` chars of the document (cheap, for `#lang` detection).
+    pub fn head(&self, n: usize) -> String {
+        let r = self.buffer.rope();
+        r.slice(..n.min(r.len_chars())).to_string()
     }
 
     /// The symbol at the head of the list enclosing `pos` (for signature help).

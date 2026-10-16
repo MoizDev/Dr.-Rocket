@@ -30,6 +30,16 @@ pub const RAINBOW_PRESETS: &[(&str, &[&str])] = &[
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum IndentStyle {
+    /// Translucent rainbow bands over each level of indentation (indent-rainbow style).
+    Highlights,
+    /// A thin guide line per open list.
+    Lines,
+    Off,
+}
+
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum CursorShape {
     Bar,
     Block,
@@ -58,11 +68,10 @@ pub struct Settings {
     pub rainbow_colors: Vec<String>,
     /// Highlight the bracket pair at the cursor in its own depth color.
     pub bracket_pair_highlight: bool,
-    pub indent_guides: bool,
-    /// Color indent guides by nesting depth.
+    /// How indentation is visualized: rainbow highlight bands, guide lines, or nothing.
+    pub indent_style: IndentStyle,
+    /// With `IndentStyle::Lines`: color the lines by nesting depth.
     pub rainbow_indent_guides: bool,
-    /// Tint the indentation of each line with translucent depth colors.
-    pub indent_rainbow_fill: bool,
     pub show_line_numbers: bool,
     pub highlight_active_line: bool,
     pub wrap_guide_column: Option<usize>,
@@ -95,9 +104,8 @@ impl Default for Settings {
             rainbow_brackets: true,
             rainbow_colors: Vec::new(),
             bracket_pair_highlight: true,
-            indent_guides: true,
+            indent_style: IndentStyle::Highlights,
             rainbow_indent_guides: true,
-            indent_rainbow_fill: false,
             show_line_numbers: true,
             highlight_active_line: true,
             wrap_guide_column: Some(102),
@@ -171,8 +179,8 @@ impl Settings {
         if let Some(b) = v.get("colorize_brackets").and_then(|x| x.as_bool()) {
             s.rainbow_brackets = b;
         }
-        if let Some(b) = v.pointer("/indent_guides/enabled").and_then(|x| x.as_bool()) {
-            s.indent_guides = b;
+        if v.pointer("/indent_guides/enabled").and_then(|x| x.as_bool()) == Some(false) {
+            s.indent_style = IndentStyle::Off;
         }
         Some(s)
     }

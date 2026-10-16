@@ -290,6 +290,8 @@ pub struct App {
     pub frame_count: u64,
     pub terminals: Vec<TerminalTab>,
     pub racket: crate::racket_ui::RacketState,
+    /// `DRROCKET_FRAME_STATS=1`: (frames, total, max) of UI time, printed every 2 s.
+    frame_stats: Option<(u32, std::time::Duration, std::time::Duration, f64)>,
 }
 
 pub struct TerminalTab {
@@ -330,6 +332,7 @@ impl App {
             frame_count: 0,
             terminals: Vec::new(),
             racket: Default::default(),
+            frame_stats: std::env::var("DRROCKET_FRAME_STATS").ok().map(|_| (0, Default::default(), Default::default(), 0.0)),
         };
         app.apply_theme_overrides();
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
@@ -419,7 +422,7 @@ impl App {
         editor.doc.buffer.mark_saved();
         let disk_mtime = path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
         let mut rk = crate::racket_ui::RacketTab::new(id);
-        if let Some(words) = self.racket.completions.get(&language.completions_language(&body)) {
+        if let Some(words) = self.racket.completions.get(&language.completions_language(&body.chars().take(400).collect::<String>())) {
             editor.completion_words = words.clone();
             rk.input.completion_words = words.clone();
         }
@@ -978,6 +981,11 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if self.automation.is_some() {
+            // Scripted runs keep rendering even when macOS considers the window occluded
+            // (display asleep, other Space). Holds for one frame, so send it every frame.
+            ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+        }
         // Close requests: confirm unsaved changes.
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.tabs.iter().any(|t| t.dirty()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -991,6 +999,7 @@ impl eframe::App for App {
     }
 
     fn ui(&mut self, ui: &mut Ui, _frame: &mut eframe::Frame) {
+        let started = std::time::Instant::now();
         let ctx = ui.ctx().clone();
         self.frame_count += 1;
         self.ensure_style(&ctx);
@@ -998,6 +1007,20 @@ impl eframe::App for App {
         self.layout_and_paint(ui);
         self.modal_ui(&ctx);
         self.toasts_ui(&ctx);
+        if let Some((n, total, max, since)) = &mut self.frame_stats {
+            let dt = started.elapsed();
+            *n += 1;
+            *total += dt;
+            *max = (*max).max(dt);
+            let now = ctx.input(|i| i.time);
+            if now - *since > 2.0 {
+                eprintln!("frame stats: {n} frames, avg {:?}, max {:?}", *total / (*n).max(1), *max);
+                *n = 0;
+                *total = Default::default();
+                *max = Default::default();
+                *since = now;
+            }
+        }
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {

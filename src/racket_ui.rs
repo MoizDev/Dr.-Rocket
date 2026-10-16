@@ -237,7 +237,7 @@ pub fn remember_language(app: &mut App, path: &Path, language: Language) {
 
 pub fn language_label(tab: &Tab) -> String {
     if tab.language == Language::Module {
-        return match lang::hash_lang(&tab.editor.doc.text()) {
+        return match lang::hash_lang(&tab.editor.doc.head(400)) {
             Some(l) => format!("#lang {l}"),
             None => "Racket".into(),
         };
@@ -316,7 +316,7 @@ pub fn poll(app: &mut App, ctx: &egui::Context) {
         app.racket.version_rx = None;
     }
     // Language completions for open tabs.
-    let keys: Vec<String> = app.tabs.iter().map(|t| t.language.completions_language(&t.editor.doc.text())).collect();
+    let keys: Vec<String> = app.tabs.iter().map(|t| t.language.completions_language(&t.editor.doc.head(400))).collect();
     for key in keys {
         if !app.racket.completions_requested.contains(&key) {
             app.racket.completions_requested.insert(key.clone());
@@ -363,7 +363,7 @@ fn poll_server(app: &mut App) {
             (Pending::Completions { key }, Ok(ServerResponse::Completions(words))) => {
                 let words = Arc::new(words);
                 for t in app.tabs.iter_mut() {
-                    if t.language.completions_language(&t.editor.doc.text()) == key {
+                    if t.language.completions_language(&t.editor.doc.head(400)) == key {
                         t.editor.completion_words = words.clone();
                         t.rk.input.completion_words = words.clone();
                     }
@@ -697,7 +697,7 @@ fn apply_test_inlays(tab: &mut Tab, report: &TestReport) {
         }
     }
     // Every other test form passed.
-    for item in tab.editor.doc.outline() {
+    for item in tab.editor.doc.outline().iter() {
         if item.kind == crate::editor::document::OutlineKind::Test {
             let line = tab.editor.doc.buffer.line_of(item.pos);
             if !failed_lines.contains(&line) {
@@ -934,7 +934,7 @@ pub fn set_language(app: &mut App, language: Language, settings: TeachingSetting
     tab.lang_changed = true;
     tab.rk.session = None;
     tab.rk.check_due = Some(0.0);
-    let words = app.racket.completions.get(&language.completions_language(&tab.editor.doc.text())).cloned();
+    let words = app.racket.completions.get(&language.completions_language(&tab.editor.doc.head(400))).cloned();
     if let Some(w) = words {
         tab.editor.completion_words = w.clone();
         tab.rk.input.completion_words = w;
@@ -970,7 +970,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
         }
         EditorAction::CallContext(name) => {
             let tab = &app.tabs[i];
-            let key = format!("{}\u{0}{name}", tab.language.completions_language(&tab.editor.doc.text()));
+            let key = format!("{}\u{0}{name}", tab.language.completions_language(&tab.editor.doc.head(400)));
             match app.racket.call_boxes.get(&key) {
                 Some(Some(lines)) => app.tabs[i].rk.call_box = Some((name, lines.clone())),
                 Some(None) => app.tabs[i].rk.call_box = None,

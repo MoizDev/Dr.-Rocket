@@ -652,7 +652,7 @@ impl EditorView {
         }
 
         // Indent guides (structure-aware: one guide per enclosing multi-line list).
-        if style.settings.indent_guides && code {
+        if style.settings.indent_style != crate::config::IndentStyle::Off && code {
             self.paint_indent_guides(&tp, toks, first, last, style, primary.head);
         }
 
@@ -951,7 +951,7 @@ impl EditorView {
     fn paint_indent_guides(&self, p: &egui::Painter, toks: &[Token], first: usize, last: usize, style: &EditorStyle, cursor: usize) {
         let theme = style.theme;
         let rainbow = style.settings.rainbow_indent_guides;
-        let fill = style.settings.indent_rainbow_fill;
+        let fill = style.settings.indent_style == crate::config::IndentStyle::Highlights;
         let b = &self.doc.buffer;
         let active_open = sexp::enclosing_open(toks, cursor);
         let col_x = |line: usize, col: usize| -> f32 {
@@ -989,16 +989,27 @@ impl EditorView {
             guides.reverse(); // outermost first
             let y = self.line_y(line);
             let h = self.geom.line_h;
-            if fill && !blank {
-                // Bands from each guide to the next (or to the end of the indentation).
-                for (k, &(col, depth, _)) in guides.iter().enumerate() {
+            if fill {
+                if blank {
+                    continue;
+                }
+                // Bands from each bracket column to the next level (or the end of the
+                // indentation), colored by depth; the band of the caret's form is stronger.
+                for (k, &(col, depth, active)) in guides.iter().enumerate() {
                     let x0 = col_x(line, col);
                     let next = guides.get(k + 1).map(|g| g.0).unwrap_or(indent);
                     let x1 = col_x(line, next.max(col));
                     if x1 > x0 + 1.0 {
-                        p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + h)), CornerRadius::ZERO, with_alpha(theme.rainbow(depth as usize), if theme.dark { 16 } else { 26 }));
+                        let a = match (theme.dark, active) {
+                            (true, false) => 40,
+                            (true, true) => 66,
+                            (false, false) => 46,
+                            (false, true) => 76,
+                        };
+                        p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + h)), CornerRadius::ZERO, with_alpha(theme.rainbow(depth as usize), a));
                     }
                 }
+                continue;
             }
             for &(col, depth, active) in &guides {
                 let x = col_x(line, col).round() + 0.5;

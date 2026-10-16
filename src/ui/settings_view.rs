@@ -1,7 +1,7 @@
 //! Settings sheet and the other modal dialogs.
 
 use crate::app::{App, Modal};
-use crate::config::CursorShape;
+use crate::config::{CursorShape, IndentStyle};
 use crate::theme::{Theme, with_alpha};
 use crate::ui::{self, ic};
 use egui::{Align2, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, pos2, vec2};
@@ -445,15 +445,18 @@ impl App {
             }
         });
         ui.add_space(8.0);
-        row(ui, &theme, "Indent guides", "One guide per open list, at its bracket", |ui| {
-            toggle(ui, &theme, &mut s.indent_guides);
+        row(ui, &theme, "Indentation", "Rainbow highlights per level, guide lines, or nothing", |ui| {
+            for (style, label) in [(IndentStyle::Off, "Off"), (IndentStyle::Lines, "Lines"), (IndentStyle::Highlights, "Highlights")] {
+                if ui.add(egui::Button::new(label).selected(s.indent_style == style)).clicked() {
+                    s.indent_style = style;
+                }
+            }
         });
-        row(ui, &theme, "Rainbow indent guides", "Guides use the bracket colors of their depth", |ui| {
-            toggle(ui, &theme, &mut s.rainbow_indent_guides);
-        });
-        row(ui, &theme, "Rainbow indentation fill", "Tint each level of indentation", |ui| {
-            toggle(ui, &theme, &mut s.indent_rainbow_fill);
-        });
+        if s.indent_style == IndentStyle::Lines {
+            row(ui, &theme, "Rainbow guide lines", "Lines use the bracket colors of their depth", |ui| {
+                toggle(ui, &theme, &mut s.rainbow_indent_guides);
+            });
+        }
 
         ui.add_space(10.0);
         ui.label(egui::RichText::new("Editor").font(ui::semibold(15.0)).color(theme.text));
@@ -543,11 +546,11 @@ fn caret_and_brackets_preview(ui: &mut Ui, theme: &Theme, s: &crate::config::Set
         };
         for (k, &(col, depth)) in guides.iter().enumerate() {
             let gx = x0 + col as f32 * cw;
-            if s.indent_guides && s.indent_rainbow_fill {
+            if s.indent_style == IndentStyle::Highlights {
                 let next = guides.get(k + 1).map(|g| g.0).unwrap_or(indent);
-                p.rect_filled(Rect::from_min_max(pos2(gx, y), pos2(x0 + next as f32 * cw, y + line_h)), CornerRadius::ZERO, with_alpha(rainbow(depth), if theme.dark { 16 } else { 26 }));
+                p.rect_filled(Rect::from_min_max(pos2(gx, y), pos2(x0 + next as f32 * cw, y + line_h)), CornerRadius::ZERO, with_alpha(rainbow(depth), if theme.dark { 40 } else { 46 }));
             }
-            if s.indent_guides {
+            if s.indent_style == IndentStyle::Lines {
                 let c = if s.rainbow_indent_guides { with_alpha(rainbow(depth), 110) } else { theme.indent_guide };
                 p.vline(gx.round() + 0.5, y..=y + line_h, Stroke::new(1.0, c));
             }
