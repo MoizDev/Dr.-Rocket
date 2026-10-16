@@ -137,7 +137,7 @@ pub struct Tokens {
 impl Tokens {
     pub fn of(t: &Theme) -> Tokens {
         let island = t.editor_bg;
-        let window = if t.dark { mix(t.background, Color32::BLACK, 0.38) } else { mix(t.background, Color32::BLACK, 0.07) };
+        let window = t.window_bg.unwrap_or(if t.dark { mix(t.background, Color32::BLACK, 0.38) } else { mix(t.background, Color32::BLACK, 0.07) });
         Tokens {
             window,
             island,

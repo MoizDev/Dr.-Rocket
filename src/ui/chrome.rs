@@ -106,12 +106,22 @@ impl App {
         let mut switch = None;
         let mut close = None;
         let mut reveal = None;
+        let mut reorder = None;
         let hovered_tab = ui.ctx().pointer_hover_pos().and_then(|p| {
             (0..infos.len()).find(|&k| Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).contains(p))
         });
         for (k, info) in infos.iter().enumerate() {
             let r = Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).shrink2(vec2(1.0, 0.0));
-            let resp = ui.interact(r, Id::unique(("project-tab", k)), Sense::click());
+            let resp = ui.interact(r, Id::unique(("project-tab", info.id)), Sense::click_and_drag());
+            // Drag to reorder: the tab trades places as the pointer crosses into a neighbor.
+            if resp.dragged()
+                && let Some(p) = resp.interact_pointer_pos()
+            {
+                let target = (((p.x - area.left()) / tab_w).floor().max(0.0) as usize).min(infos.len() - 1);
+                if target != k {
+                    reorder = Some((k, target));
+                }
+            }
             let selected = k == self.current_project;
             let hovered = hovered_tab == Some(k);
             if selected {
@@ -126,7 +136,7 @@ impl App {
             }
             // Close button (left, on hover) or the unsaved dot.
             let close_r = Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), vec2(18.0, 18.0));
-            let close_resp = ui.interact(close_r, Id::unique(("project-tab-close", k)), Sense::click());
+            let close_resp = ui.interact(close_r, Id::unique(("project-tab-close", info.id)), Sense::click());
             // The last empty project has nothing to close.
             let closable = infos.len() > 1 || info.root.is_some() || !self.tabs.is_empty();
             if hovered && closable {
@@ -152,7 +162,8 @@ impl App {
                 Some(root) => resp.on_hover_text(crate::config::tildify(root)),
                 None => resp,
             };
-            if resp.clicked() && close.is_none() {
+            // Picking a tab up selects it, as in Safari.
+            if (resp.clicked() || resp.drag_started()) && close.is_none() {
                 switch = Some(k);
             }
             if resp.middle_clicked() {
@@ -181,6 +192,9 @@ impl App {
         egui::Popup::menu(&plus_resp).width(300.0).show(|ui| self.project_menu(ui));
         if let Some(k) = switch {
             self.switch_project(k);
+        }
+        if let Some((from, to)) = reorder {
+            self.move_project(from, to);
         }
         if let Some(k) = close {
             self.close_project(k, false);

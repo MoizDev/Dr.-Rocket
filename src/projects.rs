@@ -8,13 +8,21 @@ use crate::app::{App, Modal, Tab};
 use crate::workspace::Workspace;
 use std::path::{Path, PathBuf};
 
-#[derive(Default)]
 pub struct ProjectSlot {
+    /// Stable identity (UI ids, drag-reordering).
+    pub id: u64,
     /// The project folder (`None` for a project of loose files).
     pub root: Option<PathBuf>,
     workspace: Option<Workspace>,
     tabs: Vec<Tab>,
     active: usize,
+}
+
+impl Default for ProjectSlot {
+    fn default() -> Self {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        Self { id: NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed), root: None, workspace: None, tabs: Vec::new(), active: 0 }
+    }
 }
 
 impl ProjectSlot {
@@ -28,6 +36,7 @@ impl ProjectSlot {
 
 /// What a project tab shows: its name and whether it has unsaved files.
 pub struct ProjectTabInfo {
+    pub id: u64,
     pub label: String,
     pub root: Option<PathBuf>,
     pub dirty: bool,
@@ -39,6 +48,7 @@ impl App {
             .iter()
             .enumerate()
             .map(|(k, p)| ProjectTabInfo {
+                id: p.id,
                 label: p.label(),
                 root: p.root.clone(),
                 dirty: if k == self.current_project { self.tabs.iter().any(|t| t.dirty()) } else { p.tabs.iter().any(|t| t.dirty()) },
@@ -67,6 +77,17 @@ impl App {
             t.editor.request_focus();
         }
         crate::racket_ui::resume_tabs(self);
+    }
+
+    /// Move project tab `from` to position `to` (drag-reordering).
+    pub fn move_project(&mut self, from: usize, to: usize) {
+        if from == to || from >= self.projects.len() || to >= self.projects.len() {
+            return;
+        }
+        let current = self.projects[self.current_project].id;
+        let slot = self.projects.remove(from);
+        self.projects.insert(to, slot);
+        self.current_project = self.projects.iter().position(|p| p.id == current).unwrap_or(0);
     }
 
     /// Open a fresh, empty project tab and switch to it.

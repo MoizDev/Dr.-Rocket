@@ -16,6 +16,7 @@
         "elevated_surface.background": "#1d1f23",
         "surface.background": "#0f1015",
         "background": "#0f1015",
+        "drrocket.window.background": "#050507",
         "element.background": "#404754",
         "element.hover": "#292d35",
         "element.active": "#2c313a",

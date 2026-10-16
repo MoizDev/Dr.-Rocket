@@ -73,6 +73,9 @@ pub struct Theme {
     pub dark: bool,
 
     pub background: Color32,
+    /// The window behind the panels (Dr. Rocket's own `drrocket.window.background` key);
+    /// derived from `background` when a theme does not set it.
+    pub window_bg: Option<Color32>,
     pub surface: Color32,
     pub elevated_surface: Color32,
     pub panel: Color32,
@@ -378,6 +381,7 @@ impl Theme {
             icon_muted: st.get("icon.muted").unwrap_or(text_placeholder),
             icon_accent: st.get("icon.accent").unwrap_or(accent),
             editor_bg,
+            window_bg: st.get("drrocket.window.background").map(|c| opaque(c, background)),
             editor_fg,
             gutter_bg: opaque(st.get("editor.gutter.background").unwrap_or(editor_bg), editor_bg),
             active_line: st.any(&["editor.active_line.background", "editor.highlighted_line.background"]).unwrap_or(mix(editor_bg, text, 0.05)),
@@ -602,7 +606,8 @@ mod tests {
 
     /// Moiz One Dark is the user's Zed "One Dark Darker" theme under a new name, with two
     /// requested changes: its #181a1f surfaces are #0f1015, and the active line is a subtler
-    /// #191c23 instead of #2c313c. Every other style value must match
+    /// #191c23 instead of #2c313c (plus Dr. Rocket-only `drrocket.*` keys, such as the darker
+    /// window behind the panels). Every other style value must match
     /// the original (checked when the Zed theme is installed).
     #[test]
     fn default_theme_is_one_dark_darker() {
@@ -610,7 +615,11 @@ mod tests {
         let Ok(original) = std::fs::read_to_string(&path) else { return };
         let parse = |s: &str| serde_json::from_str::<Value>(&strip_json_comments(s)).unwrap();
         let ours = BUNDLED[0].1.replace("\"#0f1015\"", "\"#181a1f\"").replace("\"#191c23\"", "\"#2c313c\"");
-        let (ours, theirs) = (parse(&ours), parse(&original));
+        let (mut ours, theirs) = (parse(&ours), parse(&original));
+        // Dr. Rocket-only keys (ignored by Zed) are not part of the comparison.
+        for t in ours["themes"].as_array_mut().unwrap() {
+            t["style"].as_object_mut().unwrap().retain(|k, _| !k.starts_with("drrocket."));
+        }
         let (ours, theirs) = (ours["themes"].as_array().unwrap(), theirs["themes"].as_array().unwrap());
         assert_eq!(ours.len(), theirs.len());
         for (a, b) in ours.iter().zip(theirs) {
