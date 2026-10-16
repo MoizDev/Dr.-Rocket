@@ -1,9 +1,14 @@
 //! Dr. Rocket: a fast, beautiful IDE for Racket.
 
+// Release builds on Windows are GUI apps (no console window); debug builds keep the console
+// for logs.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod app;
 mod automation;
 mod commands;
 mod config;
+mod crash;
 mod dev;
 mod editor;
 mod fuzzy;
@@ -21,6 +26,7 @@ mod workspace;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
+    crash::install();
     platform::install_open_handler();
     let open: Vec<PathBuf> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).map(PathBuf::from).collect();
     let size = automation::Automation::window_size().unwrap_or([1480.0, 940.0]);

@@ -384,7 +384,7 @@ fn teaching_options(ui: &mut Ui, theme: &crate::theme::Theme, d: &mut LanguageDi
         let card = Rect::from_min_size(r.min, vec2(r.width(), 44.0));
         ui.painter().rect_filled(card, CornerRadius::same(8), with_alpha(theme.success, 26));
         ui.painter().text(pos2(card.left() + 18.0, card.center().y), Align2::CENTER_CENTER, ic::STEP, ui::icon_font(18.0), theme.success);
-        ui.painter().text(pos2(card.left() + 36.0, card.center().y), Align2::LEFT_CENTER, "Supports the algebraic stepper (⇧⌘E)", ui::ui_font(13.0), theme.text);
+        ui.painter().text(pos2(card.left() + 36.0, card.center().y), Align2::LEFT_CENTER, crate::platform::keys("Supports the algebraic stepper (⇧⌘E)"), ui::ui_font(13.0), theme.text);
         ui.allocate_exact_size(card.size(), Sense::hover());
     }
 }

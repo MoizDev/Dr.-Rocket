@@ -21,4 +21,16 @@ fn main() {
     out.push_str("];\n");
     let dest = Path::new(&std::env::var("OUT_DIR").unwrap()).join("file_icons.rs");
     std::fs::write(dest, out).unwrap();
+
+    // Windows: the app icon in the .exe (Explorer, the taskbar, shortcuts).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        println!("cargo:rerun-if-changed=assets/icon/icon.ico");
+        let mut res = winresource::WindowsResource::new();
+        res.set_icon("assets/icon/icon.ico");
+        res.set("ProductName", "Dr. Rocket");
+        res.set("FileDescription", "Dr. Rocket");
+        if let Err(e) = res.compile() {
+            println!("cargo:warning=could not embed the Windows icon: {e}");
+        }
+    }
 }

@@ -510,3 +510,64 @@ pub fn install_menu(app_name: &str, specs: &[MenuSpec]) {
     #[cfg(not(target_os = "macos"))]
     let _ = (app_name, specs);
 }
+
+/// Shortcut text for this platform: macOS symbols (⇧⌘E) as written; elsewhere spelled out
+/// (Ctrl+Shift+E), with ⌘ meaning Ctrl as it does in the key handling.
+pub fn keys(text: &str) -> String {
+    if cfg!(target_os = "macos") {
+        return text.to_string();
+    }
+    let mut out = String::new();
+    let mut mods = (false, false, false); // ctrl, alt, shift
+    for c in text.chars() {
+        match c {
+            '⌘' | '⌃' => mods.0 = true,
+            '⌥' => mods.1 = true,
+            '⇧' => mods.2 = true,
+            _ => {
+                if mods != (false, false, false) {
+                    for (on, name) in [(mods.0, "Ctrl+"), (mods.1, "Alt+"), (mods.2, "Shift+")] {
+                        if on {
+                            out.push_str(name);
+                        }
+                    }
+                    mods = (false, false, false);
+                }
+                out.push(c);
+            }
+        }
+    }
+    out
+}
+
+/// "Reveal in Finder" and its equivalents.
+pub const REVEAL_LABEL: &str = if cfg!(target_os = "macos") {
+    "Reveal in Finder"
+} else if cfg!(windows) {
+    "Show in Explorer"
+} else {
+    "Show in File Manager"
+};
+
+/// Show a file (selected) or folder in the system file manager.
+pub fn reveal(path: &std::path::Path) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    #[cfg(windows)]
+    let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = open::that(if path.is_dir() { path } else { path.parent().unwrap_or(path) });
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn shortcut_text_per_platform() {
+        let k = super::keys("Debug (⇧⌘D), Break (⌘.), Terminal (⌃`), Box (⌥⌘/)");
+        if cfg!(target_os = "macos") {
+            assert_eq!(k, "Debug (⇧⌘D), Break (⌘.), Terminal (⌃`), Box (⌥⌘/)");
+        } else {
+            assert_eq!(k, "Debug (Ctrl+Shift+D), Break (Ctrl+.), Terminal (Ctrl+`), Box (Ctrl+Alt+/)");
+        }
+    }
+}

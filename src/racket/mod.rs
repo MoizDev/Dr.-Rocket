@@ -55,7 +55,7 @@ impl RacketInstall {
 
     /// `(version)`, e.g. "9.3". Runs Racket, so call it off the UI thread.
     pub fn version(&self) -> Option<String> {
-        let out = Command::new(&self.racket)
+        let out = transport::no_console(&mut Command::new(&self.racket))
             .args(["-l", "racket/base", "-e", "(display (version))"])
             .stdin(Stdio::null())
             .output()
@@ -191,7 +191,7 @@ impl Backend {
         let inner = &self.inner;
         let files: Vec<PathBuf> = ["runner.rkt", "stepper.rkt", "server.rkt"].iter().map(|f| inner.dir.join(f)).collect();
         // `racket -l- raco make` works even when `raco` isn't next to `racket`.
-        let out = Command::new(&inner.install.racket)
+        let out = transport::no_console(&mut Command::new(&inner.install.racket))
             .args(["-l-", "raco", "make"])
             .args(&files)
             .current_dir(&inner.dir)

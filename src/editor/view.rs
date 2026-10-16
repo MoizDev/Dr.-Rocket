@@ -2075,10 +2075,10 @@ impl EditorView {
                     toggle(ui, &mut self.find.case_sensitive, ic::TEXT_FIELDS, "Match Case");
                     toggle(ui, &mut self.find.whole_word, ic::SEGMENT, "Match Whole Word");
                     toggle(ui, &mut self.find.regex, ic::DATA_OBJECT, "Use Regular Expression");
-                    if ui::widgets::icon_button_sized(ui, theme, ic::ARROW_UPWARD, "Previous Match (⇧⌘G)", 24.0, 16.0, None, false).clicked() {
+                    if ui::widgets::icon_button_sized(ui, theme, ic::ARROW_UPWARD, &crate::platform::keys("Previous Match (⇧⌘G)"), 24.0, 16.0, None, false).clicked() {
                         self.find_step(false);
                     }
-                    if ui::widgets::icon_button_sized(ui, theme, ic::ARROW_DOWNWARD, "Next Match (⌘G)", 24.0, 16.0, None, false).clicked() {
+                    if ui::widgets::icon_button_sized(ui, theme, ic::ARROW_DOWNWARD, &crate::platform::keys("Next Match (⌘G)"), 24.0, 16.0, None, false).clicked() {
                         self.find_step(true);
                     }
                     if ui::widgets::icon_button_sized(ui, theme, ic::CLOSE, "Close (Esc)", 24.0, 16.0, None, false).clicked() {

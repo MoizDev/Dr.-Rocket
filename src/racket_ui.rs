@@ -947,7 +947,7 @@ fn start_stepper(app: &mut App, i: usize) {
     let tab = &app.tabs[i];
     let body = tab.editor.doc.text();
     let Some(level) = tab.language.stepper_level(&body) else {
-        app.toast("The stepper works with Beginning Student through Intermediate Student with lambda (Choose Language, ⌘L).", ToastKind::Info);
+        app.toast(crate::platform::keys("The stepper works with Beginning Student through Intermediate Student with lambda (Choose Language, ⌘L)."), ToastKind::Info);
         return;
     };
     let width = 60;
@@ -1265,7 +1265,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
         EditorAction::Rename(pos) => {
             let tab = &mut app.tabs[i];
             let Some(check) = tab.rk.check.as_ref() else {
-                app.toast("Rename needs Check Syntax information; it runs automatically after edits (or ⇧⌘C).", ToastKind::Info);
+                app.toast(crate::platform::keys("Rename needs Check Syntax information; it runs automatically after edits (or ⇧⌘C)."), ToastKind::Info);
                 return;
             };
             let occ = check.occurrences(pos);
@@ -1316,7 +1316,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
 fn goto_definition(app: &mut App, i: usize, pos: usize) {
     let tab = &mut app.tabs[i];
     let Some(check) = tab.rk.check.clone() else {
-        app.toast("Go to Definition needs Check Syntax information (⇧⌘C).", ToastKind::Info);
+        app.toast(crate::platform::keys("Go to Definition needs Check Syntax information (⇧⌘C)."), ToastKind::Info);
         return;
     };
     let inside = |r: &proto::Range| r.0 <= pos && pos <= r.1;
@@ -1426,7 +1426,7 @@ fn no_tab(app: &App, ui: &mut Ui, glyph: &str, title: &str, sub: &str) -> bool {
 // ---------------------------------------------------------------------------------- interactions
 
 fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
-    if no_tab(app, ui, ic::TERMINAL, "Interactions", "Open a file and press ⌘R") {
+    if no_tab(app, ui, ic::TERMINAL, "Interactions", &crate::platform::keys("Open a file and press ⌘R")) {
         return;
     }
     let theme = app.theme.clone();
@@ -1459,7 +1459,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             ui.add_space(6.0);
             if tab.rk.transcript.is_empty() {
                 ui.add_space(8.0);
-                ui.label(egui::RichText::new("Press ⌘R to run the definitions, then evaluate expressions below.").color(theme.text_placeholder));
+                ui.label(egui::RichText::new(crate::platform::keys("Press ⌘R to run the definitions, then evaluate expressions below.")).color(theme.text_placeholder));
             }
             for e in &tab.rk.transcript {
                 transcript_entry(ui, e, &theme, &tk, &mono, &mut jump);
@@ -1488,7 +1488,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         tab.rk.input.show(&mut c, ed_rect, &style);
     }
     if tab.rk.input.doc.buffer.is_empty() {
-        let hint = if waiting { "The program is waiting for input…" } else if tab.rk.busy { "Evaluating…  (⌘. to break)" } else { "Evaluate a Racket expression…" };
+        let hint = if waiting { "The program is waiting for input…".to_string() } else if tab.rk.busy { crate::platform::keys("Evaluating…  (⌘. to break)") } else { "Evaluate a Racket expression…".to_string() };
         ui.painter().text(pos2(ed_rect.left() + 2.0, ed_rect.top() + line_h / 2.0), Align2::LEFT_CENTER, hint, ui::ui_font(font_size), theme.text_placeholder);
     }
     // Bottom row: language chip, history, send.
@@ -1499,7 +1499,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     ui.painter().rect_filled(chip_r, CornerRadius::same(12), tk.hover);
     ui.painter().text(pos2(chip_r.left() + 13.0, chip_r.center().y), Align2::CENTER_CENTER, language_icon(tab), ui::icon_font_filled(14.0), theme.syntax.keyword.color);
     ui.painter().galley(pos2(chip_r.left() + 23.0, chip_r.center().y - chip_g.size().y / 2.0), chip_g, theme.text_muted);
-    let chip_resp = ui.interact(chip_r, Id::unique("repl-lang-chip"), Sense::click()).on_hover_text("Choose Language (⌘L)");
+    let chip_resp = ui.interact(chip_r, Id::unique("repl-lang-chip"), Sense::click()).on_hover_text(crate::platform::keys("Choose Language (⌘L)"));
     let send_r = Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(28.0, 28.0));
     let send = ui.interact(send_r, Id::unique("repl-send"), Sense::click());
     let can_send = !tab.rk.input.doc.buffer.is_empty() || waiting;
@@ -1510,7 +1510,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     if busy && !waiting {
         // Running indicator + break button.
         let br = Rect::from_center_size(pos2(send_r.left() - 22.0, row.center().y), vec2(28.0, 28.0));
-        let b = ui.interact(br, Id::unique("repl-break"), Sense::click()).on_hover_text("Break (⌘.)");
+        let b = ui.interact(br, Id::unique("repl-break"), Sense::click()).on_hover_text(crate::platform::keys("Break (⌘.)"));
         if b.hovered() {
             ui.painter().rect_filled(br, CornerRadius::same(6), tk.hover);
         }
@@ -1752,7 +1752,7 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let mono = ui::mono(font_size);
     let count_finish = app.settings.stepper_count_finish;
     if app.tabs[i].rk.stepper.is_none() {
-        empty_state(ui, &theme, ic::STEP, "Algebraic Stepper", "Step through Beginning–Intermediate Student programs (⇧⌘E)");
+        empty_state(ui, &theme, ic::STEP, "Algebraic Stepper", &crate::platform::keys("Step through Beginning–Intermediate Student programs (⇧⌘E)"));
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(150.0, 32.0));
         let resp = ui.interact(br, Id::unique("start-stepper"), Sense::click());
@@ -1950,7 +1950,7 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             empty_state(ui, &theme, crate::visualizer::ICON, "Recording…", "Running the program and recording each step");
             return;
         }
-        empty_state(ui, &theme, crate::visualizer::ICON, "Visualizer", "Watch your program run: every call, question and data structure, step by step (⇧⌘V)");
+        empty_state(ui, &theme, crate::visualizer::ICON, "Visualizer", &crate::platform::keys("Watch your program run: every call, question and data structure, step by step (⇧⌘V)"));
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(150.0, 32.0));
         let resp = ui.interact(br, Id::unique("start-viz"), Sense::click());
@@ -2212,7 +2212,7 @@ fn tests_panel(app: &mut App, ui: &mut Ui) {
     let mono = ui::mono((app.font_size() * 0.8).round());
     let i = app.active;
     let Some(r) = app.tabs[i].rk.tests.clone() else {
-        empty_state(ui, &theme, ic::SCIENCE, "No test results yet", "Run the program (⌘R) to run check-expect and rackunit tests");
+        empty_state(ui, &theme, ic::SCIENCE, "No test results yet", &crate::platform::keys("Run the program (⌘R) to run check-expect and rackunit tests"));
         return;
     };
     let mut jump = None;
@@ -2286,7 +2286,7 @@ fn macros_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let i = app.active;
     let mono = ui::mono((app.font_size() * 0.8).round());
     let Some(mv) = app.tabs[i].rk.macros.as_mut() else {
-        empty_state(ui, &theme, ic::AUTO_FIX_HIGH, "Macro Stepper", "See every macro expansion step (⇧⌘M)");
+        empty_state(ui, &theme, ic::AUTO_FIX_HIGH, "Macro Stepper", &crate::platform::keys("See every macro expansion step (⇧⌘M)"));
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(160.0, 32.0));
         let resp = ui.interact(br, Id::unique("start-macros"), Sense::click());
@@ -2425,7 +2425,7 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
     let i = debug_owner(app);
     let running = app.tabs[i].rk.session.is_some() && app.tabs[i].rk.instrument == Instrument::Debug;
     if !running {
-        empty_state(ui, &theme, ic::BUG_REPORT, "Debugger", "Click the gutter to set breakpoints, then Debug (⇧⌘D)");
+        empty_state(ui, &theme, ic::BUG_REPORT, "Debugger", &crate::platform::keys("Click the gutter to set breakpoints, then Debug (⇧⌘D)"));
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(150.0, 32.0));
         let resp = ui.interact(br, Id::unique("start-debug"), Sense::click());

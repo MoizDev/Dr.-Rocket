@@ -39,12 +39,12 @@ impl App {
         rb.spacing_mut().item_spacing.x = 2.0;
         let (lo, ro, bo) = (self.layout.left.open, self.layout.right.open, self.layout.bottom.open);
         let toggles = [
-            (Command::ToggleRightPanel, if ro { ic::RIGHT_PANEL_CLOSE } else { ic::RIGHT_PANEL_OPEN }, "Toggle Right Sidebar (⌘E)", ro),
-            (Command::ToggleBottomPanel, if bo { ic::BOTTOM_PANEL_CLOSE } else { ic::BOTTOM_PANEL_OPEN }, "Toggle Bottom Panel (⌘J)", bo),
-            (Command::ToggleLeftPanel, if lo { ic::LEFT_PANEL_CLOSE } else { ic::LEFT_PANEL_OPEN }, "Toggle Left Sidebar (⌘B)", lo),
+            (Command::ToggleRightPanel, if ro { ic::RIGHT_PANEL_CLOSE } else { ic::RIGHT_PANEL_OPEN }, crate::platform::keys("Toggle Right Sidebar (⌘E)"), ro),
+            (Command::ToggleBottomPanel, if bo { ic::BOTTOM_PANEL_CLOSE } else { ic::BOTTOM_PANEL_OPEN }, crate::platform::keys("Toggle Bottom Panel (⌘J)"), bo),
+            (Command::ToggleLeftPanel, if lo { ic::LEFT_PANEL_CLOSE } else { ic::LEFT_PANEL_OPEN }, crate::platform::keys("Toggle Left Sidebar (⌘B)"), lo),
         ];
         for (cmd, glyph, tip, _on) in toggles {
-            if icon_button_sized(&mut rb, &theme, glyph, tip, 30.0, 19.0, None, false).clicked() {
+            if icon_button_sized(&mut rb, &theme, glyph, &tip, 30.0, 19.0, None, false).clicked() {
                 self.run_command(cmd);
             }
         }
@@ -54,7 +54,7 @@ impl App {
         rb.add_space(6.0);
         // Run / Stop.
         let running = crate::racket_ui::is_running(self);
-        let (glyph, color, tip) = if running { (ic::STOP, theme.error, "Stop (⌘K)") } else { (ic::PLAY_ARROW, tk.run, "Run (⌘R)") };
+        let (glyph, color, tip) = if running { (ic::STOP, theme.error, crate::platform::keys("Stop (⌘K)")) } else { (ic::PLAY_ARROW, tk.run, crate::platform::keys("Run (⌘R)")) };
         let (r, resp) = rb.allocate_exact_size(vec2(32.0, 32.0), Sense::click());
         if resp.hovered() {
             rb.painter().rect_filled(r, CornerRadius::same(8), with_alpha(color, 36));
@@ -68,7 +68,7 @@ impl App {
         let label = self.active_tab().map(crate::racket_ui::language_label).unwrap_or_else(|| "Racket".into());
         let icon = self.active_tab().map(crate::racket_ui::language_icon).unwrap_or(ic::CODE);
         let lr = pill_button(&mut rb, &theme, Some((icon, theme.syntax.keyword.color)), &label, true, true);
-        if lr.on_hover_text("Choose Language (⌘L)").clicked() {
+        if lr.on_hover_text(crate::platform::keys("Choose Language (⌘L)")).clicked() {
             self.run_command(Command::ChooseLanguage);
         }
         // Project tabs fill the space between the menu and the controls.
@@ -164,7 +164,7 @@ impl App {
                     ui.close();
                 }
                 if let Some(root) = &info.root
-                    && ui.button("Reveal in Finder").clicked()
+                    && ui.button(crate::platform::REVEAL_LABEL).clicked()
                 {
                     reveal = Some(root.clone());
                     ui.close();
@@ -189,7 +189,7 @@ impl App {
             self.close_project(k, false);
         }
         if let Some(p) = reveal {
-            let _ = std::process::Command::new("open").arg(p).spawn();
+            crate::platform::reveal(&p);
         }
     }
 
@@ -309,7 +309,7 @@ impl App {
         a.add_space(6.0);
         let more = icon_button(&mut a, &theme, ic::MORE_VERT, "");
         egui::Popup::menu(&more).width(220.0).show(|ui| {
-            for (cmd, label) in [(Command::NewFile, "New File"), (Command::Save, "Save"), (Command::SaveAll, "Save All"), (Command::CloseTab, "Close Tab"), (Command::RevealInFinder, "Reveal in Finder")] {
+            for (cmd, label) in [(Command::NewFile, "New File"), (Command::Save, "Save"), (Command::SaveAll, "Save All"), (Command::CloseTab, "Close Tab"), (Command::RevealInFinder, crate::platform::REVEAL_LABEL)] {
                 if ui.button(label).clicked() {
                     ui.close();
                     self.run_command(cmd);
@@ -335,7 +335,7 @@ impl App {
         let mut bar = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(10.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.spacing_mut().item_spacing.x = 2.0;
         let has_terminal = !self.terminals.is_empty();
-        if icon_button_sized(&mut bar, &theme, ic::TERMINAL, "Terminal (⌃`)", 26.0, 17.0, None, self.layout.bottom.open && has_terminal).clicked() {
+        if icon_button_sized(&mut bar, &theme, ic::TERMINAL, &crate::platform::keys("Terminal (⌃`)"), 26.0, 17.0, None, self.layout.bottom.open && has_terminal).clicked() {
             match self.terminals.first().map(|t| t.id) {
                 Some(id) if self.layout.is_visible(PanelItem::Terminal(id)) => self.run_command(Command::ToggleBottomPanel),
                 Some(id) => self.layout.show(PanelItem::Terminal(id), Dock::Bottom),
@@ -406,7 +406,7 @@ impl App {
             let sel = if p.is_empty() { String::new() } else { format!(" ({} selected)", p.end() - p.start()) };
             let cursors = if b.selections.list.len() > 1 { format!("{} cursors  ", b.selections.list.len()) } else { String::new() };
             let pos = rb.add(egui::Label::new(egui::RichText::new(format!("{cursors}Ln {}, Col {}{sel}", line + 1, col + 1)).font(ui::ui_font(12.5)).color(theme.text_muted)).sense(Sense::click()));
-            if pos.on_hover_text("Go to Line (⌃G)").clicked() {
+            if pos.on_hover_text(crate::platform::keys("Go to Line (⌃G)")).clicked() {
                 self.run_command(Command::GoToLine);
             }
         }

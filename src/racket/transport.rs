@@ -167,9 +167,21 @@ impl Drop for Process {
     }
 }
 
+/// On Windows, a GUI app's child processes would each flash a console window; don't.
+pub(crate) fn no_console(cmd: &mut Command) -> &mut Command {
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
+
 /// A `racket <script>` command with a sane environment.
 pub(crate) fn racket_command(racket: &Path, script: &Path, cwd: Option<&Path>) -> Command {
     let mut cmd = Command::new(racket);
+    no_console(&mut cmd);
     cmd.arg(script);
     if let Some(dir) = cwd.filter(|d| d.is_dir()) {
         cmd.current_dir(dir);

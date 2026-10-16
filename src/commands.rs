@@ -64,6 +64,7 @@ pub enum Command {
     RemovePackage,
     ShowPackages,
     ShowLog,
+    ReportProblem,
     Revert,
     SaveInteractions,
     Print,
@@ -119,15 +120,15 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::ClearInteractions, label: "Clear Interactions", group: "Racket", icon: ic::CLEANING_SERVICES, shortcut: None },
     CommandInfo { cmd: Command::InsertLambda, label: "Insert λ", group: "Racket", icon: ic::FUNCTION, shortcut: None },
     CommandInfo { cmd: Command::InsertImage, label: "Insert Image…", group: "Racket", icon: ic::FILE_OPEN, shortcut: None },
-    // The editor handles ⌥⌘/ and ⌥⌘; itself; these make the commands discoverable.
-    CommandInfo { cmd: Command::CommentOutWithBox, label: "Comment Out with a Box  (⌥⌘/)", group: "Racket", icon: ic::COMMENT, shortcut: None },
-    CommandInfo { cmd: Command::CommentOutWithDatum, label: "Comment Out with #;  (⌥⌘;)", group: "Racket", icon: ic::COMMENT, shortcut: None },
+    CommandInfo { cmd: Command::CommentOutWithBox, label: "Comment Out with a Box", group: "Racket", icon: ic::COMMENT, shortcut: sc(cmd_alt(), Key::Slash) },
+    CommandInfo { cmd: Command::CommentOutWithDatum, label: "Comment Out with #;", group: "Racket", icon: ic::COMMENT, shortcut: sc(cmd_alt(), Key::Semicolon) },
     CommandInfo { cmd: Command::ReindentAll, label: "Reindent All", group: "Racket", icon: ic::FORMAT_ALIGN_LEFT, shortcut: None },
     CommandInfo { cmd: Command::ModuleBrowser, label: "Module Browser", group: "Racket", icon: ic::ACCOUNT_TREE, shortcut: None },
     CommandInfo { cmd: Command::CreateExecutable, label: "Create Executable…", group: "Racket", icon: ic::ROCKET_LAUNCH, shortcut: None },
     CommandInfo { cmd: Command::InstallPackage, label: "Install Package…", group: "Racket", icon: ic::PACKAGE_2, shortcut: None },
     CommandInfo { cmd: Command::UpdatePackage, label: "Update Package…", group: "Racket", icon: ic::PACKAGE_2, shortcut: None },
     CommandInfo { cmd: Command::RemovePackage, label: "Remove Package…", group: "Racket", icon: ic::PACKAGE_2, shortcut: None },
+    CommandInfo { cmd: Command::ReportProblem, label: "Report a Problem…", group: "App", icon: ic::BUG_REPORT, shortcut: None },
     CommandInfo { cmd: Command::ShowLog, label: "Show Log", group: "Racket", icon: ic::NOTES, shortcut: None },
     CommandInfo { cmd: Command::ShowPackages, label: "Show Installed Packages", group: "Racket", icon: ic::PACKAGE_2, shortcut: None },
     CommandInfo { cmd: Command::Revert, label: "Revert to Saved", group: "File", icon: ic::HISTORY, shortcut: None },
@@ -142,7 +143,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::CloseTab, label: "Close Tab", group: "File", icon: ic::CLOSE, shortcut: sc(CMD, Key::W) },
     CommandInfo { cmd: Command::ReopenClosedTab, label: "Reopen Closed Tab", group: "File", icon: ic::HISTORY, shortcut: sc(cmd_shift(), Key::T) },
     CommandInfo { cmd: Command::CloseFolder, label: "Close Folder", group: "File", icon: ic::FOLDER, shortcut: None },
-    CommandInfo { cmd: Command::RevealInFinder, label: "Reveal in Finder", group: "File", icon: ic::OPEN_IN_NEW, shortcut: None },
+    CommandInfo { cmd: Command::RevealInFinder, label: crate::platform::REVEAL_LABEL, group: "File", icon: ic::OPEN_IN_NEW, shortcut: None },
     CommandInfo { cmd: Command::Palette, label: "Command Palette", group: "Go", icon: ic::KEYBOARD_COMMAND_KEY, shortcut: sc(cmd_shift(), Key::P) },
     CommandInfo { cmd: Command::QuickOpen, label: "Go to File…", group: "Go", icon: ic::SEARCH, shortcut: sc(CMD, Key::P) },
     CommandInfo { cmd: Command::GoToLine, label: "Go to Line…", group: "Go", icon: ic::FORMAT_LIST_NUMBERED, shortcut: sc(ctrl(), Key::G) },
@@ -189,7 +190,7 @@ pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
         e
     });
     vec![
-        MenuSpec { title: "App", entries: vec![about, None, settings, entry(Command::SelectTheme), entry(Command::KeyboardShortcuts)] },
+        MenuSpec { title: "App", entries: vec![about, None, settings, entry(Command::SelectTheme), entry(Command::KeyboardShortcuts), None, entry(Command::ReportProblem)] },
         MenuSpec {
             title: "File",
             entries: vec![
@@ -294,7 +295,7 @@ pub fn info(cmd: Command) -> &'static CommandInfo {
     COMMANDS.iter().find(|c| c.cmd == cmd).expect("every command has info")
 }
 
-/// Human-readable shortcut, macOS style (⌘⇧R).
+/// Human-readable shortcut: macOS style (⇧⌘R) on a Mac, Ctrl+Shift+R elsewhere.
 pub fn shortcut_text(s: &KeyboardShortcut) -> String {
     let mut out = String::new();
     let m = s.modifiers;
@@ -323,7 +324,7 @@ pub fn shortcut_text(s: &KeyboardShortcut) -> String {
         other => other.name().to_string(),
     };
     out.push_str(&k);
-    out
+    crate::platform::keys(&out)
 }
 
 #[cfg(test)]

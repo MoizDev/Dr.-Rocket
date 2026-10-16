@@ -148,8 +148,8 @@ impl App {
                         action = Some(TreeAction::CopyRelative(entry.path.clone()));
                         ui.close();
                     }
-                    if ui.button("Reveal in Finder").clicked() {
-                        let _ = std::process::Command::new("open").arg("-R").arg(&entry.path).spawn();
+                    if ui.button(crate::platform::REVEAL_LABEL).clicked() {
+                        crate::platform::reveal(&entry.path);
                         ui.close();
                     }
                     if ui.button("Open Terminal Here").clicked() {

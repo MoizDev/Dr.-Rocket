@@ -427,6 +427,9 @@ impl App {
             session_checked: 0.0,
         };
         app.apply_theme_overrides();
+        if !crate::crash::unseen().is_empty() && app.automation.is_none() {
+            app.toast(crate::platform::keys("Dr. Rocket quit unexpectedly last time. A report was saved: choose Report a Problem… (☰ menu or ⇧⌘P) to copy it and send it to us."), ToastKind::Error);
+        }
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
         if restore {
             let s = Session::load();
@@ -867,7 +870,7 @@ impl App {
             Command::CloseFolder => self.close_project(self.current_project, false),
             Command::RevealInFinder => {
                 if let Some(p) = self.active_tab().and_then(|t| t.path.clone()) {
-                    let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
+                    crate::platform::reveal(&p);
                 }
             }
             Command::Palette => self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Commands, "")),
@@ -927,6 +930,12 @@ impl App {
                 if let Some(t) = self.active_tab_mut() {
                     t.editor.doc.type_text("λ", false);
                 }
+            }
+            Command::ReportProblem => {
+                let report = crate::crash::problem_report(self.racket.version.as_deref());
+                self.ctx.copy_text(report);
+                crate::crash::mark_seen();
+                self.toast("Problem report copied (version, system and the latest crash report). Paste it into a message, with what you were doing.", ToastKind::Info);
             }
             Command::CommentOutWithBox => {
                 if let Some(t) = self.active_tab_mut() {
