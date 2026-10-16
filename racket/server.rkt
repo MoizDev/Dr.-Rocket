@@ -34,12 +34,15 @@
   ;; module is instantiated; instantiate it here, under the main custodian, so cancelling
   ;; a request can never kill it. Then warm the documentation index in the background.
   (thread (λ ()
+            ;; Everything the docs worker will touch is instantiated up front by the loader,
+            ;; so the two workers never instantiate modules concurrently.
             (on-loader (λ ()
-                         (dynamic-require 'drracket/private/syncheck/xref #f)
-                         (dynamic-require 'scribble/blueboxes #f)
-                         (dynamic-require 'scribble/manual-struct #f)
-                         (force xref-promise)
-                         (force index-promise)))))
+                         (for ([m '(drracket/private/syncheck/xref setup/xref scribble/xref
+                                    scribble/blueboxes scribble/manual-struct racket/serialize)])
+                           (dynamic-require m #f))))
+            (on-docs (λ ()
+                       (force xref-promise)
+                       (force index-promise)))))
   (let loop ()
     (define req (read-command in))
     (unless (eof-object? req)
@@ -99,39 +102,43 @@
   (if (eq? v (json-null)) default v))
 
 ;; ---------------------------------------------------------------------------
-;; The loader thread
+;; Workers
 ;;
 ;; Instantiating library modules from several threads at once, or killing a thread in the
 ;; middle of an instantiation (a cancelled request), corrupts the module registry. The
-;; documentation xref objects are not thread-safe either. So all library loading and xref
-;; access happens on one long-lived thread owned by the main custodian; requests send it
-;; thunks and wait for the answer.
+;; documentation xref objects are not thread-safe either. So library loading happens on one
+;; long-lived worker thread and xref access on another, both owned by the main custodian;
+;; requests send them thunks and wait for the answer. Keeping docs on their own worker means
+;; loading the documentation index never delays check syntax.
 
-(define loader-requests (make-channel))
+;; make-worker : -> (values thread ((-> any) -> any))
+(define (make-worker)
+  (define requests (make-channel))
+  (define worker
+    (thread
+     (λ ()
+       (let loop ()
+         (define job (channel-get requests))
+         (define result
+           (with-handlers ([(λ (e) #t) (λ (e) (cons 'raise e))])
+             (cons 'ok (call-with-values (car job) list))))
+         (async-channel-put (cdr job) result)
+         (loop)))))
+  (values worker
+          (λ (thunk)
+            (if (eq? (current-thread) worker)
+                (thunk)
+                (let ([reply (make-async-channel)])
+                  (channel-put requests (cons thunk reply))
+                  (define result (async-channel-get reply))
+                  (if (eq? (car result) 'ok)
+                      (apply values (cdr result))
+                      (raise (cdr result))))))))
 
-(define loader-thread
-  (thread
-   (λ ()
-     (let loop ()
-       (define job (channel-get loader-requests))
-       (define thunk (car job))
-       (define reply (cdr job))
-       (define result
-         (with-handlers ([(λ (e) #t) (λ (e) (cons 'raise e))])
-           (cons 'ok (call-with-values thunk list))))
-       (async-channel-put reply result)
-       (loop)))))
-
-;; on-loader : (-> any) -> any
-(define (on-loader thunk)
-  (if (eq? (current-thread) loader-thread)
-      (thunk)
-      (let ([reply (make-async-channel)])
-        (channel-put loader-requests (cons thunk reply))
-        (define result (async-channel-get reply))
-        (if (eq? (car result) 'ok)
-            (apply values (cdr result))
-            (raise (cdr result))))))
+;; on-loader : (-> any) -> any   -- module instantiation
+(define-values (loader-thread on-loader) (make-worker))
+;; on-docs : (-> any) -> any     -- documentation xref access
+(define-values (docs-thread on-docs) (make-worker))
 
 ;; lib : module-path symbol -> any   -- dynamic-require through the loader
 (define (lib mod name)
@@ -335,27 +342,27 @@
 ;; Our own xref instance: the global one from load-collections-xref is used concurrently by
 ;; check syntax's lookup thread, and xref objects are not safe for concurrent loading.
 (define xref-promise
-  (delay ((dynamic-require 'setup/xref 'make-collections-xref))))
+  (delay ((lib 'setup/xref 'make-collections-xref))))
 
 (define index-promise
   (delay
    (let ([xref (force xref-promise)]
-         [xref-index (dynamic-require 'scribble/xref 'xref-index)])
+         [xref-index (lib 'scribble/xref 'xref-index)])
      (xref-index xref))))
 
 (define blueboxes-cache
-  (delay ((dynamic-require 'scribble/blueboxes 'make-blueboxes-cache) #t)))
+  (delay ((lib 'scribble/blueboxes 'make-blueboxes-cache) #t)))
 
 (define (tag->doc tag)
   (define-values (path anchor)
-    (on-loader (λ () ((dynamic-require 'scribble/xref 'xref-tag->path+anchor) (force xref-promise) tag))))
+    (on-docs (λ () ((lib 'scribble/xref 'xref-tag->path+anchor) (force xref-promise) tag))))
   (if path
       (hasheq 'path (path->jsexpr path) 'anchor (if anchor (format "~a" anchor) (json-null)))
       (json-null)))
 
 (define (bluebox-for-tag tag)
   (define strs
-    (on-loader (λ () ((dynamic-require 'scribble/blueboxes 'fetch-blueboxes-strs)
+    (on-docs (λ () ((lib 'scribble/blueboxes 'fetch-blueboxes-strs)
                       tag #:blueboxes-cache (force blueboxes-cache)))))
   (and strs (pair? strs)
        ;; Scribble lays blue boxes out with non-breaking spaces; plain spaces render the same.
@@ -382,7 +389,7 @@
         (namespace-require lang)
         (identifier-binding (namespace-symbol->identifier sym)))))
   (and (list? binding)
-       (on-loader (λ () ((dynamic-require 'scribble/xref 'xref-binding->definition-tag)
+       (on-docs (λ () ((lib 'scribble/xref 'xref-binding->definition-tag)
                          (force xref-promise) (list (car binding) (cadr binding)) #f)))))
 
 (define (bluebox req)
@@ -429,7 +436,7 @@
      (define exported-index-desc-name (lib 'scribble/manual-struct 'exported-index-desc-name))
      (define exported-index-desc-from-libs (lib 'scribble/manual-struct 'exported-index-desc-from-libs))
      (define scored
-       (for*/list ([e (in-list (on-loader (λ () (force index-promise))))]
+       (for*/list ([e (in-list (on-docs (λ () (force index-promise))))]
                    [name (in-value (let ([d (entry-desc e)])
                                      (if (exported-index-desc? d)
                                          (format "~a" (exported-index-desc-name d))

@@ -671,17 +671,17 @@
 
 (define (instrument-namespace! instrument)
   (when (memq instrument '(errortrace coverage))
-    (define make-handler (dynamic-require 'errortrace/errortrace-lib 'make-errortrace-compile-handler))
-    (set! errortrace-key* (dynamic-require 'errortrace/errortrace-key 'errortrace-key))
-    ((dynamic-require 'errortrace/errortrace-lib 'instrumenting-enabled) #t)
+    (define make-handler (rt-require 'errortrace/errortrace-lib 'make-errortrace-compile-handler))
+    (set! errortrace-key* (rt-require 'errortrace/errortrace-key 'errortrace-key))
+    ((rt-require 'errortrace/errortrace-lib 'instrumenting-enabled) #t)
     (when (eq? instrument 'coverage)
-      ((dynamic-require 'errortrace/errortrace-lib 'coverage-counts-enabled) #t))
+      ((rt-require 'errortrace/errortrace-lib 'coverage-counts-enabled) #t))
     (current-compile (make-handler))))
 
 ;; Like DrRacket, a character's coverage is that of the innermost instrumented expression
 ;; containing it. We paint expressions outermost-first and report maximal runs.
 (define (emit-coverage!)
-  (define get-coverage (dynamic-require 'errortrace/errortrace-lib 'get-coverage))
+  (define get-coverage (rt-require 'errortrace/errortrace-lib 'get-coverage))
   (define-values (all executed) (get-coverage))
   (define (main? r) (same-source? (car r) (main-source)))
   (define ranges (filter (λ (r) (and (main? r) (>= (cadr r) coverage-body-start))) all))
@@ -719,13 +719,13 @@
      (emit* (hasheq 'ev "coverage" 'covered (runs 'yes) 'uncovered (runs 'no)))]))
 
 (define (profile-thunk* thunk)
-  (define profile-thunk (dynamic-require 'profile 'profile-thunk))
+  (define profile-thunk (rt-require 'profile 'profile-thunk))
   (define-values (profile-total-time profile-nodes node-id node-src node-self node-total
                                      node-callers node-callees edge-caller edge-callee)
     (apply values
            (for/list ([s '(profile-total-time profile-nodes node-id node-src node-self node-total
                                               node-callers node-callees edge-caller edge-callee)])
-             (dynamic-require 'profile/structs s))))
+             (rt-require 'profile/structs s))))
   (profile-thunk
    thunk
    #:delay 0.001
@@ -784,7 +784,8 @@
   (set! user-namespace ns)
   ;; Share the printer with the program so language print settings and our image hooks
   ;; act on the same parameters.
-  (namespace-attach-module (variable-reference->namespace (#%variable-reference)) 'racket/pretty ns)
+  (namespace-attach-module runner-ns 'racket/pretty ns)
+  (namespace-attach-module runner-ns 'file/convertible ns)
   (set! repl-namespace ns)
 
   (define user-out (make-user-output-port "out"))
@@ -930,9 +931,22 @@
 
 ;; ---------------------------------------------------------------------------
 
+;; The runner's own namespace. Tooling (errortrace, the profiler) lives here, shared by every
+;; evaluation; errortrace attaches its mark key to the program's namespace itself.
+(define runner-ns (variable-reference->namespace (#%variable-reference)))
+
+(define (rt-require mod name)
+  (parameterize ([current-namespace runner-ns])
+    (dynamic-require mod name)))
+
 (define (main)
   (start-flusher!)
   (thread reader-loop)
+  ;; The IDE may start a runner before the user presses Run; load the usual tooling while we
+  ;; wait so the run itself starts immediately.
+  (parameterize ([current-namespace runner-ns])
+    (for ([m '(errortrace/errortrace-lib errortrace/errortrace-key file/convertible)])
+      (dynamic-require m #f)))
   (semaphore-wait run-started)
   (run-program! run-command)
   ;; Keep serving (e.g. big-bang windows run in their own eventspace) until stdin closes.

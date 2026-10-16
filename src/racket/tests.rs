@@ -574,3 +574,41 @@ fn newer_check_syntax_cancels_older_for_same_file() {
     };
     assert!(words.iter().any(|w| w == "lambda"));
 }
+
+/// `cargo test latency -- --ignored --nocapture` prints how long common operations take.
+#[test]
+#[ignore]
+fn latency_report() {
+    let b = need_racket!();
+    for (name, src, instrument) in [
+        ("racket/base, no instrumentation", "#lang racket/base\n(+ 1 2)\n", Instrument::None),
+        ("racket, errortrace", "#lang racket\n(+ 1 2)\n", Instrument::Errortrace),
+    ] {
+        let t = Instant::now();
+        let s = RunSession::start(b, &module_config(None, src, instrument)).unwrap();
+        run_until(&s, ready(None));
+        eprintln!("run {name}: {:?}", t.elapsed());
+    }
+    let settings = Language::Beginner.default_settings();
+    let (source, offset) = lang::program_text(Language::Beginner, &settings, None, "(+ 1 2)\n");
+    let t = Instant::now();
+    let config = RunConfig { path: None, source, offset, language: RunLanguage::Module, options: RunOptions::default() };
+    let s = RunSession::start(b, &config).unwrap();
+    run_until(&s, ready(None));
+    eprintln!("run BSL: {:?}", t.elapsed());
+
+    let idle = super::runner::IdleRunner::spawn(b).unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    let t = Instant::now();
+    let s = RunSession::start_with(idle, &module_config(None, "#lang racket\n(+ 1 2)\n", Instrument::Errortrace)).unwrap();
+    run_until(&s, ready(None));
+    eprintln!("run racket, errortrace, prewarmed: {:?}", t.elapsed());
+
+    let mut server = Server::start(b).unwrap();
+    for i in 0..3 {
+        let t = Instant::now();
+        let source = format!("#lang racket\n(define x {i})\n");
+        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source, offset: 0 });
+        eprintln!("check-syntax #{i}: {:?}", t.elapsed());
+    }
+}

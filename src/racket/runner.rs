@@ -28,16 +28,37 @@ pub struct RunSession {
     dead: bool,
 }
 
-impl RunSession {
-    pub fn start(backend: &Backend, config: &RunConfig) -> std::io::Result<RunSession> {
-        let cwd = config.path.as_deref().and_then(|p| p.parent());
+/// A runner process started ahead of time. It loads its tooling while idle, so starting a
+/// run from it skips process startup. Keep one around and replace it after each Run.
+pub struct IdleRunner {
+    process: Process,
+    events: Receiver<RunEvent>,
+}
+
+impl IdleRunner {
+    pub fn spawn(backend: &Backend) -> std::io::Result<IdleRunner> {
         let (tx, events) = unbounded();
-        let mut process = Process::spawn(
-            backend.command("runner.rkt", cwd),
-            tx,
-            backend.ctx(),
-            |code, stderr| Some(RunEvent::Terminated { code, stderr }),
-        )?;
+        let process = Process::spawn(backend.command("runner.rkt", None), tx, backend.ctx(), |code, stderr| {
+            Some(RunEvent::Terminated { code, stderr })
+        })?;
+        Ok(IdleRunner { process, events })
+    }
+
+    pub fn is_alive(&mut self) -> bool {
+        self.process.is_alive()
+    }
+}
+
+impl RunSession {
+    /// Start a run in a fresh runner process.
+    pub fn start(backend: &Backend, config: &RunConfig) -> std::io::Result<RunSession> {
+        Self::start_with(IdleRunner::spawn(backend)?, config)
+    }
+
+    /// Start a run in a pre-spawned runner. The runner resolves relative paths against the
+    /// program's directory itself, so its working directory doesn't matter.
+    pub fn start_with(idle: IdleRunner, config: &RunConfig) -> std::io::Result<RunSession> {
+        let IdleRunner { mut process, events } = idle;
         let path = config.path.as_ref().map(|p| p.to_string_lossy().into_owned());
         process.send(&RunnerCommand::Run {
             path: path.as_deref(),
