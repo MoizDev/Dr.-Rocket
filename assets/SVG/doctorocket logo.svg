@@ -1,13 +1,17 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 94.53 145.79">
   <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="145.79" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#eef0f3"/>
+      <stop offset="1" stop-color="#aeb4bf"/>
+    </linearGradient>
     <style>
       .cls-1 {
-        fill: #d30000;
+        fill: url(#body);
       }
 
       .cls-2 {
-        fill: #6546f6;
+        fill: #61afef;
       }
     </style>
   </defs>

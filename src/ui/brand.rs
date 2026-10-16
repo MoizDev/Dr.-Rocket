@@ -5,12 +5,19 @@ use egui::{Image, Vec2};
 pub const APP_NAME: &str = "Dr. Rocket";
 
 const LOGO_SVG: &[u8] = include_bytes!("../../assets/SVG/doctorocket logo.svg");
+/// Graphite variant for light themes (the silver logo disappears on white).
+const LOGO_LIGHT_SVG: &[u8] = include_bytes!("../../assets/SVG/doctorocket logo light.svg");
 /// Width / height of the logo's view box.
 const LOGO_ASPECT: f32 = 94.53 / 145.79;
 
 /// The logo at the given height (rendered from the SVG at the display's pixel density).
-pub fn logo(height: f32) -> Image<'static> {
-    Image::from_bytes("bytes://brand/doctorocket-logo.svg", LOGO_SVG).fit_to_exact_size(Vec2::new(height * LOGO_ASPECT, height))
+pub fn logo(height: f32, dark: bool) -> Image<'static> {
+    let image = if dark {
+        Image::from_bytes("bytes://brand/doctorocket-logo.svg", LOGO_SVG)
+    } else {
+        Image::from_bytes("bytes://brand/doctorocket-logo-light.svg", LOGO_LIGHT_SVG)
+    };
+    image.fit_to_exact_size(Vec2::new(height * LOGO_ASPECT, height))
 }
 
 /// Window icon for the Dock when running outside the app bundle.

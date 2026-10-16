@@ -28,7 +28,7 @@ impl App {
 
         // App mark: the Dr. Rocket logo.
         let (logo, logo_resp) = bar.allocate_exact_size(vec2(24.0, 30.0), Sense::click());
-        crate::ui::brand::logo(26.0).paint_at(&bar, Rect::from_center_size(logo.center(), vec2(26.0 * 0.65, 26.0)));
+        crate::ui::brand::logo(26.0, self.theme.dark).paint_at(&bar, Rect::from_center_size(logo.center(), vec2(26.0 * 0.65, 26.0)));
         if logo_resp.on_hover_text(crate::ui::brand::APP_NAME).clicked() {
             self.run_command(Command::About);
         }

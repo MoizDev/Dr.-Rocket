@@ -18,7 +18,7 @@ impl App {
         let mut y = rect.top() + (rect.height() * 0.12).max(36.0);
 
         let logo_h = 60.0;
-        let logo = crate::ui::brand::logo(logo_h);
+        let logo = crate::ui::brand::logo(logo_h, theme.dark);
         let logo_w = logo.size().map(|s| s.x).unwrap_or(logo_h * 0.65);
         logo.paint_at(ui, Rect::from_min_size(pos2(left, y - 2.0), vec2(logo_w, logo_h)));
         let tx = left + logo_w + 18.0;
