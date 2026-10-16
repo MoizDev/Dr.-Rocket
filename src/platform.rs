@@ -71,6 +71,114 @@ pub fn set_fullscreen(fullscreen: bool) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_fullscreen(_fullscreen: bool) {}
 
+/// Tag the window's Metal layer as Display P3, as Zed does: theme hex values are then shown as
+/// P3 colors, which is what makes Zed's themes look vivid on wide-gamut Mac displays (an
+/// untagged layer is color-matched as sRGB and looks washed out next to it). Cheap when the
+/// layer is already tagged, so it is called every frame.
+#[cfg(target_os = "macos")]
+pub fn tag_layer_display_p3() {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        static kCGColorSpaceDisplayP3: *const AnyObject;
+        fn CGColorSpaceCreateWithName(name: *const AnyObject) -> *const std::ffi::c_void;
+        fn CGColorSpaceRelease(space: *const std::ffi::c_void);
+    }
+    WINDOW.with(|w| {
+        let Some(window) = w.borrow().clone() else { return };
+        let Some(view) = window.contentView() else { return };
+        // SAFETY: Core Animation / Core Graphics calls on live objects on the main thread; the
+        // color space is retained by the layer and released here.
+        unsafe {
+            let root: *mut AnyObject = msg_send![&*view, layer];
+            if root.is_null() {
+                return;
+            }
+            let mut layers = vec![root];
+            let subs: *mut AnyObject = msg_send![root, sublayers];
+            if !subs.is_null() {
+                let n: usize = msg_send![subs, count];
+                for k in 0..n {
+                    layers.push(msg_send![subs, objectAtIndex: k]);
+                }
+            }
+            let metal: Vec<*mut AnyObject> = layers.into_iter().filter(|&l| msg_send![l, respondsToSelector: objc2::sel!(pixelFormat)]).collect();
+            // wgpu clears the color space whenever it reconfigures the surface (resize etc.).
+            if metal.iter().all(|&l| {
+                let current: *const std::ffi::c_void = msg_send![l, colorspace];
+                !current.is_null()
+            }) {
+                return;
+            }
+            let space = CGColorSpaceCreateWithName(kCGColorSpaceDisplayP3);
+            if space.is_null() {
+                return;
+            }
+            for l in metal {
+                let _: () = msg_send![l, setColorspace: space];
+            }
+            CGColorSpaceRelease(space);
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn tag_layer_display_p3() {}
+
+/// `DRROCKET_TRACE`: print the Metal layer's pixel format and color space (diagnostics).
+#[cfg(target_os = "macos")]
+pub fn trace_layer_colorspace() {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    #[link(name = "CoreGraphics", kind = "framework")]
+    unsafe extern "C" {
+        fn CGColorSpaceCopyName(space: *const std::ffi::c_void) -> *const AnyObject;
+    }
+    WINDOW.with(|w| {
+        let Some(window) = w.borrow().clone() else { return };
+        let Some(view) = window.contentView() else { return };
+        // SAFETY: plain Objective-C property reads on live AppKit / Core Animation objects.
+        unsafe {
+            let mut layers: Vec<*mut AnyObject> = Vec::new();
+            let root: *mut AnyObject = msg_send![&*view, layer];
+            if !root.is_null() {
+                layers.push(root);
+                let subs: *mut AnyObject = msg_send![root, sublayers];
+                if !subs.is_null() {
+                    let n: usize = msg_send![subs, count];
+                    for k in 0..n {
+                        layers.push(msg_send![subs, objectAtIndex: k]);
+                    }
+                }
+            }
+            for l in layers {
+                let class: *const AnyObject = msg_send![l, class];
+                let desc: *mut AnyObject = msg_send![class, description];
+                let utf8: *const std::ffi::c_char = msg_send![desc, UTF8String];
+                let name = std::ffi::CStr::from_ptr(utf8).to_string_lossy();
+                let responds: bool = msg_send![l, respondsToSelector: objc2::sel!(pixelFormat)];
+                if !responds {
+                    eprintln!("layer {name}");
+                    continue;
+                }
+                let format: usize = msg_send![l, pixelFormat];
+                let space: *const std::ffi::c_void = msg_send![l, colorspace];
+                let space_name = if space.is_null() {
+                    "none (untagged)".to_string()
+                } else {
+                    let n = CGColorSpaceCopyName(space);
+                    if n.is_null() { "unnamed".into() } else { let u: *const std::ffi::c_char = msg_send![n, UTF8String]; std::ffi::CStr::from_ptr(u).to_string_lossy().into_owned() }
+                };
+                eprintln!("layer {name}: pixelFormat {format}, colorspace {space_name}");
+            }
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn trace_layer_colorspace() {}
+
 // ---------------------------------------------------------------------------------------
 // Files opened from Finder ("Open With", double-click, `open -a`).
 //

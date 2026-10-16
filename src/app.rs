@@ -1197,6 +1197,10 @@ impl eframe::App for App {
         let started = std::time::Instant::now();
         let ctx = ui.ctx().clone();
         self.frame_count += 1;
+        crate::platform::tag_layer_display_p3();
+        if self.frame_count == 3 && std::env::var_os("DRROCKET_TRACE").is_some() {
+            crate::platform::trace_layer_colorspace();
+        }
         self.ensure_style(&ctx);
         self.handle_shortcuts(&ctx);
         self.layout_and_paint(ui);
