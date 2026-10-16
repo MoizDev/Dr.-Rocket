@@ -21,7 +21,8 @@ impl App {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
 
-        let left = rect.left() + crate::platform::TRAFFIC_LIGHTS_W;
+        // Breathing room after the traffic lights, then the logo sits snug against the project name.
+        let left = rect.left() + crate::platform::TRAFFIC_LIGHTS_W + 18.0;
         let row = Rect::from_min_max(pos2(left, rect.top()), pos2(rect.right() - 10.0, rect.bottom()));
         let mut bar = ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.spacing_mut().item_spacing.x = 4.0;
@@ -32,7 +33,7 @@ impl App {
         if logo_resp.on_hover_text(crate::ui::brand::APP_NAME).clicked() {
             self.run_command(Command::About);
         }
-        bar.add_space(8.0);
+        bar.add_space(-4.0);
         // Project selector.
         let project = self.workspace.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "No Project".into());
         let pr = pill_button(&mut bar, &theme, None, &project, true, false);
