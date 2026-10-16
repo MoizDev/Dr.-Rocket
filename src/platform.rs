@@ -71,6 +71,20 @@ pub fn set_fullscreen(fullscreen: bool) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_fullscreen(_fullscreen: bool) {}
 
+/// Core Graphics' opaque `CGColorSpace`, typed so objc2's message checks (on in debug builds)
+/// see the `^{CGColorSpace=}` that `-[CAMetalLayer colorspace]` returns.
+#[cfg(target_os = "macos")]
+#[repr(C)]
+struct CGColorSpace {
+    _private: [u8; 0],
+}
+
+// SAFETY: matches Core Graphics' declaration `typedef struct CGColorSpace *CGColorSpaceRef`.
+#[cfg(target_os = "macos")]
+unsafe impl objc2::encode::RefEncode for CGColorSpace {
+    const ENCODING_REF: objc2::encode::Encoding = objc2::encode::Encoding::Pointer(&objc2::encode::Encoding::Struct("CGColorSpace", &[]));
+}
+
 /// Tag the window's Metal layer as Display P3, as Zed does: theme hex values are then shown as
 /// P3 colors, which is what makes Zed's themes look vivid on wide-gamut Mac displays (an
 /// untagged layer is color-matched as sRGB and looks washed out next to it). Cheap when the
@@ -82,8 +96,8 @@ pub fn tag_layer_display_p3() {
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
         static kCGColorSpaceDisplayP3: *const AnyObject;
-        fn CGColorSpaceCreateWithName(name: *const AnyObject) -> *const std::ffi::c_void;
-        fn CGColorSpaceRelease(space: *const std::ffi::c_void);
+        fn CGColorSpaceCreateWithName(name: *const AnyObject) -> *const CGColorSpace;
+        fn CGColorSpaceRelease(space: *const CGColorSpace);
     }
     WINDOW.with(|w| {
         let Some(window) = w.borrow().clone() else { return };
@@ -106,7 +120,7 @@ pub fn tag_layer_display_p3() {
             let metal: Vec<*mut AnyObject> = layers.into_iter().filter(|&l| msg_send![l, respondsToSelector: objc2::sel!(pixelFormat)]).collect();
             // wgpu clears the color space whenever it reconfigures the surface (resize etc.).
             if metal.iter().all(|&l| {
-                let current: *const std::ffi::c_void = msg_send![l, colorspace];
+                let current: *const CGColorSpace = msg_send![l, colorspace];
                 !current.is_null()
             }) {
                 return;
@@ -133,7 +147,7 @@ pub fn trace_layer_colorspace() {
     use objc2::runtime::AnyObject;
     #[link(name = "CoreGraphics", kind = "framework")]
     unsafe extern "C" {
-        fn CGColorSpaceCopyName(space: *const std::ffi::c_void) -> *const AnyObject;
+        fn CGColorSpaceCopyName(space: *const CGColorSpace) -> *const AnyObject;
     }
     WINDOW.with(|w| {
         let Some(window) = w.borrow().clone() else { return };
@@ -163,7 +177,7 @@ pub fn trace_layer_colorspace() {
                     continue;
                 }
                 let format: usize = msg_send![l, pixelFormat];
-                let space: *const std::ffi::c_void = msg_send![l, colorspace];
+                let space: *const CGColorSpace = msg_send![l, colorspace];
                 let space_name = if space.is_null() {
                     "none (untagged)".to_string()
                 } else {
