@@ -25,7 +25,10 @@ integrated terminals and themes. Teaching-language files stay byte-compatible wi
   List Abbreviations, Intermediate Student, Intermediate Student with lambda, Advanced Student,
   DeinProgramm (Anfänger, Fortgeschritten, mit Zuweisungen), R5RS and Pretty Big, plus output
   style, fraction style, sharing, tracing and teachpacks (Choose Language, ⌘L)
-- **Algebraic stepper** (⇧⌘E) with before/after highlighting, mirrored in the source
+- **Algebraic stepper** (⇧⌘E) with before/after highlighting, mirrored in the source, step for
+  step identical to DrRacket's, with images drawn in the steps
+- **DrRacket files with pasted images and comment boxes** open with the images inline, run, and
+  save back in DrRacket's format; Insert Image… and pasting images from the clipboard
 - **Check syntax**, running continuously in the background: binding arrows, unused bindings and
   requires, hover info, rename (F2), go to definition across files (F12 / ⌘-click)
 - **Debugger** (⇧⌘D): gutter breakpoints, step into/over/out, locals and call stack. As in
@@ -34,8 +37,17 @@ integrated terminals and themes. Teaching-language files stay byte-compatible wi
 - **Test coverage**, **profiler**, **macro stepper** (⇧⌘M) and **module browser**
 - **Docs**: the signature "blue box" for the call at the cursor, hover docs, and search over all
   installed manuals (F1)
-- Racket indentation (Tab, ⌘I), s-expression navigation, `#;` and block comments, λ (⌘\\),
-  Create Executable, Install Package
+- Racket indentation (Tab, ⌘I), s-expression navigation, Comment Out with a Box / `#;`, λ (⌘\\),
+  Create Executable, Revert, Save Interactions, Print, Show Log, and package install, update and
+  removal
+
+**Beyond DrRacket**
+
+- **Visualizer** (⇧⌘V): replays a run as an animated diagram. Call frames, cons-cell chains and
+  trees (structs that point to their own type) are drawn and animate as the program changes them,
+  with a plain-language explanation of each step and the step's code highlighted. Tail calls
+  replace their caller's frame, as Racket runs them.
+- Project tabs, integrated terminals, Zed themes, and the editor features below
 
 **Editor**
 
@@ -59,12 +71,18 @@ integrated terminals and themes. Teaching-language files stay byte-compatible wi
 
 ## Install
 
-Requires [Racket](https://racket-lang.org) (tested with 9.3; found automatically in `PATH`, Homebrew, or
-`/Applications/Racket*`) and a Rust toolchain.
+Requires [Racket](https://racket-lang.org) (tested with 9.3; found automatically in `PATH`, Homebrew,
+`/Applications/Racket*` or `C:\Program Files\Racket`) and a Rust toolchain.
 
 ```sh
-tools/bundle.sh --install   # builds "Dr. Rocket.app" and copies it to ~/Applications
+tools/bundle.sh --install            # builds "Dr. Rocket.app" and copies it to ~/Applications
+tools/bundle.sh --universal --dmg    # Apple Silicon + Intel app and a DMG for distribution
 ```
+
+Distribution signing and notarization happen when `DEVELOPER_ID` and `NOTARY_PROFILE` are set
+(see `tools/bundle.sh`). The code also builds on Windows and Linux; CI runs the full test suite
+there with Racket. See [docs/drracket-parity.md](docs/drracket-parity.md) for what is and isn't
+covered compared with DrRacket.
 
 Or run it straight from the tree:
 
@@ -99,6 +117,7 @@ Development:
 ```sh
 cargo test                        # unit + backend integration tests (needs Racket)
 cargo clippy --all-targets        # kept warning-free
+tools/dev.sh                      # live dev loop: rebuild and restart on change, themes reload live
 DRROCKET_AUTOMATION=script.json cargo run   # scripted end-to-end runs with screenshots
 cargo run --example make_icon     # regenerate the app icon from assets/SVG
 ```
