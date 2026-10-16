@@ -320,6 +320,40 @@ fn stepper_handles_hash_lang_teaching_buffers() {
     assert_eq!(texts, vec!["(+ 1 6)", "7"]);
 }
 
+/// Matches DrRacket 9.3's stepper step for step (checked against its stepper window): cons
+/// chains are shown being built up as `list` values, even in Beginning Student.
+#[test]
+fn stepper_matches_drracket_on_list_construction() {
+    let b = need_racket!();
+    let source = "(define (is-list? lst)\n  (cond\n    [(empty? lst) true]\n    [(cons? lst) true]\n    [else false]))\n\n(is-list? (cons 'a (cons 'b empty)))\n".to_string();
+    let request = StepRequest {
+        path: None,
+        source: source.clone(),
+        level: Language::Beginner.stepper_level(&source).unwrap().into(),
+        settings: Language::Beginner.default_settings().stepper_json(),
+        teachpacks: vec![],
+        width: 200,
+    };
+    let events = step_until(&StepperSession::start(b, &request).unwrap());
+    let after: Vec<String> = events
+        .iter()
+        .filter_map(|e| if let StepperEvent::Step(s) = e { Some(s.after.last().unwrap().text.split_whitespace().collect::<Vec<_>>().join(" ")) } else { None })
+        .collect();
+    assert_eq!(
+        after,
+        vec![
+            "(is-list? (cons 'a (cons 'b '())))",
+            "(is-list? (cons 'a (list 'b)))",
+            "(is-list? (list 'a 'b))",
+            "(cond ((empty? (list 'a 'b)) #true) ((cons? (list 'a 'b)) #true) (else #false))",
+            "(cond (#false #true) ((cons? (list 'a 'b)) #true) (else #false))",
+            "(cond ((cons? (list 'a 'b)) #true) (else #false))",
+            "(cond (#true #true) (else #false))",
+            "#true",
+        ]
+    );
+}
+
 fn server_result(server: &mut Server, req: ServerRequest) -> ServerResponse {
     let id = server.request(req);
     server.wait(id, TIMEOUT).expect("server timed out").expect("server error")

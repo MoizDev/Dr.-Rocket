@@ -164,11 +164,16 @@
       (define o (open-output-string))
       (render-value/format v o 'infinity)
       (get-output-string o))
+    ;; DrRacket builds the stepper's render settings in its GUI thread, where print-convert
+    ;; abbreviates cons chains as `list` at every level (the language's own printing settings
+    ;; are installed in another thread). So BSL steps show (cons 'b '()) -> (list 'b).
     (define (render-to-sexp v)
-      (or (and (procedure? v) (object-name v))
-          (print-convert v)))
+      (parameterize ([abbreviate-cons-as-list #t])
+        (or (and (procedure? v) (object-name v))
+            (print-convert v))))
     (define render-settings
-      (get-render-settings render-to-string render-to-sexp #t #t (level-info-lambdas? info)))
+      (parameterize ([abbreviate-cons-as-list #t])
+        (get-render-settings render-to-string render-to-sexp #t #t (level-info-lambdas? info))))
     (define (render-exps sstxs)
       (for/list ([s (in-list sstxs)])
         (define table (make-hasheq))
