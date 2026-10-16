@@ -815,6 +815,13 @@ impl App {
 
     pub fn run_command(&mut self, cmd: Command) {
         match cmd {
+            Command::NextProject | Command::PrevProject => {
+                let n = self.projects.len();
+                if n > 1 {
+                    let step = if cmd == Command::NextProject { 1 } else { n - 1 };
+                    self.switch_project((self.current_project + step) % n);
+                }
+            }
             // In a project, name the file up front (in the app); otherwise an untitled tab.
             Command::NewFile if self.workspace.is_some() => self.new_file_in_project(),
             Command::NewFile => self.new_file(),
@@ -1054,13 +1061,16 @@ impl App {
         if !matches!(self.modal, Modal::None) {
             return;
         }
+        // egui matches shortcuts ignoring extra Shift/Alt, so check the most specific first:
+        // ⇧⌘S must not be taken by ⌘S, nor ⌃⇧Tab by ⌃Tab.
+        let mut shortcuts: Vec<(egui::KeyboardShortcut, Command)> = COMMANDS.iter().filter_map(|c| c.shortcut.map(|s| (s, c.cmd))).collect();
+        let weight = |m: egui::Modifiers| [m.alt, m.ctrl, m.shift, m.mac_cmd || m.command].iter().filter(|b| **b).count();
+        shortcuts.sort_by_key(|(s, _)| std::cmp::Reverse(weight(s.modifiers)));
         let mut fired = Vec::new();
         ctx.input_mut(|i| {
-            for c in COMMANDS {
-                if let Some(s) = c.shortcut
-                    && i.consume_shortcut(&s)
-                {
-                    fired.push(c.cmd);
+            for (s, cmd) in &shortcuts {
+                if i.consume_shortcut(s) {
+                    fired.push(*cmd);
                 }
             }
         });
