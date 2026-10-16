@@ -145,23 +145,57 @@ impl App {
         child.set_clip_rect(inner);
         let mut close = None;
         let mut activate = None;
+        let mut rects: Vec<Rect> = Vec::with_capacity(self.tabs.len());
+        let mut dragging: Option<(usize, f32)> = None;
+        let mut dropped: Option<(usize, f32)> = None;
         egui::ScrollArea::horizontal().id_salt("tabs-scroll").scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(&mut child, |ui| {
             ui.spacing_mut().item_spacing.x = 2.0;
             for (i, t) in self.tabs.iter().enumerate() {
                 let title = t.title();
                 let icon = file_icons::image(file_icons::file_icon(&title), 16.0);
                 let r = widgets::tab(ui, &theme, TabIcon::Image(icon), &title, i == self.active, t.dirty(), true, t.path.is_none());
+                rects.push(r.response.rect);
                 if r.clicked {
                     activate = Some(i);
                 }
                 if r.close {
                     close = Some(t.id);
                 }
+                if let Some(x) = r.response.interact_pointer_pos().map(|p| p.x) {
+                    if r.response.dragged() {
+                        dragging = Some((i, x));
+                    }
+                    if r.response.drag_stopped() {
+                        dropped = Some((i, x));
+                    }
+                }
                 if let Some(p) = &t.path {
                     r.response.on_hover_text(crate::config::tildify(p));
                 }
             }
         });
+        // Where a dragged tab would land: before the first tab whose center is right of the pointer.
+        let slot = |x: f32| rects.iter().position(|r| x < r.center().x).unwrap_or(rects.len());
+        if let Some((from, x)) = dragging {
+            let to = slot(x);
+            if to != from && to != from + 1 {
+                let lx = if to < rects.len() { rects[to].left() - 1.0 } else { rects.last().map(|r| r.right() + 1.0).unwrap_or(inner.left()) };
+                ui.painter().vline(lx, rect.top() + 8.0..=rect.bottom() - 8.0, Stroke::new(2.0, theme.text_accent));
+            }
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+        }
+        if let Some((from, x)) = dropped {
+            let to = slot(x);
+            if to != from && to != from + 1 {
+                let active_id = self.tabs.get(self.active).map(|t| t.id);
+                let tab = self.tabs.remove(from);
+                let to = if to > from { to - 1 } else { to };
+                self.tabs.insert(to, tab);
+                if let Some(id) = active_id {
+                    self.active = self.tabs.iter().position(|t| t.id == id).unwrap_or(0);
+                }
+            }
+        }
         if let Some(i) = activate {
             self.active = i;
             self.tabs[i].editor.request_focus();

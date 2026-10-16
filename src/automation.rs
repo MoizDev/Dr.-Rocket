@@ -28,6 +28,8 @@ pub enum Step {
     DoubleClick([f32; 2]),
     RightClick([f32; 2]),
     Hover([f32; 2]),
+    /// Press at the first point, move to the second over several frames, release.
+    Drag([[f32; 2]; 2]),
     Scroll([f32; 2]),
     WaitMs(u64),
     WaitFrames(u64),
@@ -54,6 +56,8 @@ pub struct Automation {
     shot_done: Option<Arc<AtomicBool>>,
     started: Option<f64>,
     reset_modifiers: bool,
+    /// In-progress drag: (from, to, frame).
+    drag: Option<(egui::Pos2, egui::Pos2, u32)>,
 }
 
 impl Automation {
@@ -61,7 +65,7 @@ impl Automation {
         let path = std::env::var("DRROCKET_AUTOMATION").ok()?;
         let text = std::fs::read_to_string(&path).ok()?;
         let script: Script = serde_json::from_str(&text).map_err(|e| eprintln!("automation script error: {e}")).ok()?;
-        Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None, reset_modifiers: false })
+        Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None, reset_modifiers: false, drag: None })
     }
 
     pub fn window_size() -> Option<[f32; 2]> {
@@ -75,6 +79,20 @@ impl Automation {
     pub fn step(&mut self, app: &mut App, ctx: &egui::Context, raw: &mut egui::RawInput) {
         let now = ctx.input(|i| i.time);
         self.started.get_or_insert(now);
+        // Advance an in-progress drag one frame at a time, like a real mouse.
+        if let Some((from, to, frame)) = self.drag {
+            const FRAMES: u32 = 8;
+            if frame < FRAMES {
+                let t = (frame + 1) as f32 / FRAMES as f32;
+                raw.events.push(Event::PointerMoved(from + (to - from) * t));
+                self.drag = Some((from, to, frame + 1));
+            } else {
+                raw.events.push(Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::NONE });
+                self.drag = None;
+                self.wait_frames = 2;
+            }
+            return;
+        }
         if self.reset_modifiers {
             raw.events.push(Event::ModifiersChanged(Modifiers::NONE));
             self.reset_modifiers = false;
@@ -154,6 +172,12 @@ impl Automation {
                 }
             }
             Step::Hover(p) => raw.events.push(Event::PointerMoved(pos2(p[0], p[1]))),
+            Step::Drag([a, b]) => {
+                let from = pos2(a[0], a[1]);
+                raw.events.push(Event::PointerMoved(from));
+                raw.events.push(Event::PointerButton { pos: from, button: PointerButton::Primary, pressed: true, modifiers: Modifiers::NONE });
+                self.drag = Some((from, pos2(b[0], b[1]), 0));
+            }
             Step::Scroll(d) => raw.events.push(Event::MouseWheel {
                 unit: egui::MouseWheelUnit::Point,
                 delta: egui::vec2(d[0], d[1]),

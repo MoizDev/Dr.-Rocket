@@ -109,7 +109,8 @@ pub fn tab(ui: &mut Ui, theme: &Theme, icon: TabIcon<'_>, label: &str, active: b
     let close_w = if closable || dirty { 22.0 } else { 0.0 };
     let h = super::TAB_BAR_H - 8.0;
     let w = 10.0 + icon_w + galley.size().x + 6.0 + close_w + 6.0;
-    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click());
+    // Tabs can be dragged to reorder them.
+    let (rect, resp) = ui.allocate_exact_size(vec2(w, h), Sense::click_and_drag());
     let mut out = TabResponse { clicked: resp.clicked(), close: resp.middle_clicked(), response: resp.clone() };
     if !ui.is_rect_visible(rect) {
         return out;
