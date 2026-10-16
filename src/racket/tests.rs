@@ -714,3 +714,36 @@ fn debugger_stops_in_required_modules_open_in_other_tabs() {
     let events = run_until(&s, ready(None));
     assert_eq!(values(&events), vec!["42"], "the editor text of helper.rkt was used");
 }
+
+#[test]
+fn visualizer_records_calls_questions_returns_and_heap_objects() {
+    let b = need_racket!();
+    let src = "#lang htdp/bsl\n(define-struct node (left key right))\n(define (insert t k)\n  (cond\n    [(empty? t) (make-node empty k empty)]\n    [(< k (node-key t)) (make-node (insert (node-left t) k) (node-key t) (node-right t))]\n    [else (make-node (node-left t) (node-key t) (insert (node-right t) k))]))\n(define t1 (insert (insert empty 5) 3))\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::Visualize)).unwrap();
+    let events = run_until(&s, ready(None));
+    let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
+    let kinds: Vec<&str> = steps.iter().map(|s| s.kind.as_str()).collect();
+    assert_eq!(kinds.first(), Some(&"define"), "{kinds:?}");
+    assert_eq!(kinds.last(), Some(&"end"), "{kinds:?}");
+    // The inner (insert empty 5) runs first: a call from its call site, the question, the return.
+    let call = steps.iter().find(|s| s.kind == "call").unwrap();
+    let site = &src[call.pos.unwrap()..call.pos.unwrap() + call.span];
+    assert_eq!(site, "(insert empty 5)");
+    assert_eq!(call.frames.len(), 1);
+    assert_eq!(call.frames[0].name, "insert");
+    assert_eq!(call.frames[0].vars[1], ("k".to_string(), VizRef::Prim { v: "5".into(), k: "num".into() }));
+    let question = steps.iter().find(|s| s.kind == "question").unwrap();
+    assert_eq!(&src[question.pos.unwrap()..question.pos.unwrap() + question.span], "(empty? t)");
+    assert_eq!(question.value, Some(VizRef::Prim { v: "#true".into(), k: "bool".into() }));
+    // Recursion: the second insert recurses into the left subtree (two frames deep).
+    assert!(steps.iter().any(|s| s.kind == "call" && s.frames.len() == 2));
+    // Nodes are heap objects with field names from define-struct; t1 is a global.
+    let node = steps.iter().flat_map(|s| s.objects.iter()).find(|o| o.k == "struct").unwrap();
+    assert_eq!(node.name.as_deref(), Some("node"));
+    let names: Vec<&str> = node.fields.iter().map(|f| f.0.as_str()).collect();
+    assert_eq!(names, ["left", "key", "right"]);
+    let end = steps.last().unwrap();
+    assert!(end.globals.iter().any(|(n, v)| n == "t1" && matches!(v, VizRef::Object { .. })), "{:?}", end.globals);
+    assert!(!end.globals.iter().any(|(n, _)| n == "make-node"), "generated names stay hidden");
+    assert!(events.iter().any(|e| matches!(e, RunEvent::VizEnd { truncated: false, .. })));
+}

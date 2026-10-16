@@ -14,7 +14,8 @@
          net/base64
          syntax/modread
          setup/dirs
-         "common.rkt")
+         "common.rkt"
+         "visualize.rkt")
 
 ;; ---------------------------------------------------------------------------
 ;; Protocol plumbing
@@ -962,6 +963,10 @@
           (parameterize ([current-module-declare-name (make-resolved-module-path mod-name)])
             (eval (cond
                     [(eq? instrument 'debug) (debug-annotate (expand stx) source-name)]
+                    [(eq? instrument 'visualize)
+                     (set-viz-emitter! emit*)
+                     (set-viz-image-encoder! value->image)
+                     (viz-annotate (expand stx) source-name stx source)]
                     [trace? (trace-annotate (expand stx))]
                     [else stx])))
           (run-configure-runtime! mod-path)
@@ -969,9 +974,11 @@
           (current-print (make-value-printer (current-print)))
           (init-markup-support!)
           (hook-test-display!)
+          (when (eq? instrument 'visualize) (viz-start!))
           (if (eq? instrument 'profile)
               (profile-thunk* (λ () (dynamic-require mod-path #f)))
               (dynamic-require mod-path #f)))))
+     (when (eq? instrument 'visualize) (viz-finish! (not loaded?)))
      (when loaded?
        (hook-test-display!)
        (for ([sub (in-list submodules)])

@@ -55,6 +55,8 @@ pub enum Instrument {
     Profile,
     /// The single-stepping debugger (breakpoints, step into/over/out).
     Debug,
+    /// Record the run for the visualizer (calls, returns, questions, heap snapshots).
+    Visualize,
 }
 
 #[derive(Clone, Debug, Serialize, PartialEq, Eq)]
@@ -300,12 +302,84 @@ pub enum RunEvent {
     Exit {
         code: i32,
     },
+    /// Visualizer recording started (`instrument: visualize`).
+    VizStart {
+        max_steps: usize,
+    },
+    VizStep(Box<VizStep>),
+    VizEnd {
+        steps: usize,
+        truncated: bool,
+    },
     /// The process ended (or could not be read). Never sent by Racket.
     #[serde(skip)]
     Terminated {
         code: Option<i32>,
         stderr: String,
     },
+}
+
+// ---------------------------------------------------------------------------
+// Visualizer
+
+/// A value in a visualizer snapshot: a primitive shown inline, or a heap object by id.
+#[derive(Clone, Debug, Deserialize, PartialEq)]
+#[serde(untagged)]
+pub enum VizRef {
+    Object {
+        #[serde(rename = "ref")]
+        id: u64,
+    },
+    Prim {
+        v: String,
+        /// num, str, sym, bool, char, empty, void, fn, more, other
+        k: String,
+    },
+}
+
+/// A heap object's contents. Sent when first seen and whenever its contents change.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VizObject {
+    pub id: u64,
+    /// cons, struct, vector, box, hash, image, other
+    pub k: String,
+    pub name: Option<String>,
+    pub first: Option<VizRef>,
+    pub rest: Option<VizRef>,
+    pub fields: Vec<(String, VizRef)>,
+    pub items: Vec<VizRef>,
+    pub len: Option<usize>,
+    pub pairs: Vec<(VizRef, VizRef)>,
+    pub png: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub text: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VizFrame {
+    pub name: String,
+    pub vars: Vec<(String, VizRef)>,
+}
+
+/// One recorded step: what happened, the call stack and globals, and changed objects.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct VizStep {
+    pub index: usize,
+    /// define, call, return, question, set, end
+    pub kind: String,
+    pub pos: Option<usize>,
+    pub span: usize,
+    pub name: Option<String>,
+    pub value: Option<VizRef>,
+    pub failed: Option<bool>,
+    pub globals: Vec<(String, VizRef)>,
+    /// Oldest first.
+    pub frames: Vec<VizFrame>,
+    pub objects: Vec<VizObject>,
 }
 
 // ---------------------------------------------------------------------------

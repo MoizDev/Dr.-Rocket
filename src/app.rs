@@ -21,6 +21,7 @@ pub enum PanelItem {
     Stepper,
     Tests,
     Macros,
+    Visualizer,
     Docs,
     Problems,
     Debugger,
@@ -39,6 +40,7 @@ impl PanelItem {
             PanelItem::Stepper => "Stepper",
             PanelItem::Tests => "Tests",
             PanelItem::Macros => "Macro Stepper",
+            PanelItem::Visualizer => "Visualizer",
             PanelItem::Docs => "Docs",
             PanelItem::Problems => "Problems",
             PanelItem::Debugger => "Debugger",
@@ -57,6 +59,7 @@ impl PanelItem {
             PanelItem::Stepper => ic::STEP,
             PanelItem::Tests => ic::SCIENCE,
             PanelItem::Macros => ic::AUTO_FIX_HIGH,
+            PanelItem::Visualizer => crate::visualizer::ICON,
             PanelItem::Docs => ic::MENU_BOOK,
             PanelItem::Problems => ic::ERROR,
             PanelItem::Debugger => ic::BUG_REPORT,
@@ -105,7 +108,7 @@ impl Default for Layout {
             right: DockState {
                 open: true,
                 size: 520.0,
-                items: vec![PanelItem::Interactions, PanelItem::Stepper, PanelItem::Tests, PanelItem::Macros],
+                items: vec![PanelItem::Interactions, PanelItem::Stepper, PanelItem::Visualizer, PanelItem::Tests, PanelItem::Macros],
                 active: 0,
             },
             bottom: DockState { open: false, size: 260.0, items: vec![PanelItem::Problems], active: 0 },
@@ -427,6 +430,12 @@ impl App {
             app.layout = s.layout.clone();
             // Docs has no permanent tab button; it opens on demand (F1, Search Documentation).
             app.layout.remove(PanelItem::Docs);
+            // Panels added since the layout was saved.
+            if app.layout.find(PanelItem::Visualizer).is_none() {
+                let items = &mut app.layout.right.items;
+                let at = items.iter().position(|i| *i == PanelItem::Stepper).map(|k| k + 1).unwrap_or(items.len());
+                items.insert(at, PanelItem::Visualizer);
+            }
             let projects = if s.projects.is_empty() {
                 vec![ProjectSession { project: s.project.clone(), files: s.files.clone(), active: s.active }]
             } else {

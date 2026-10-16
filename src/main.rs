@@ -13,6 +13,7 @@ mod racket;
 mod racket_ui;
 mod terminal;
 mod theme;
+mod visualizer;
 mod ui;
 mod workspace;
 

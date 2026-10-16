@@ -64,6 +64,8 @@ pub enum MarkKind {
     Uncovered,
     /// Debugger: current expression.
     Debug,
+    /// Visualizer: the code of the current step.
+    Viz,
 }
 
 #[derive(Clone, Debug)]
@@ -672,6 +674,7 @@ impl EditorView {
                 // Uncovered code stands out like DrRacket's orange-on-black coverage display.
                 MarkKind::Uncovered => (with_alpha(theme.warning, if theme.dark { 72 } else { 90 }), Some(theme.warning)),
                 MarkKind::Debug => (with_alpha(theme.success, 50), Some(theme.success)),
+                MarkKind::Viz => (with_alpha(theme.text_accent, 46), Some(theme.text_accent)),
             };
             self.paint_range_bg(&tp, m.range.start, m.range.end, first, last, fill);
             if let Some(b) = border {

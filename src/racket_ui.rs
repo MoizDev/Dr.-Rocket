@@ -156,6 +156,7 @@ pub struct RacketTab {
     pub paused: Option<PausedState>,
     pub instrument: Instrument,
     pub stepper: Option<StepperView>,
+    pub viz: Option<crate::visualizer::VisualizerView>,
     pub macros: Option<MacroView>,
     pub modules: Option<ModulesView>,
     pub check: Option<CheckSyntaxResult>,
@@ -187,6 +188,7 @@ impl RacketTab {
             paused: None,
             instrument: Instrument::Errortrace,
             stepper: None,
+            viz: None,
             macros: None,
             modules: None,
             check: None,
@@ -774,6 +776,22 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
                 eval(tab, &q);
             }
         }
+        RunEvent::VizStart { max_steps } => {
+            let v = tab.rk.viz.get_or_insert_with(Default::default);
+            *v = Default::default();
+            v.trace.max_steps = max_steps;
+        }
+        RunEvent::VizStep(step) => {
+            if let Some(v) = tab.rk.viz.as_mut() {
+                v.trace.push(*step);
+            }
+        }
+        RunEvent::VizEnd { truncated, .. } => {
+            if let Some(v) = tab.rk.viz.as_mut() {
+                v.trace.finished = true;
+                v.trace.truncated = truncated;
+            }
+        }
         RunEvent::Exit { code } => {
             tab.rk.push(Entry::Info(format!("Program exited with code {code}.")));
             tab.rk.busy = false;
@@ -955,6 +973,11 @@ pub fn run(app: &mut App, cmd: Command) {
     match cmd {
         Command::Run => start_run(app, i, Instrument::Errortrace),
         Command::Debug => start_run(app, i, Instrument::Debug),
+        Command::Visualize => {
+            app.tabs[i].rk.viz = Some(Default::default());
+            start_run(app, i, Instrument::Visualize);
+            app.layout.show(PanelItem::Visualizer, Dock::Right);
+        }
         Command::Profile => start_run(app, i, Instrument::Profile),
         Command::RunWithCoverage => start_run(app, i, Instrument::Coverage),
         Command::RunTests => start_run(app, i, Instrument::Errortrace),
@@ -1273,6 +1296,7 @@ pub fn panel(app: &mut App, ui: &mut Ui, rect: Rect, item: PanelItem) {
         PanelItem::Stepper => stepper_panel(app, ui, rect),
         PanelItem::Tests => tests_panel(app, ui),
         PanelItem::Macros => macros_panel(app, ui, rect),
+        PanelItem::Visualizer => visualizer_panel(app, ui, rect),
         PanelItem::Docs => docs_panel(app, ui),
         PanelItem::Debugger => debugger_panel(app, ui),
         PanelItem::Profiler => profiler_panel(app, ui),
@@ -1792,6 +1816,182 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             ui.label(egui::RichText::new("All of the definitions have been successfully evaluated.").font(ui::ui_font(12.5)).italics().color(theme.text_placeholder));
         }
     });
+}
+
+// ---------------------------------------------------------------------------------- visualizer
+
+fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
+    if no_tab(app, ui, crate::visualizer::ICON, "Visualizer", "Open a Racket file") {
+        return;
+    }
+    let theme = app.theme.clone();
+    let tk = app.tokens();
+    let i = app.active;
+    let busy = app.tabs[i].rk.busy;
+    if app.tabs[i].rk.viz.as_ref().is_none_or(|v| v.trace.steps.is_empty()) {
+        if busy && app.tabs[i].rk.viz.is_some() {
+            empty_state(ui, &theme, crate::visualizer::ICON, "Recording…", "Running the program and recording each step");
+            return;
+        }
+        empty_state(ui, &theme, crate::visualizer::ICON, "Visualizer", "Watch your program run: every call, question and data structure, step by step (⇧⌘V)");
+        let r = ui.available_rect_before_wrap();
+        let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(150.0, 32.0));
+        let resp = ui.interact(br, Id::unique("start-viz"), Sense::click());
+        ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { mix(theme.text_accent, Color32::WHITE, 0.1) } else { theme.text_accent });
+        ui.painter().text(br.center(), Align2::CENTER_CENTER, "Visualize", ui::medium(13.5), Color32::WHITE);
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            run(app, Command::Visualize);
+        }
+        return;
+    }
+    let now = ui.input(|inp| inp.time);
+    // Toolbar.
+    let mut nav: Option<isize> = None;
+    let mut rerun = false;
+    {
+        let v = app.tabs[i].rk.viz.as_mut().unwrap();
+        let n = v.trace.steps.len();
+        let bar = Rect::from_min_size(rect.min + vec2(6.0, 4.0), vec2(rect.width() - 12.0, 34.0));
+        let mut b = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        b.spacing_mut().item_spacing.x = 2.0;
+        if icon_button_sized(&mut b, &theme, ic::FIRST_PAGE, "First step", 30.0, 20.0, None, false).clicked() {
+            nav = Some(isize::MIN);
+        }
+        if icon_button_sized(&mut b, &theme, ic::CHEVRON_LEFT, "Previous step (←)", 30.0, 20.0, None, false).clicked() {
+            nav = Some(-1);
+        }
+        let (glyph, tip) = if v.playing { (ic::PAUSE, "Pause (Space)") } else { (ic::PLAY_ARROW, "Play (Space)") };
+        if icon_button_sized(&mut b, &theme, glyph, tip, 30.0, 22.0, Some(theme.text_accent), false).clicked() {
+            v.playing = !v.playing;
+            if v.playing && v.current + 1 >= n {
+                v.current = 0;
+            }
+        }
+        if icon_button_sized(&mut b, &theme, ic::CHEVRON_RIGHT, "Next step (→)", 30.0, 20.0, None, false).clicked() {
+            nav = Some(1);
+        }
+        if icon_button_sized(&mut b, &theme, ic::LAST_PAGE, "Last step", 30.0, 20.0, None, false).clicked() {
+            nav = Some(isize::MAX);
+        }
+        b.add_space(8.0);
+        let more = if v.trace.finished { "" } else { "+" };
+        b.label(egui::RichText::new(format!("Step {} of {}{more}", v.current + 1, n)).font(ui::medium(13.0)).color(theme.text_muted));
+        let mut rb = b.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        rb.spacing_mut().item_spacing.x = 2.0;
+        if icon_button_sized(&mut rb, &theme, ic::REPLAY, "Record again", 30.0, 19.0, None, false).clicked() {
+            rerun = true;
+        }
+        let speed_label = match v.speed {
+            s if s < 1.5 => "1×",
+            s if s < 3.0 => "2×",
+            s if s < 6.0 => "4×",
+            _ => "8×",
+        };
+        if crate::ui::widgets::pill_button(&mut rb, &theme, Some((ic::SPEED, theme.text_muted)), speed_label, false, false).on_hover_text("Playback speed").clicked() {
+            v.speed = match speed_label {
+                "1×" => 2.5,
+                "2×" => 5.0,
+                "4×" => 10.0,
+                _ => 1.0,
+            };
+        }
+        // Keyboard (when no text field has focus).
+        if !ui.ctx().memory(|m| m.focused().is_some()) && ui.rect_contains_pointer(rect) {
+            ui.input(|inp| {
+                if inp.key_pressed(egui::Key::ArrowRight) {
+                    nav = Some(1);
+                }
+                if inp.key_pressed(egui::Key::ArrowLeft) {
+                    nav = Some(-1);
+                }
+                if inp.key_pressed(egui::Key::Space) {
+                    v.playing = !v.playing;
+                }
+            });
+        }
+        // Timeline: click or drag to scrub.
+        let tl = Rect::from_min_size(pos2(rect.left() + 12.0, bar.bottom() + 6.0), vec2(rect.width() - 24.0, 6.0));
+        let hit = tl.expand2(vec2(0.0, 6.0));
+        let tresp = ui.interact(hit, Id::unique("viz-timeline"), Sense::click_and_drag());
+        ui.painter().rect_filled(tl, CornerRadius::same(3), tk.hover);
+        let frac = if n > 1 { v.current as f32 / (n - 1) as f32 } else { 1.0 };
+        ui.painter().rect_filled(Rect::from_min_size(tl.min, vec2(tl.width() * frac, tl.height())), CornerRadius::same(3), theme.text_accent);
+        ui.painter().circle_filled(pos2(tl.left() + tl.width() * frac, tl.center().y), if tresp.hovered() || tresp.dragged() { 6.0 } else { 4.5 }, theme.text_accent);
+        if (tresp.clicked() || tresp.dragged())
+            && let Some(p) = tresp.interact_pointer_pos()
+        {
+            let f = ((p.x - tl.left()) / tl.width()).clamp(0.0, 1.0);
+            v.current = (f * (n.saturating_sub(1)) as f32).round() as usize;
+            v.playing = false;
+        }
+        // Playback.
+        if v.playing {
+            let period = 1.0 / v.speed as f64;
+            if now - v.last_advance() >= period {
+                v.set_last_advance(now);
+                if v.current + 1 < n {
+                    v.current += 1;
+                } else if v.trace.finished {
+                    v.playing = false;
+                }
+            }
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(period / 2.0));
+        }
+        if let Some(d) = nav {
+            v.playing = false;
+            v.current = match d {
+                isize::MIN => 0,
+                isize::MAX => n.saturating_sub(1),
+                d => (v.current as isize + d).clamp(0, n as isize - 1) as usize,
+            };
+        }
+    }
+    if rerun {
+        run(app, Command::Visualize);
+        return;
+    }
+    // Explanation card at the bottom, the diagram in between.
+    let explain_h = 58.0;
+    let canvas = Rect::from_min_max(pos2(rect.left(), rect.top() + 56.0), pos2(rect.right(), rect.bottom() - explain_h - 8.0));
+    ui.painter().hline(rect.left()..=rect.right(), canvas.top() - 1.0, Stroke::new(1.0, tk.island_border));
+    let tab = &mut app.tabs[i];
+    let text_of = {
+        let buffer = &tab.editor.doc.buffer;
+        let n = buffer.len();
+        move |pos: usize, span: usize| -> String { buffer.slice(pos.min(n)..(pos + span).min(n)) }
+    };
+    let v = tab.rk.viz.as_mut().unwrap();
+    let explanation = v.step().map(|s| crate::visualizer::explain(v, s, &text_of)).unwrap_or_default();
+    let kind = v.step().map(|s| s.kind.clone()).unwrap_or_default();
+    let truncated = v.trace.truncated && v.current + 1 == v.trace.steps.len();
+    if crate::visualizer::draw(v, ui, canvas, &theme) {
+        ui.ctx().request_repaint();
+    }
+    let card = Rect::from_min_max(pos2(rect.left() + 10.0, rect.bottom() - explain_h - 4.0), pos2(rect.right() - 10.0, rect.bottom() - 6.0));
+    ui.painter().rect(card, CornerRadius::same(8), mix(tk.island, theme.text, 0.03), Stroke::new(1.0, tk.island_border), egui::StrokeKind::Inside);
+    let (badge, color) = match kind.as_str() {
+        "call" => ("CALL", theme.syntax.function.color),
+        "return" => ("RETURN", theme.success),
+        "question" => ("QUESTION", theme.syntax.keyword.color),
+        "define" => ("DEFINE", theme.syntax.variable.color),
+        "set" => ("SET!", theme.warning),
+        _ => ("DONE", theme.text_muted),
+    };
+    ui.painter().text(card.min + vec2(12.0, 14.0), Align2::LEFT_CENTER, badge, ui::semibold(10.5), color);
+    let text = if truncated { format!("{explanation}  (recording stopped after {} steps)", v.trace.max_steps) } else { explanation };
+    truncated_label(ui, card.min + vec2(12.0, 36.0), &text, ui::mono(13.0), theme.text, card.width() - 24.0);
+    // Highlight the step's code in the editor.
+    let step_range = v.step().and_then(|s| s.pos.map(|p| p..p + s.span.max(1)));
+    if v.highlighted != Some(v.current) {
+        v.highlighted = Some(v.current);
+        tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Viz);
+        let n = tab.editor.doc.buffer.len();
+        if let Some(r) = step_range {
+            let r = r.start.min(n)..r.end.min(n);
+            tab.editor.deco.marks.push(Mark { range: r.clone(), kind: MarkKind::Viz });
+            tab.editor.reveal_soft(r.start);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------- tests

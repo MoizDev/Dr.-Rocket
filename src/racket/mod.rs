@@ -35,6 +35,7 @@ const SCRIPTS: &[(&str, &str)] = &[
     ("common.rkt", include_str!("../../racket/common.rkt")),
     ("runner.rkt", include_str!("../../racket/runner.rkt")),
     ("stepper.rkt", include_str!("../../racket/stepper.rkt")),
+    ("visualize.rkt", include_str!("../../racket/visualize.rkt")),
     ("server.rkt", include_str!("../../racket/server.rkt")),
 ];
 
