@@ -593,20 +593,21 @@ mod tests {
         reg.add_family(BUNDLED[0].1, ThemeSource::Bundled);
         let t = reg.get(DEFAULT_THEME).unwrap();
         assert!(t.dark);
-        assert_eq!(t.editor_bg, Color32::from_rgb(0x18, 0x1a, 0x1f));
+        assert_eq!(t.editor_bg, Color32::from_rgb(0x0f, 0x10, 0x15));
         assert_eq!(t.syntax.keyword.color, Color32::from_rgb(0xd5, 0x5f, 0xde));
         assert!(t.syntax.comment.italic);
         assert_eq!(t.terminal.ansi[1], Color32::from_rgb(0xe0, 0x55, 0x61));
     }
 
-    /// Moiz One Dark is the user's Zed "One Dark Darker" theme under a new name: every style
-    /// value must match the original (checked when the Zed theme is installed).
+    /// Moiz One Dark is the user's Zed "One Dark Darker" theme under a new name, with one
+    /// requested change: its #181a1f surfaces are #0f1015. Every other style value must match
+    /// the original (checked when the Zed theme is installed).
     #[test]
     fn default_theme_is_one_dark_darker() {
         let Some(path) = dirs::home_dir().map(|h| h.join(".config/zed/themes/one-dark-darker.json")) else { return };
         let Ok(original) = std::fs::read_to_string(&path) else { return };
         let parse = |s: &str| serde_json::from_str::<Value>(&strip_json_comments(s)).unwrap();
-        let (ours, theirs) = (parse(BUNDLED[0].1), parse(&original));
+        let (ours, theirs) = (parse(&BUNDLED[0].1.replace("\"#0f1015\"", "\"#181a1f\"")), parse(&original));
         let (ours, theirs) = (ours["themes"].as_array().unwrap(), theirs["themes"].as_array().unwrap());
         assert_eq!(ours.len(), theirs.len());
         for (a, b) in ours.iter().zip(theirs) {
