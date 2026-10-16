@@ -4,7 +4,7 @@
 //! `cargo run --example make_icon` writes `assets/icon/icon_<size>.png` and
 //! `assets/icon/logo_<size>.png` (the bare logo, transparent background).
 
-use resvg::tiny_skia::{self, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, Rect, Shader, SpreadMode, Transform};
+use resvg::tiny_skia::{self, FillRule, GradientStop, LinearGradient, Paint, PathBuilder, Pixmap, Point, Shader, SpreadMode, Transform};
 use resvg::usvg;
 
 const LOGO: &[u8] = include_bytes!("../assets/SVG/doctorocket logo.svg");
@@ -48,27 +48,27 @@ fn main() {
         // Soft shadow.
         for k in 0..10 {
             let grow = (10 - k) as f32 * s / 512.0 * 1.6;
-            let mut p = Paint::default();
+            let mut p = Paint { anti_alias: true, ..Default::default() };
             p.set_color_rgba8(0, 0, 0, 5);
-            p.anti_alias = true;
             let path = rounded_rect(inset - grow, inset + s * 0.012 - grow, w + 2.0 * grow, w + 2.0 * grow, radius + grow);
             pm.fill_path(&path, &p, FillRule::Winding, Transform::identity(), None);
         }
         let tile = rounded_rect(inset, inset, w, w, radius);
-        let mut paint = Paint::default();
-        paint.anti_alias = true;
-        paint.shader = LinearGradient::new(
+        let paint = Paint {
+            anti_alias: true,
+            shader: LinearGradient::new(
             Point::from_xy(inset, inset),
             Point::from_xy(inset, inset + w),
             vec![GradientStop::new(0.0, tiny_skia::Color::from_rgba8(0x2a, 0x2d, 0x36, 255)), GradientStop::new(1.0, tiny_skia::Color::from_rgba8(0x14, 0x15, 0x1a, 255))],
             SpreadMode::Pad,
             Transform::identity(),
         )
-        .unwrap_or(Shader::SolidColor(tiny_skia::Color::from_rgba8(0x18, 0x1a, 0x1f, 255)));
+            .unwrap_or(Shader::SolidColor(tiny_skia::Color::from_rgba8(0x18, 0x1a, 0x1f, 255))),
+            ..Default::default()
+        };
         pm.fill_path(&tile, &paint, FillRule::Winding, Transform::identity(), None);
         // Hairline highlight on the top edge.
-        let mut edge = Paint::default();
-        edge.anti_alias = true;
+        let mut edge = Paint { anti_alias: true, ..Default::default() };
         edge.set_color_rgba8(255, 255, 255, 22);
         let stroke = tiny_skia::Stroke { width: (s / 512.0).max(0.5), ..Default::default() };
         pm.stroke_path(&tile, &edge, &stroke, Transform::identity(), None);
@@ -80,6 +80,5 @@ fn main() {
         draw_logo(&mut lp, &tree, s / 2.0, s / 2.0, s * 0.96);
         lp.save_png(out.join(format!("logo_{size}.png"))).unwrap();
     }
-    let _ = Rect::from_xywh(0.0, 0.0, 1.0, 1.0);
     println!("wrote assets/icon");
 }
