@@ -41,12 +41,20 @@ pub fn install_fonts(ctx: &egui::Context) {
     add(&mut fonts, "symbols", include_bytes!("../../assets/fonts/MaterialSymbolsOutlined.ttf"));
     add(&mut fonts, "symbols-filled", include_bytes!("../../assets/fonts/MaterialSymbolsFilled.ttf"));
 
+    // Nerd Font icons (used by many shell prompts and `eza`) come from an installed Nerd Font.
+    if let Some(bytes) = find_nerd_font() {
+        fonts.font_data.insert("nerd".to_owned(), Arc::new(FontData::from_owned(bytes)));
+    }
+    let has_nerd = fonts.font_data.contains_key("nerd");
     let prop = fonts.families.entry(FontFamily::Proportional).or_default();
     prop.insert(0, "inter".into());
     prop.insert(1, "fira".into());
     let mono = fonts.families.entry(FontFamily::Monospace).or_default();
     mono.insert(0, "fira".into());
     mono.insert(1, "inter".into());
+    if has_nerd {
+        mono.insert(2, "nerd".into());
+    }
     let fallback: Vec<String> = fonts.families[&FontFamily::Proportional].iter().skip(2).cloned().collect();
     let family = |first: &str| {
         let mut v = vec![first.to_string(), "fira".to_string()];
@@ -56,10 +64,38 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.families.insert(FontFamily::Name(FAMILY_MEDIUM.into()), family("inter-medium"));
     fonts.families.insert(FontFamily::Name(FAMILY_SEMIBOLD.into()), family("inter-semibold"));
     fonts.families.insert(FontFamily::Name("mono-medium".into()), vec!["fira-medium".into(), "inter".into()]);
-    fonts.families.insert(FontFamily::Name(crate::terminal::BOLD_FONT_FAMILY.into()), vec!["fira-bold".into(), "fira".into(), "inter".into()]);
+    let mut bold = vec!["fira-bold".to_string(), "fira".to_string(), "inter".to_string()];
+    if has_nerd {
+        bold.push("nerd".into());
+    }
+    fonts.families.insert(FontFamily::Name(crate::terminal::BOLD_FONT_FAMILY.into()), bold);
     fonts.families.insert(FontFamily::Name(FAMILY_ICONS.into()), vec!["symbols".into()]);
     fonts.families.insert(FontFamily::Name(FAMILY_ICONS_FILLED.into()), vec!["symbols-filled".into()]);
     ctx.set_fonts(fonts);
+}
+
+/// The first installed "* Nerd Font Mono" (or any Nerd Font) regular face, if any.
+fn find_nerd_font() -> Option<Vec<u8>> {
+    let mut dirs = vec![std::path::PathBuf::from("/Library/Fonts")];
+    if let Some(h) = dirs::home_dir() {
+        dirs.insert(0, h.join("Library/Fonts"));
+        dirs.push(h.join(".local/share/fonts"));
+    }
+    let mut best: Option<(u8, std::path::PathBuf)> = None;
+    for d in dirs {
+        let Ok(rd) = std::fs::read_dir(d) else { continue };
+        for e in rd.flatten() {
+            let name = e.file_name().to_string_lossy().to_lowercase();
+            if !name.contains("nerd") || !(name.ends_with(".ttf") || name.ends_with(".otf")) || !name.contains("regular") {
+                continue;
+            }
+            let rank = if name.contains("nerdfontmono") { 0 } else { 1 };
+            if best.as_ref().is_none_or(|b| rank < b.0) {
+                best = Some((rank, e.path()));
+            }
+        }
+    }
+    best.and_then(|(_, p)| std::fs::read(p).ok())
 }
 
 pub fn icon_font(size: f32) -> FontId {

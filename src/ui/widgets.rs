@@ -219,6 +219,8 @@ pub fn search_field(ui: &mut Ui, theme: &Theme, text: &mut String, hint: &str, i
         .hint_text(egui::RichText::new(hint).color(theme.text_placeholder))
         .frame(egui::Frame::NONE)
         .desired_width(inner.width())
+        .min_size(vec2(inner.width(), h))
+        .vertical_align(egui::Align::Center)
         .margin(egui::Margin::ZERO)
         .font(egui::TextStyle::Body);
     child.add(te)

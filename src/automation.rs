@@ -97,7 +97,18 @@ impl Automation {
             Step::Open(p) => app.open_file(p),
             Step::OpenFolder(p) => app.open_folder(p),
             Step::NewFile(_) => app.new_file(),
-            Step::Type(t) => ctx.input_mut(|i| i.events.push(Event::Text(t.clone()))),
+            Step::Type(t) => {
+                // One event per keystroke, like real typing; "\n" presses Enter.
+                ctx.input_mut(|i| {
+                    for ch in t.chars() {
+                        if ch == '\n' {
+                            i.events.push(Event::Key { key: Key::Enter, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE });
+                        } else {
+                            i.events.push(Event::Text(ch.to_string()));
+                        }
+                    }
+                });
+            }
             Step::Key(k) => {
                 if let Some((key, modifiers)) = parse_key(k) {
                     ctx.input_mut(|i| {

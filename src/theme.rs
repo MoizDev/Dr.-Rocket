@@ -1,6 +1,6 @@
-//! Themes. Racketeer reads Zed's theme format (schema v0.2), so every Zed theme works
+//! Themes. Dr. Rocket reads Zed's theme format (schema v0.2), so every Zed theme works
 //! out of the box. Bundled themes live in `assets/themes`; user themes are discovered in
-//! `~/.config/zed/themes`, installed Zed theme extensions, and Racketeer's own config dir.
+//! `~/.config/zed/themes`, installed Zed theme extensions, and Dr. Rocket's own config dir.
 
 use egui::Color32;
 use serde_json::Value;

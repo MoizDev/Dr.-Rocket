@@ -143,7 +143,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::ToggleBindingArrows, label: "Toggle Binding Arrows", group: "View", icon: ic::EAST, shortcut: None },
     CommandInfo { cmd: Command::Settings, label: "Settings", group: "App", icon: ic::SETTINGS, shortcut: sc(CMD, Key::Comma) },
     CommandInfo { cmd: Command::KeyboardShortcuts, label: "Keyboard Shortcuts", group: "App", icon: ic::KEYBOARD, shortcut: None },
-    CommandInfo { cmd: Command::About, label: "About Racketeer", group: "App", icon: ic::INFO, shortcut: None },
+    CommandInfo { cmd: Command::About, label: "About Dr. Rocket", group: "App", icon: ic::INFO, shortcut: None },
 ];
 
 pub fn info(cmd: Command) -> &'static CommandInfo {

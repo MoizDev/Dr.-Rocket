@@ -8,14 +8,14 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 pub fn config_dir() -> PathBuf {
-    if let Ok(p) = std::env::var("RACKETEER_CONFIG_DIR") {
+    if let Ok(p) = std::env::var("DRROCKET_CONFIG_DIR") {
         return PathBuf::from(p);
     }
-    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("racketeer")
+    dirs::config_dir().unwrap_or_else(|| PathBuf::from(".")).join("dr-rocket")
 }
 
 pub fn cache_dir() -> PathBuf {
-    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("racketeer")
+    dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("dr-rocket")
 }
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -95,7 +95,7 @@ impl Settings {
             let cleaned = crate::theme::strip_json_comments(&text);
             match serde_json::from_str(&cleaned) {
                 Ok(s) => return s,
-                Err(e) => eprintln!("racketeer: ignoring invalid {}: {e}", path.display()),
+                Err(e) => eprintln!("drrocket: ignoring invalid {}: {e}", path.display()),
             }
             return Settings::default();
         }
@@ -150,7 +150,7 @@ impl Settings {
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.racketeer-tmp"));
+    let tmp = dir.join(format!(".{name}.drrocket-tmp"));
     std::fs::write(&tmp, bytes)?;
     // Preserve permissions of an existing file.
     if let Ok(meta) = std::fs::metadata(path) {

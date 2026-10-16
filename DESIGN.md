@@ -1,6 +1,6 @@
-# Racketeer - design notes
+# Dr. Rocket - design notes
 
-Racketeer is a native Racket IDE written in Rust (egui/eframe 0.37, wgpu). It replaces DrRacket:
+Dr. Rocket is a native Racket IDE written in Rust (egui/eframe 0.37, wgpu). It replaces DrRacket:
 definitions + interactions, every DrRacket language level, the algebraic stepper, check syntax
 (binding arrows, rename, jump to definition), the debugger, macro stepper, profiler, coverage,
 test results, docs - inside a modern editor shell (file tree with Material icons, tabs, command
@@ -17,7 +17,7 @@ All Racket-semantic work happens in Racket processes; the Rust side never guesse
 | server | one per app, long-lived | `racket/server.rkt` | check syntax, docs/blueboxes, completions, macro stepper, module graph |
 
 The `.rkt` scripts are embedded in the binary (`include_str!`), written to
-`<cache>/racketeer/racket-<hash>/` on startup and compiled with `raco make` in the background.
+`<cache>/dr-rocket/racket-<hash>/` on startup and compiled with `raco make` in the background.
 
 The Racket executable is found via settings `racket_path`, `$PATH`, `/opt/homebrew/bin`,
 `/usr/local/bin`, `/Applications/Racket*/bin`.

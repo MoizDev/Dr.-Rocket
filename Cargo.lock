@@ -559,6 +559,37 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
+name = "drrocket"
+version = "0.1.0"
+dependencies = [
+ "alacritty_terminal",
+ "anyhow",
+ "base64",
+ "crossbeam-channel",
+ "dirs",
+ "eframe",
+ "egui",
+ "egui_extras",
+ "ignore",
+ "image",
+ "notify",
+ "nucleo-matcher",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "open",
+ "parking_lot",
+ "raw-window-handle",
+ "regex",
+ "rfd",
+ "ropey",
+ "serde",
+ "serde_json",
+ "unicode-segmentation",
+ "unicode-width",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.37.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2515,37 +2546,6 @@ name = "r-efi"
 version = "6.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
-
-[[package]]
-name = "racketeer"
-version = "0.1.0"
-dependencies = [
- "alacritty_terminal",
- "anyhow",
- "base64",
- "crossbeam-channel",
- "dirs",
- "eframe",
- "egui",
- "egui_extras",
- "ignore",
- "image",
- "notify",
- "nucleo-matcher",
- "objc2 0.6.5",
- "objc2-app-kit 0.3.2",
- "objc2-foundation 0.3.2",
- "open",
- "parking_lot",
- "raw-window-handle",
- "regex",
- "rfd",
- "ropey",
- "serde",
- "serde_json",
- "unicode-segmentation",
- "unicode-width",
-]
 
 [[package]]
 name = "rand"

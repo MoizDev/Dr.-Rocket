@@ -1,8 +1,8 @@
 [package]
-name = "racketeer"
+name = "drrocket"
 version = "0.1.0"
 edition = "2024"
-description = "A fast, beautiful IDE for Racket"
+description = "Dr. Rocket: a fast, beautiful IDE for Racket"
 
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "system_fonts"] }

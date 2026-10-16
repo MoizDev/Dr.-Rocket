@@ -169,6 +169,9 @@ pub struct TerminalView {
     text_dy: f32,
     has_bold_family: bool,
     row_cache: HashMap<u64, RowLayout>,
+    /// Font-atlas fill ratio last frame; a drop means egui reset the atlas, which
+    /// invalidates every cached galley.
+    last_atlas_fill: f32,
     frame: u64,
     focused: bool,
     blink_reset: Instant,
@@ -217,7 +220,7 @@ impl TerminalView {
         let mut env = HashMap::new();
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
-        env.insert("TERM_PROGRAM".to_string(), "Racketeer".to_string());
+        env.insert("TERM_PROGRAM".to_string(), "DrRocket".to_string());
         let options = tty::Options { shell, working_directory: Some(cwd.to_path_buf()), drain_on_exit: true, env };
 
         let size = GridSize { cols: 80, lines: 24 };
@@ -243,7 +246,7 @@ impl TerminalView {
             sender: None,
             pending_spawn: Some((options, window_id)),
             pending_input: Vec::new(),
-            id: egui::Id::unique(("racketeer-terminal", window_id)),
+            id: egui::Id::unique(("drrocket-terminal", window_id)),
             program,
             size: GridSize { cols: 0, lines: 0 },
             cell: vec2(9.0, 18.0),
@@ -251,6 +254,7 @@ impl TerminalView {
             text_dy: 0.0,
             has_bold_family: false,
             row_cache: HashMap::new(),
+            last_atlas_fill: 0.0,
             frame: 0,
             focused: false,
             blink_reset: Instant::now(),
@@ -452,6 +456,13 @@ impl TerminalView {
 
         // Background.
         painter.rect_filled(outer, 0.0, theme.terminal.background);
+
+        // Cached galleys point into the font atlas; drop them if egui reset it.
+        let fill = ui.fonts(|f| f.font_atlas_fill_ratio());
+        if fill < self.last_atlas_fill {
+            self.row_cache.clear();
+        }
+        self.last_atlas_fill = fill;
 
         // Rows.
         let bold_family = if self.has_bold_family { FontFamily::Name(BOLD_FONT_FAMILY.into()) } else { font.family.clone() };

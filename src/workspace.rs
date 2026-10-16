@@ -41,7 +41,7 @@ pub struct Workspace {
 
 /// Directories that are never interesting in the tree.
 fn is_noise(name: &str) -> bool {
-    matches!(name, ".git" | "compiled" | ".DS_Store" | "node_modules" | "target" | ".racketeer" | ".zed" | ".vscode" | ".idea" | ".claude")
+    matches!(name, ".git" | "compiled" | ".DS_Store" | "node_modules" | "target" | ".drrocket" | ".zed" | ".vscode" | ".idea" | ".claude")
 }
 
 impl Workspace {

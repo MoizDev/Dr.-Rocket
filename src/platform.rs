@@ -2,7 +2,7 @@
 //!
 //! On macOS the window uses a transparent, full-size-content title bar; an empty unified
 //! toolbar makes the title bar taller so the traffic lights sit vertically centered in
-//! Racketeer's own title bar (the same trick native "unified toolbar" apps use).
+//! Dr. Rocket's own title bar (the same trick native "unified toolbar" apps use).
 
 /// Height of the native title bar region the traffic lights are centered in.
 #[cfg(target_os = "macos")]
