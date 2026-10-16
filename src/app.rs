@@ -815,6 +815,8 @@ impl App {
 
     pub fn run_command(&mut self, cmd: Command) {
         match cmd {
+            // In a project, name the file up front (in the app); otherwise an untitled tab.
+            Command::NewFile if self.workspace.is_some() => self.new_file_in_project(),
             Command::NewFile => self.new_file(),
             Command::OpenFile => {
                 let mut dlg = rfd::FileDialog::new().add_filter("Racket", &["rkt", "rktl", "rktd", "scrbl", "ss", "scm"]).add_filter("All files", &["*"]);

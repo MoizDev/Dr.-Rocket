@@ -40,12 +40,18 @@ const ROW_H: f32 = 28.0;
 const FILE_ROW_H: f32 = 26.0;
 
 impl App {
+    /// New file in the project, named in the app's own prompt: next to the file being edited
+    /// (when it's in the project), otherwise at the project root.
     pub(crate) fn new_file_in_project(&mut self) {
         let Some(ws) = &self.workspace else { return };
-        if let Some(p) = rfd::FileDialog::new().set_directory(&ws.root).set_file_name("untitled.rkt").save_file()
-            && std::fs::write(&p, "#lang racket\n\n").is_ok() {
-                self.open_file(&p);
-            }
+        let dir = self
+            .active_tab()
+            .and_then(|t| t.path.as_ref())
+            .and_then(|p| p.parent())
+            .filter(|d| d.starts_with(&ws.root))
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| ws.root.clone());
+        self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::new_file(dir));
     }
 
     pub(crate) fn files_view(&mut self, ui: &mut Ui) {

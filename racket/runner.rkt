@@ -968,10 +968,20 @@
         (current-print (make-value-printer (current-print)))))
      (define port (open-source-port source source-images))
      (port-count-lines! port)
-     (guard
-      (λ ()
-        (for ([stx (in-producer (λ () (read-syntax source-name port)) eof-object?)])
-          (eval-top-level stx))))]
+     (define visualize? (eq? instrument 'visualize))
+     (when visualize?
+       (set-viz-emitter! emit*)
+       (set-viz-image-encoder! value->image)
+       (viz-start!))
+     (define ok?
+       (guard
+        (λ ()
+          (for ([stx (in-producer (λ () (read-syntax source-name port)) eof-object?)])
+            (if visualize?
+                ;; R5RS / Pretty Big: record each top-level form as it runs.
+                (eval-top-level-expanded (viz-annotate-top (expand (namespace-syntax-introduce stx)) source-name stx source))
+                (eval-top-level stx))))))
+     (when visualize? (viz-finish! (not ok?)))]
     [else
      (define port (open-source-port source source-images))
      (port-count-lines! port)
@@ -1012,6 +1022,9 @@
   (flush-output user-err)
   (emit* (hasheq 'ev "ready" 'id (json-null)))
   (interaction-loop instrument user-out user-err))
+
+(define (eval-top-level-expanded form)
+  (call-with-values (λ () (eval form)) (λ vals (for-each (current-print) vals))))
 
 (define (eval-top-level stx)
   (define form (namespace-syntax-introduce stx))

@@ -15,6 +15,7 @@
          "common.rkt")
 
 (provide viz-annotate
+         viz-annotate-top
          viz-start!
          viz-finish!
          set-viz-emitter!
@@ -88,6 +89,13 @@
                 (list #'mod #'name #'lang
                       (rebuild #'mb (cons (car mb-parts) (map annotate-top (cdr mb-parts)))))))]
     [_ expanded]))
+
+;; One top-level form of a top-level language (R5RS, Pretty Big), already expanded.
+(define (viz-annotate-top expanded src orig text)
+  (set! source src)
+  (set! source-text text)
+  (collect-struct-fields! orig)
+  (annotate-top expanded))
 
 (define (annotate-top form)
   (kernel-syntax-case form #f
@@ -398,7 +406,7 @@
     [(void? v) (hasheq 'v "(void)" 'k "void")]
     [(procedure? v) (hasheq 'v (format "~a" (or (object-name v) "λ")) 'k "fn")]
     [(keyword? v) (hasheq 'v (format "~s" v) 'k "sym")]
-    [(or (pair? v) (vector? v) (box? v) (hash? v) (struct-object? v) (image-encoder v)) #f]
+    [(or (pair? v) (mpair? v) (vector? v) (box? v) (hash? v) (struct-object? v) (image-encoder v)) #f]
     [else (hasheq 'v (truncate-text (format "~v" v)) 'k "other")]))
 
 (define (exact->display q)
@@ -423,6 +431,8 @@
   (cond
     [(image-encoder v) => (λ (img) (hasheq 'k "image" 'png (hash-ref img 'png) 'width (hash-ref img 'width) 'height (hash-ref img 'height)))]
     [(pair? v) (hasheq 'k "cons" 'first (ref (car v)) 'rest (ref (cdr v)))]
+    ;; R5RS lists are mutable pairs.
+    [(mpair? v) (hasheq 'k "cons" 'first (ref (mcar v)) 'rest (ref (mcdr v)))]
     [(vector? v) (hasheq 'k "vector" 'items (for/list ([x (in-vector v)] [_ (in-range 60)]) (ref x)) 'len (vector-length v))]
     [(box? v) (hasheq 'k "box" 'items (list (ref (unbox v))))]
     [(hash? v)

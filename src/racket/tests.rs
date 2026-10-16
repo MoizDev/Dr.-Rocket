@@ -844,3 +844,33 @@ fn runner_forwards_logged_warnings() {
         .collect();
     assert_eq!(logs, vec![("warning".into(), None, "careful".into()), ("error".into(), Some("app".into()), "app: bad 42".into())]);
 }
+
+/// The visualizer also records Scheme at the R5RS language level (top-level forms, mutable
+/// pairs as lists).
+#[test]
+fn visualizer_records_r5rs_programs() {
+    let b = need_racket!();
+    let src = "(define (rev l acc)\n  (if (null? l)\n      acc\n      (rev (cdr l) (cons (car l) acc))))\n(define r (rev (list 1 2 3) '()))\n";
+    let mut config = module_config(None, src, Instrument::Visualize);
+    config.language = RunLanguage::Toplevel { init: "r5rs".into() };
+    let s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, ready(None));
+    let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
+    assert!(steps.iter().filter(|s| s.kind == "call").count() >= 4, "every rev call is recorded");
+    assert_eq!(steps.iter().map(|s| s.frames.len()).max(), Some(1), "rev's tail calls keep one frame");
+    // The result is a list of cons cells: 3, 2, 1.
+    let end = steps.last().unwrap();
+    let r = end.globals.iter().find(|(n, _)| n == "r").map(|(_, v)| v.clone()).unwrap();
+    let objects: std::collections::HashMap<u64, &VizObject> = steps.iter().flat_map(|s| s.objects.iter()).map(|o| (o.id, o)).collect();
+    let mut items = Vec::new();
+    let mut cur = r;
+    while let VizRef::Object { id } = cur {
+        let cell = objects[&id];
+        assert_eq!(cell.k, "cons");
+        if let Some(VizRef::Prim { v, .. }) = &cell.first {
+            items.push(v.clone());
+        }
+        cur = cell.rest.clone().unwrap();
+    }
+    assert_eq!(items, ["3", "2", "1"]);
+}
