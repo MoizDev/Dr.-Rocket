@@ -1051,7 +1051,7 @@ mod tests {
         let mut view = VisualizerView::default();
         let list12 = vec![cell(1, prim("1", "num"), VizRef::Object { id: 2 }), cell(2, prim("2", "num"), prim("'()", "empty"))];
         view.trace.push(VizStep { index: 0, kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 1 }), ("acc", prim("'()", "empty"))])], objects: list12, ..Default::default() });
-        view.trace.push(VizStep { index: 1, kind: "question".into(), frames: vec![frame("rvrs", vec![])], value: Some(prim("#false", "bool")), pos: Some(0), span: 11, ..Default::default() });
+        view.trace.push(VizStep { index: 1, kind: "question".into(), frames: vec![frame("rvrs", vec![])], value: Some(prim("#false", "bool")), pos: Some(0), span: 12, ..Default::default() });
         let acc = vec![cell(3, prim("1", "num"), prim("'()", "empty"))];
         view.trace.push(VizStep { index: 2, kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 2 }), ("acc", VizRef::Object { id: 3 })])], objects: acc, ..Default::default() });
         let program = "(empty? lst)";
