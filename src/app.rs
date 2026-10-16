@@ -105,7 +105,7 @@ impl Default for Layout {
             right: DockState {
                 open: true,
                 size: 520.0,
-                items: vec![PanelItem::Interactions, PanelItem::Stepper, PanelItem::Tests, PanelItem::Macros, PanelItem::Docs],
+                items: vec![PanelItem::Interactions, PanelItem::Stepper, PanelItem::Tests, PanelItem::Macros],
                 active: 0,
             },
             bottom: DockState { open: false, size: 260.0, items: vec![PanelItem::Problems], active: 0 },
@@ -348,6 +348,8 @@ impl App {
         if restore {
             let s = Session::load();
             app.layout = s.layout.clone();
+            // Docs has no permanent tab button; it opens on demand (F1, Search Documentation).
+            app.layout.remove(PanelItem::Docs);
             if let Some(p) = s.project.filter(|p| p.is_dir()) {
                 app.open_folder(&p);
             }
