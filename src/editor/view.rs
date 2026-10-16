@@ -964,6 +964,25 @@ impl EditorView {
 
     /// Structure-aware indent guides: one per enclosing multi-line list, at its bracket's
     /// column. Optionally colored by depth (rainbow) and with a translucent depth fill.
+    /// indent-rainbow style: each 2-column indentation step gets the next rainbow colour as a
+    /// faint band, with a dot on every leading space.
+    fn paint_indent_bands(&self, p: &egui::Painter, line: usize, indent: usize, theme: &Theme, col_x: &dyn Fn(usize, usize) -> f32) {
+        const STEP: usize = 2;
+        let y = self.line_y(line);
+        let h = self.geom.line_h;
+        let alpha = if theme.dark { 22 } else { 28 };
+        for (k, c0) in (0..indent).step_by(STEP).enumerate() {
+            let x0 = col_x(line, c0);
+            let x1 = col_x(line, (c0 + STEP).min(indent));
+            p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + h)), CornerRadius::ZERO, with_alpha(theme.rainbow(k), alpha));
+        }
+        let dot = with_alpha(theme.text_placeholder, if theme.dark { 90 } else { 110 });
+        let cy = y + h / 2.0;
+        for col in 0..indent {
+            p.circle_filled(pos2((col_x(line, col) + col_x(line, col + 1)) / 2.0, cy), 1.0, dot);
+        }
+    }
+
     fn paint_indent_guides(&self, p: &egui::Painter, toks: &[Token], first: usize, last: usize, style: &EditorStyle, cursor: usize) {
         let theme = style.theme;
         let rainbow = style.settings.rainbow_indent_guides;
@@ -982,6 +1001,12 @@ impl EditorView {
             let ls = b.line_start(line);
             let indent = b.indentation(line);
             let blank = b.line_len(line) == indent;
+            if fill {
+                if !blank {
+                    self.paint_indent_bands(p, line, indent, theme, &col_x);
+                }
+                continue;
+            }
             // Opens enclosing this line's start that began on an earlier line.
             guides.clear();
             let mut probe = ls;
@@ -1005,35 +1030,6 @@ impl EditorView {
             guides.reverse(); // outermost first
             let y = self.line_y(line);
             let h = self.geom.line_h;
-            if fill {
-                if blank {
-                    continue;
-                }
-                // Bands from each bracket column to the next level (or the end of the
-                // indentation), colored by depth; the band of the caret's form is stronger.
-                for (k, &(col, depth, active)) in guides.iter().enumerate() {
-                    let x0 = col_x(line, col);
-                    let next = guides.get(k + 1).map(|g| g.0).unwrap_or(indent);
-                    let x1 = col_x(line, next.max(col));
-                    if x1 > x0 + 1.0 {
-                        let a = match (theme.dark, active) {
-                            (true, false) => 16,
-                            (true, true) => 26,
-                            (false, false) => 20,
-                            (false, true) => 32,
-                        };
-                        p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + h)), CornerRadius::ZERO, with_alpha(theme.rainbow(depth as usize), a));
-                    }
-                }
-                // A faint dot on each leading space (indent-rainbow style).
-                let dot = with_alpha(theme.text_placeholder, if theme.dark { 90 } else { 110 });
-                let cy = y + h / 2.0;
-                for col in 0..indent {
-                    let cx = (col_x(line, col) + col_x(line, col + 1)) / 2.0;
-                    p.circle_filled(pos2(cx, cy), 1.0, dot);
-                }
-                continue;
-            }
             for &(col, depth, active) in &guides {
                 let x = col_x(line, col).round() + 0.5;
                 let c = if rainbow {
