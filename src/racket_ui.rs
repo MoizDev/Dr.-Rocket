@@ -498,6 +498,11 @@ fn apply_check(app: &mut App, tab_id: u64, version: u64, explicit: bool, r: Chec
     for r in &r.unused_requires {
         tab.editor.deco.diagnostics.push(Diagnostic { range: r.0..r.1, severity: Severity::Warning, message: "\u{200b}Unused require".into() });
     }
+    if std::env::var_os("DRROCKET_TRACE").is_some() {
+        for d in &tab.editor.deco.diagnostics {
+            eprintln!("diagnostic {:?} line {}: {}", d.severity, tab.editor.doc.buffer.line_of(d.range.start) + 1, d.message);
+        }
+    }
     tab.rk.check = Some(r);
     if explicit {
         match first_error {
