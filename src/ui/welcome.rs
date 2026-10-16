@@ -40,7 +40,7 @@ impl App {
             (Command::NewFile, ic::NOTE_ADD, "New File"),
             (Command::OpenFile, ic::FILE_OPEN, "Open File"),
             (Command::OpenFolder, ic::FOLDER_OPEN, "Open Folder"),
-            (Command::CommandPalette, ic::KEYBOARD_COMMAND_KEY, "Command Palette"),
+            (Command::Palette, ic::KEYBOARD_COMMAND_KEY, "Command Palette"),
         ];
         let card_w = (col_w - 10.0) / 2.0;
         let card_h = 52.0;
@@ -49,7 +49,7 @@ impl App {
             let cx = left + (k % 2) as f32 * (card_w + 10.0);
             let cy = y + (k / 2) as f32 * (card_h + 10.0);
             let r = Rect::from_min_size(pos2(cx, cy), vec2(card_w, card_h));
-            let resp = ui.interact(r, Id::new(("welcome-action", k)), Sense::click());
+            let resp = ui.interact(r, Id::unique(("welcome-action", k)), Sense::click());
             let bg = if resp.hovered() { tk.hover } else { with_alpha(tk.hover, 110) };
             ui.painter().rect(r, CornerRadius::same(10), bg, Stroke::new(1.0, tk.island_border), StrokeKind::Inside);
             ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::CENTER_CENTER, *glyph, ui::icon_font(20.0), theme.text_accent);
@@ -76,7 +76,7 @@ impl App {
             y += 16.0;
             for (k, p) in projects.iter().enumerate() {
                 let r = Rect::from_min_size(pos2(left - 8.0, y), vec2(col_w + 16.0, 34.0));
-                let resp = ui.interact(r, Id::new(("recent-project", k)), Sense::click());
+                let resp = ui.interact(r, Id::unique(("recent-project", k)), Sense::click());
                 if resp.hovered() {
                     ui.painter().rect_filled(r, CornerRadius::same(8), tk.hover);
                 }
@@ -101,7 +101,7 @@ impl App {
                     break;
                 }
                 let r = Rect::from_min_size(pos2(left - 8.0, y), vec2(col_w + 16.0, 32.0));
-                let resp = ui.interact(r, Id::new(("recent-file", k)), Sense::click());
+                let resp = ui.interact(r, Id::unique(("recent-file", k)), Sense::click());
                 if resp.hovered() {
                     ui.painter().rect_filled(r, CornerRadius::same(8), tk.hover);
                 }

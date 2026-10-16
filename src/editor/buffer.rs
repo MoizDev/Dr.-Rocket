@@ -357,13 +357,6 @@ impl Buffer {
         self.apply(vec![Replace { range: all, text: text.to_string() }], Some(Selections::single(Selection::caret(0))), EditKind::Other);
     }
 
-    pub fn can_undo(&self) -> bool {
-        !self.undo.is_empty()
-    }
-    pub fn can_redo(&self) -> bool {
-        !self.redo.is_empty()
-    }
-
     pub fn undo(&mut self) -> bool {
         let Some(t) = self.undo.pop() else { return false };
         // Changes within a transaction are sequential: each is expressed against the document

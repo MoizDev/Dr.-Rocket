@@ -87,11 +87,10 @@ impl App {
 
         if let Some(i) = select {
             self.layout.dock_mut(dock).active = i;
-            if let Some(PanelItem::Terminal(id)) = ds.items.get(i) {
-                if let Some(t) = self.terminals.iter_mut().find(|t| t.id == *id) {
+            if let Some(PanelItem::Terminal(id)) = ds.items.get(i)
+                && let Some(t) = self.terminals.iter_mut().find(|t| t.id == *id) {
                     t.focus = true;
                 }
-            }
         }
         if let Some((item, d)) = move_to {
             self.layout.move_to(item, d);
@@ -140,11 +139,10 @@ impl App {
                     self.new_file_in_project();
                 }
             }
-            PanelItem::Interactions => {
-                if icon_button_sized(ui, &theme, ic::CLEANING_SERVICES, "Clear Interactions", 26.0, 17.0, None, false).clicked() {
+            PanelItem::Interactions
+                if icon_button_sized(ui, &theme, ic::CLEANING_SERVICES, "Clear Interactions", 26.0, 17.0, None, false).clicked() => {
                     self.run_command(Command::ClearInteractions);
                 }
-            }
             _ => {}
         }
     }
@@ -188,7 +186,6 @@ impl App {
                 let (glyph, c) = match sev {
                     crate::editor::view::Severity::Error => (ic::ERROR, theme.error),
                     crate::editor::view::Severity::Warning => (ic::WARNING, theme.warning),
-                    crate::editor::view::Severity::Info => (ic::INFO, theme.info),
                 };
                 ui.painter().text(pos2(r.left() + 14.0, r.center().y), egui::Align2::CENTER_CENTER, glyph, ui::icon_font_filled(16.0), c);
                 let loc = format!("{title}:{}", line + 1);

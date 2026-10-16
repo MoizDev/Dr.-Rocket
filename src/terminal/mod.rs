@@ -281,10 +281,6 @@ impl TerminalView {
         *self.shared.exit_status.lock()
     }
 
-    /// Send text to the child as if typed.
-    pub fn write_input(&mut self, s: &str) {
-        self.write(s.as_bytes().to_vec());
-    }
 
     /// Request keyboard focus for the terminal.
     pub fn focus(&mut self, ui: &egui::Ui) {

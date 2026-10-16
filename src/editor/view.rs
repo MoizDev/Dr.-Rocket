@@ -25,15 +25,12 @@ pub enum EditorMode {
     Code,
     /// The REPL input: no gutter, grows with content, Enter submits balanced input.
     Repl,
-    /// Read-only code display (stepper, docs).
-    Viewer,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Severity {
     Error,
     Warning,
-    Info,
 }
 
 #[derive(Clone, Debug)]
@@ -47,8 +44,6 @@ pub struct Diagnostic {
 pub enum InlayKind {
     Pass,
     Fail,
-    Error,
-    Hint,
 }
 
 /// A chip rendered after the end of a line (test results, inline errors, hints).
@@ -65,14 +60,10 @@ pub enum MarkKind {
     Error,
     /// Stepper: the expression about to be reduced.
     StepBefore,
-    /// Stepper: the result of the reduction.
-    StepAfter,
     /// Code not covered by tests.
     Uncovered,
     /// Debugger: current expression.
     Debug,
-    /// Brief highlight after jumping somewhere.
-    Flash,
 }
 
 #[derive(Clone, Debug)]
@@ -114,7 +105,7 @@ impl Semantic {
             .iter()
             .filter(|a| a.kind == ArrowKind::Lexical)
             .find(|a| hit(&a.from) || hit(&a.to))
-            .map(|a| if hit(&a.from) { a.from.clone() } else { a.from.clone() });
+            .map(|a| a.from.clone());
         let Some(b) = binder else { return Vec::new() };
         let mut out = vec![b.clone()];
         out.extend(self.arrows.iter().filter(|a| a.kind == ArrowKind::Lexical && a.from == b).map(|a| a.to.clone()));
@@ -287,10 +278,6 @@ impl EditorView {
         }
     }
 
-    pub fn id(&self) -> Id {
-        self.id
-    }
-
     pub fn request_focus(&mut self) {
         self.focus_request = true;
     }
@@ -316,10 +303,6 @@ impl EditorView {
         if line < top || line > top + visible {
             self.scroll.y = (line as f32 * self.geom.line_h - self.geom.rect.height() * 0.35).max(0.0);
         }
-    }
-
-    pub fn scroll_offset(&self) -> f32 {
-        self.scroll.y
     }
 
     pub fn set_text(&mut self, text: &str) {
@@ -590,7 +573,7 @@ impl EditorView {
         let bracket = if sels.list.len() == 1 && primary.is_empty() { sexp::bracket_pair_at(toks, primary.head) } else { None };
         if let Some((o, c)) = bracket {
             let (s, e) = (toks[o].start, toks[c].end);
-            self.paint_range_bg(&tp, s, e, first, last, with_alpha(theme.text, if theme.dark { 9 } else { 12 }), 3.0);
+            self.paint_range_bg(&tp, s, e, first, last, with_alpha(theme.text, if theme.dark { 9 } else { 12 }));
             for k in [o, c] {
                 let t = toks[k];
                 let line = self.doc.buffer.line_of(t.start);
@@ -609,12 +592,10 @@ impl EditorView {
             let (fill, border) = match m.kind {
                 MarkKind::Error => (with_alpha(theme.error, 46), Some(theme.error)),
                 MarkKind::StepBefore => (with_alpha(theme.syntax.function.color, 50), Some(theme.syntax.function.color)),
-                MarkKind::StepAfter => (with_alpha(theme.syntax.string.color, 50), Some(theme.syntax.string.color)),
                 MarkKind::Uncovered => (with_alpha(theme.warning, 40), None),
                 MarkKind::Debug => (with_alpha(theme.success, 50), Some(theme.success)),
-                MarkKind::Flash => (with_alpha(theme.text_accent, 50), None),
             };
-            self.paint_range_bg(&tp, m.range.start, m.range.end, first, last, fill, 3.0);
+            self.paint_range_bg(&tp, m.range.start, m.range.end, first, last, fill);
             if let Some(b) = border {
                 self.paint_range_underline(&tp, m.range.start, m.range.end, first, last, with_alpha(b, 200));
             }
@@ -629,7 +610,7 @@ impl EditorView {
             let occ = if occ.is_empty() { self.textual_occurrences(primary.head, first, last, toks) } else { occ };
             if occ.len() > 1 {
                 for r in &occ {
-                    self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.highlight_read, 120), 3.0);
+                    self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.highlight_read, 120));
                 }
             }
         }
@@ -645,7 +626,7 @@ impl EditorView {
                     break;
                 }
                 let c = if k == self.find.current { theme.search_active_match } else { theme.search_match };
-                self.paint_range_bg(&tp, r.start, r.end, first, last, c, 3.0);
+                self.paint_range_bg(&tp, r.start, r.end, first, last, c);
             }
         }
 
@@ -675,7 +656,6 @@ impl EditorView {
             let c = match d.severity {
                 Severity::Error => theme.error,
                 Severity::Warning => theme.warning,
-                Severity::Info => theme.info,
             };
             self.paint_squiggle(&tp, d.range.start, d.range.end.max(d.range.start + 1), first, last, c);
         }
@@ -734,11 +714,6 @@ impl EditorView {
         resp
     }
 
-    /// Height the REPL input wants for its content.
-    pub fn content_height(&self, style: &EditorStyle) -> f32 {
-        self.doc.buffer.line_count() as f32 * (style.font_size * style.settings.line_height).round()
-    }
-
     // ================================================================= painting helpers
 
     fn line_range_cols(&self, line: usize, s: usize, e: usize) -> (usize, usize) {
@@ -747,7 +722,7 @@ impl EditorView {
         (s.clamp(ls, le) - ls, e.clamp(ls, le) - ls)
     }
 
-    fn paint_range_bg(&self, p: &egui::Painter, s: usize, e: usize, first: usize, last: usize, color: Color32, radius: f32) {
+    fn paint_range_bg(&self, p: &egui::Painter, s: usize, e: usize, first: usize, last: usize, color: Color32) {
         if e <= s && s != e {
             return;
         }
@@ -764,7 +739,7 @@ impl EditorView {
                 continue;
             }
             let y = self.line_y(line);
-            p.rect_filled(Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + self.geom.line_h - 1.0)), CornerRadius::same(radius as u8), color);
+            p.rect_filled(Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + self.geom.line_h - 1.0)), CornerRadius::same(3), color);
         }
     }
 
@@ -827,8 +802,6 @@ impl EditorView {
         let (fg, bg, glyph) = match inlay.kind {
             InlayKind::Pass => (theme.success, with_alpha(theme.success, 26), Some(ic::CHECK)),
             InlayKind::Fail => (theme.error, with_alpha(theme.error, 30), Some(ic::CLOSE)),
-            InlayKind::Error => (theme.error, with_alpha(theme.error, 30), Some(ic::ERROR)),
-            InlayKind::Hint => (theme.hint, with_alpha(theme.text, 14), None),
         };
         let font = ui::mono((font_size * 0.78).round());
         let icon_w = if glyph.is_some() { font_size * 0.85 } else { 0.0 };
@@ -1249,8 +1222,8 @@ impl EditorView {
             }
             return;
         }
-        if resp.drag_started_by(egui::PointerButton::Primary) || (resp.clicked() && !resp.dragged()) {
-            if let Some(p) = resp.interact_pointer_pos() {
+        if (resp.drag_started_by(egui::PointerButton::Primary) || (resp.clicked() && !resp.dragged()))
+            && let Some(p) = resp.interact_pointer_pos() {
                 if gutter_hit(p) {
                     return;
                 }
@@ -1272,7 +1245,6 @@ impl EditorView {
                 self.goal_col = None;
                 self.doc.buffer.break_undo_group();
             }
-        }
         if resp.dragged_by(egui::PointerButton::Primary)
             && let (Some(p), Some((a0, a1))) = (resp.interact_pointer_pos(), self.drag_anchor)
         {

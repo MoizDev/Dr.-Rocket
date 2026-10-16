@@ -6,7 +6,7 @@ use crate::editor::view::{EditorMode, EditorStyle, EditorView};
 use crate::theme::{Theme, ThemeRegistry};
 use crate::ui::{self, GAP, ISLAND_RADIUS, STATUS_BAR_H, TAB_BAR_H, Tokens};
 use crate::workspace::Workspace;
-use egui::{Color32, CornerRadius, Id, Pos2, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, Vec2, pos2, vec2};
+use egui::{Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -252,7 +252,6 @@ pub enum Modal {
     Language(crate::ui::language_dialog::LanguageDialog),
     Prompt(crate::ui::language_dialog::Prompt),
     About,
-    Message { title: String, body: String },
 }
 
 /// Transient notification shown at the bottom-right.
@@ -399,7 +398,7 @@ impl App {
         let id = self.alloc_id();
         let untitled = if path.is_none() { self.tabs.iter().filter(|t| t.path.is_none()).map(|t| t.untitled).max().unwrap_or(0) + 1 } else { 0 };
         let (language, lang_settings, body) = crate::racket_ui::load_text(self, path.as_deref(), text);
-        let mut editor = EditorView::new(&body, Id::new(("editor", id)));
+        let mut editor = EditorView::new(&body, Id::unique(("editor", id)));
         editor.doc.buffer.mark_saved();
         let disk_mtime = path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
         let mut rk = crate::racket_ui::RacketTab::new(id);
@@ -611,7 +610,7 @@ impl App {
                     let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
                 }
             }
-            Command::CommandPalette => self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Commands, "")),
+            Command::Palette => self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Commands, "")),
             Command::QuickOpen => self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Files, "")),
             Command::GoToLine => self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Line, "")),
             Command::GoToSymbol => self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Symbols, "")),
@@ -754,7 +753,7 @@ impl App {
     }
 
     fn splitter(&mut self, ui: &mut Ui, rect: Rect, id: &str, vertical: bool) -> f32 {
-        let resp = ui.interact(rect, Id::new(("splitter", id)), Sense::drag());
+        let resp = ui.interact(rect, Id::unique(("splitter", id)), Sense::drag());
         let active = resp.hovered() || resp.dragged();
         if active {
             ui.ctx().set_cursor_icon(if vertical { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical });
@@ -778,9 +777,9 @@ impl App {
         let body = Rect::from_min_max(pos2(full.left() + GAP, title.bottom()), pos2(full.right() - GAP, status.top()));
         let ctx = ui.ctx().clone();
         let has = |d: &DockState| d.open && !d.items.is_empty();
-        let left_t = ctx.animate_bool_with_time(Id::new("left-anim"), has(&self.layout.left), 0.16);
-        let right_t = ctx.animate_bool_with_time(Id::new("right-anim"), has(&self.layout.right), 0.16);
-        let bottom_t = ctx.animate_bool_with_time(Id::new("bottom-anim"), has(&self.layout.bottom), 0.16);
+        let left_t = ctx.animate_bool_with_time(Id::unique("left-anim"), has(&self.layout.left), 0.16);
+        let right_t = ctx.animate_bool_with_time(Id::unique("right-anim"), has(&self.layout.right), 0.16);
+        let bottom_t = ctx.animate_bool_with_time(Id::unique("bottom-anim"), has(&self.layout.bottom), 0.16);
         let ease = |t: f32| 1.0 - (1.0 - t).powi(3);
 
         let max_side = (body.width() * 0.45).max(200.0);
@@ -914,7 +913,7 @@ impl App {
             ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), *c);
             x += g.size().x + 10.0;
         }
-        let resp = ui.interact(r, Id::new("diag-counter"), Sense::click());
+        let resp = ui.interact(r, Id::unique("diag-counter"), Sense::click());
         if resp.clicked() {
             self.run_command(Command::NextProblem);
         }
@@ -937,7 +936,7 @@ impl App {
                 ToastKind::Success => (ui::ic::CHECK_CIRCLE, theme.success),
                 ToastKind::Error => (ui::ic::ERROR, theme.error),
             };
-            let area = egui::Area::new(Id::new(("toast", k))).order(egui::Order::Tooltip).pivot(egui::Align2::RIGHT_BOTTOM).fixed_pos(pos2(screen.right() - 16.0, y));
+            let area = egui::Area::new(Id::unique(("toast", k))).order(egui::Order::Tooltip).pivot(egui::Align2::RIGHT_BOTTOM).fixed_pos(pos2(screen.right() - 16.0, y));
             let resp = area.show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).fill(tk.popup).corner_radius(CornerRadius::same(10)).inner_margin(egui::Margin::symmetric(14, 10)).show(ui, |ui| {
                     ui.set_max_width(420.0);
@@ -993,19 +992,4 @@ impl eframe::App for App {
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.tokens().window.to_normalized_gamma_f32()
     }
-}
-
-/// Helper used by several panels: a header row with a title and trailing buttons.
-pub fn panel_header(ui: &mut Ui, rect: Rect, theme: &Theme, title: &str) -> Rect {
-    let r = Rect::from_min_size(rect.min, vec2(rect.width(), TAB_BAR_H));
-    ui.painter().text(pos2(r.left() + 14.0, r.center().y), egui::Align2::LEFT_CENTER, title, ui::medium(13.0), theme.text_muted);
-    r
-}
-
-pub fn point_in(rect: Rect, p: Option<Pos2>) -> bool {
-    p.is_some_and(|p| rect.contains(p))
-}
-
-pub fn vec_x(v: f32) -> Vec2 {
-    vec2(v, 0.0)
 }

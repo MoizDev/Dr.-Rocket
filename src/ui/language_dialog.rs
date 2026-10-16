@@ -91,7 +91,7 @@ impl App {
             Some(true) => match p.kind {
                 PromptKind::Rename { tab, ranges } => {
                     let name = p.text.trim().to_string();
-                    let valid = !name.is_empty() && !name.chars().any(|c| crate::editor::lexer::is_delimiter(c));
+                    let valid = !name.is_empty() && !name.chars().any(crate::editor::lexer::is_delimiter);
                     if !valid {
                         self.toast("Not a valid identifier", crate::app::ToastKind::Error);
                         return;
@@ -117,14 +117,14 @@ impl App {
         let tk = self.tokens();
         let mut result: Option<bool> = None;
         let size = vec2(880.0_f32.min(screen.width() - 60.0), 640.0_f32.min(screen.height() - 70.0));
-        egui::Area::new(Id::new("lang-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
+        egui::Area::new(Id::unique("lang-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
             let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
             ui.painter().rect_filled(r, CornerRadius::ZERO, egui::Color32::from_black_alpha(if theme.dark { 110 } else { 50 }));
             if resp.clicked() {
                 result = Some(false);
             }
         });
-        egui::Area::new(Id::new("lang-dialog")).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(screen.center()).show(ctx, |ui| {
+        egui::Area::new(Id::unique("lang-dialog")).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(screen.center()).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).fill(tk.popup).corner_radius(CornerRadius::same(14)).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
                 let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
                 let p = ui.painter();

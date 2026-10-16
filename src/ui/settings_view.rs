@@ -100,21 +100,6 @@ impl App {
             Modal::ConfirmClose { tab, then_quit } => self.confirm_close_ui(ctx, tab, then_quit),
             Modal::ConfirmQuit => self.confirm_quit_ui(ctx),
             Modal::About => self.about_ui(ctx),
-            Modal::Message { title, body } => {
-                let mut open = true;
-                self.dialog(ctx, &title, 420.0, |app, ui| {
-                    ui.label(egui::RichText::new(&body).color(app.theme.text_muted));
-                    ui.add_space(12.0);
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(primary_button(&app.theme, "OK")).clicked() {
-                            open = false;
-                        }
-                    });
-                });
-                if open && !ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    self.modal = Modal::Message { title, body };
-                }
-            }
         }
     }
 
@@ -123,11 +108,11 @@ impl App {
         let screen = ctx.content_rect();
         let theme = self.theme.clone();
         let tk = self.tokens();
-        egui::Area::new(Id::new("modal-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
+        egui::Area::new(Id::unique("modal-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
             let (r, _) = ui.allocate_exact_size(screen.size(), Sense::click());
             ui.painter().rect_filled(r, CornerRadius::ZERO, egui::Color32::from_black_alpha(if theme.dark { 110 } else { 50 }));
         });
-        egui::Area::new(Id::new(("modal", title))).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(screen.center()).show(ctx, |ui| {
+        egui::Area::new(Id::unique(("modal", title))).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(screen.center()).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).fill(tk.popup).corner_radius(CornerRadius::same(14)).inner_margin(egui::Margin::same(20)).show(ui, |ui| {
                 ui.set_width(width);
                 ui.label(egui::RichText::new(title).font(ui::semibold(17.0)).color(theme.text));
@@ -254,14 +239,14 @@ impl App {
         let mut close = ctx.input(|i| i.key_pressed(egui::Key::Escape));
         let before = self.settings.clone();
         let size = vec2(860.0_f32.min(screen.width() - 60.0), 620.0_f32.min(screen.height() - 80.0));
-        egui::Area::new(Id::new("settings-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
+        egui::Area::new(Id::unique("settings-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
             let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
             ui.painter().rect_filled(r, CornerRadius::ZERO, egui::Color32::from_black_alpha(if theme.dark { 110 } else { 50 }));
             if resp.clicked() {
                 close = true;
             }
         });
-        egui::Area::new(Id::new("settings")).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(screen.center()).show(ctx, |ui| {
+        egui::Area::new(Id::unique("settings")).order(egui::Order::Foreground).pivot(Align2::CENTER_CENTER).fixed_pos(screen.center()).show(ctx, |ui| {
             egui::Frame::popup(ui.style()).fill(tk.popup).corner_radius(CornerRadius::same(14)).inner_margin(egui::Margin::ZERO).show(ui, |ui| {
                 let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
                 // Navigation.
@@ -271,7 +256,7 @@ impl App {
                 ui.painter().text(pos2(nav.left() + 20.0, nav.top() + 30.0), Align2::LEFT_CENTER, "Settings", ui::semibold(18.0), theme.text);
                 for (k, (sec, glyph, label)) in [(Section::Appearance, ic::PALETTE, "Appearance"), (Section::Editor, ic::CODE, "Editor"), (Section::Racket, ic::FUNCTION, "Racket"), (Section::Terminal, ic::TERMINAL, "Terminal")].into_iter().enumerate() {
                     let r = Rect::from_min_size(pos2(nav.left() + 10.0, nav.top() + 60.0 + k as f32 * 36.0), vec2(180.0, 32.0));
-                    let resp = ui.interact(r, Id::new(("settings-nav", k)), Sense::click());
+                    let resp = ui.interact(r, Id::unique(("settings-nav", k)), Sense::click());
                     if sv.section == sec {
                         ui.painter().rect_filled(r, CornerRadius::same(8), tk.selected);
                     } else if resp.hovered() {
@@ -295,7 +280,7 @@ impl App {
                     }
                 });
                 let close_r = Rect::from_min_size(pos2(rect.right() - 40.0, rect.top() + 12.0), vec2(28.0, 28.0));
-                let cr = ui.interact(close_r, Id::new("settings-close"), Sense::click());
+                let cr = ui.interact(close_r, Id::unique("settings-close"), Sense::click());
                 if cr.hovered() {
                     ui.painter().rect_filled(close_r, CornerRadius::same(6), tk.hover);
                 }

@@ -64,6 +64,9 @@ pub struct TerminalColors {
     pub dim: [Color32; 8],
 }
 
+/// Every color a Zed theme can define that the IDE uses. Some are kept for completeness of
+/// the mapping even when no widget reads them yet.
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct Theme {
     pub name: String,

@@ -4,7 +4,6 @@
 
 use crate::app::{App, Dock, Modal, PanelItem, Tab, ToastKind};
 use crate::commands::Command;
-use crate::editor::buffer::{Selection, Selections};
 use crate::editor::highlight::racket_job;
 use crate::editor::view::{self, Arrow, ArrowKind, Diagnostic, EditorAction, EditorMode, EditorStyle, EditorView, Inlay, InlayKind, Mark, MarkKind, Semantic, Severity};
 use crate::racket::lang::{self, Language, TeachingSettings};
@@ -32,7 +31,6 @@ enum Pending {
     Docs,
     Completions { key: String },
     MacroSteps { tab: u64 },
-    Jump,
 }
 
 /// App-wide Racket state.
@@ -152,7 +150,7 @@ pub struct RacketTab {
 
 impl RacketTab {
     pub fn new(id: u64) -> Self {
-        let mut input = EditorView::new("", Id::new(("repl-input", id)));
+        let mut input = EditorView::new("", Id::unique(("repl-input", id)));
         input.doc.buffer.mark_saved();
         Self {
             session: None,
@@ -383,7 +381,6 @@ fn poll_server(app: &mut App) {
                 }
                 app.toast(format!("Macro stepper: {e}"), ToastKind::Error);
             }
-            (Pending::Jump, Ok(ServerResponse::JumpTarget(Some(_)))) => {}
             (_, Err(e)) if e != "cancelled" => log_error(&e),
             _ => {}
         }
@@ -530,7 +527,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             let lang_name = if tab.language == Language::Module { language_label(tab) } else { tab.language.name().to_string() };
             tab.rk.push(Entry::Banner(format!("Welcome to Racket {version}\nLanguage: {lang_name}")));
             // Clear run decorations.
-            tab.editor.deco.marks.retain(|m| matches!(m.kind, MarkKind::StepBefore | MarkKind::StepAfter));
+            tab.editor.deco.marks.retain(|m| m.kind == MarkKind::StepBefore);
             tab.editor.deco.inlays.clear();
             tab.editor.deco.diagnostics.retain(|d| d.message.starts_with('\u{200b}'));
             app.layout.show(PanelItem::Interactions, Dock::Right);
@@ -608,16 +605,12 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             // Highlight the error in the definitions (DrRacket's pink highlight). Errors from
             // interactions only count when they point into a saved definitions file.
             let from_defs = tab.rk.defs_running;
-            let mut revealed = false;
             for loc in report.srclocs.iter().chain(report.stack.iter().map(|f| &f.srcloc)).filter(|l| is_local(tab, l) && (from_defs || l.path.is_some())) {
                 if let Some((s, e)) = loc.range() {
                     let range = s..e.max(s + 1);
                     tab.editor.deco.marks.push(Mark { range: range.clone(), kind: MarkKind::Error });
                     tab.editor.deco.diagnostics.push(Diagnostic { range: range.clone(), severity: Severity::Error, message: report.message.clone() });
-                    if !revealed {
-                        tab.editor.reveal(range.start..range.start);
-                        revealed = true;
-                    }
+                    tab.editor.reveal(range.start..range.start);
                     break;
                 }
             }
@@ -777,7 +770,7 @@ fn start_stepper(app: &mut App, i: usize) {
         Ok(s) => {
             let tab = &mut app.tabs[i];
             tab.rk.stepper = Some(StepperView { session: Some(s), steps: Vec::new(), current: 0, finished: false, paused: false, error: None });
-            tab.editor.deco.marks.retain(|m| !matches!(m.kind, MarkKind::StepBefore | MarkKind::StepAfter));
+            tab.editor.deco.marks.retain(|m| m.kind != MarkKind::StepBefore);
             app.layout.show(PanelItem::Stepper, Dock::Right);
         }
         Err(e) => app.toast(format!("Could not start the stepper: {e}"), ToastKind::Error),
@@ -811,10 +804,10 @@ fn poll_stepper(app: &mut App, i: usize) {
 
 fn show_step_marks(tab: &mut Tab) {
     let Some(st) = &tab.rk.stepper else { return };
-    tab.editor.deco.marks.retain(|m| !matches!(m.kind, MarkKind::StepBefore | MarkKind::StepAfter));
+    tab.editor.deco.marks.retain(|m| m.kind != MarkKind::StepBefore);
     let (b, a) = match st.steps.get(st.current) {
-        Some(StepItem::Step(s)) => (s.before_src.clone(), s.after_src.clone()),
-        Some(StepItem::Error { before_src, .. }) => (before_src.clone(), None),
+        Some(StepItem::Step(s)) => (s.before_src, s.after_src),
+        Some(StepItem::Error { before_src, .. }) => (*before_src, None),
         None => (None, None),
     };
     let n = tab.editor.doc.buffer.len();
@@ -1046,8 +1039,8 @@ fn goto_definition(app: &mut App, i: usize, pos: usize) {
         tab.editor.reveal(a.from.0..a.from.1);
         return;
     }
-    if let Some(j) = check.jumps.iter().find(|j| j.start <= pos && pos <= j.end).cloned() {
-        if let Some(p) = j.path.clone() {
+    if let Some(j) = check.jumps.iter().find(|j| j.start <= pos && pos <= j.end).cloned()
+        && let Some(p) = j.path.clone() {
             let path = PathBuf::from(&p);
             // Ask the server where the name is defined in that file, then open it.
             let req = ServerRequest::JumpTarget { path: p.clone(), name: j.id.clone() };
@@ -1064,7 +1057,6 @@ fn goto_definition(app: &mut App, i: usize, pos: usize) {
             }
             return;
         }
-    }
     if let Some(d) = check.docs.iter().find(|d| d.start <= pos && pos <= d.end)
         && let Some(u) = d.url()
     {
@@ -1219,9 +1211,9 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     ui.painter().rect_filled(chip_r, CornerRadius::same(12), tk.hover);
     ui.painter().text(pos2(chip_r.left() + 13.0, chip_r.center().y), Align2::CENTER_CENTER, ic::SCHOOL, ui::icon_font_filled(14.0), theme.syntax.keyword.color);
     ui.painter().galley(pos2(chip_r.left() + 23.0, chip_r.center().y - chip_g.size().y / 2.0), chip_g, theme.text_muted);
-    let chip_resp = ui.interact(chip_r, Id::new("repl-lang-chip"), Sense::click()).on_hover_text("Choose Language (⌘L)");
+    let chip_resp = ui.interact(chip_r, Id::unique("repl-lang-chip"), Sense::click()).on_hover_text("Choose Language (⌘L)");
     let send_r = Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(28.0, 28.0));
-    let send = ui.interact(send_r, Id::new("repl-send"), Sense::click());
+    let send = ui.interact(send_r, Id::unique("repl-send"), Sense::click());
     let can_send = !tab.rk.input.doc.buffer.is_empty() || waiting;
     let send_bg = if can_send { if send.hovered() { mix(theme.text_accent, Color32::WHITE, 0.12) } else { theme.text_accent } } else { tk.pressed };
     ui.painter().circle_filled(send_r.center(), 14.0, send_bg);
@@ -1230,16 +1222,15 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     if busy && !waiting {
         // Running indicator + break button.
         let br = Rect::from_center_size(pos2(send_r.left() - 22.0, row.center().y), vec2(28.0, 28.0));
-        let b = ui.interact(br, Id::new("repl-break"), Sense::click()).on_hover_text("Break (⌘.)");
+        let b = ui.interact(br, Id::unique("repl-break"), Sense::click()).on_hover_text("Break (⌘.)");
         if b.hovered() {
             ui.painter().rect_filled(br, CornerRadius::same(6), tk.hover);
         }
         ui.painter().text(br.center(), Align2::CENTER_CENTER, ic::STOP_CIRCLE, ui::icon_font(19.0), theme.error);
-        if b.clicked() {
-            if let Some(s) = tab.rk.session.as_mut() {
+        if b.clicked()
+            && let Some(s) = tab.rk.session.as_mut() {
                 s.interrupt();
             }
-        }
         let t = ui.ctx().input(|inp| inp.time) as f32;
         let c = pos2(chip_r.right() + 18.0, row.center().y);
         for k in 0..3 {
@@ -1440,7 +1431,7 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         empty_state(ui, &theme, ic::STEP, "Algebraic Stepper", "Step through Beginning–Intermediate Student programs (⇧⌘E)");
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(150.0, 32.0));
-        let resp = ui.interact(br, Id::new("start-stepper"), Sense::click());
+        let resp = ui.interact(br, Id::unique("start-stepper"), Sense::click());
         ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { mix(theme.text_accent, Color32::WHITE, 0.1) } else { theme.text_accent });
         ui.painter().text(br.center(), Align2::CENTER_CENTER, "Start Stepping", ui::medium(13.5), Color32::WHITE);
         if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -1630,10 +1621,10 @@ fn tests_panel(app: &mut App, ui: &mut Ui) {
         let coverage = app.tabs[i].editor.deco.marks.iter().any(|m| m.kind == MarkKind::Uncovered);
         if ui.button(if coverage { "Re-run with coverage" } else { "Run with test coverage" }).clicked() {
             jump = None;
-            ui.ctx().data_mut(|d| d.insert_temp(Id::new("run-coverage"), true));
+            ui.ctx().data_mut(|d| d.insert_temp(Id::unique("run-coverage"), true));
         }
     });
-    if ui.ctx().data_mut(|d| d.remove_temp::<bool>(Id::new("run-coverage"))).is_some() {
+    if ui.ctx().data_mut(|d| d.remove_temp::<bool>(Id::unique("run-coverage"))).is_some() {
         start_run(app, i, Instrument::Coverage);
     }
     if let Some(l) = jump {
@@ -1655,7 +1646,7 @@ fn macros_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         empty_state(ui, &theme, ic::AUTO_FIX_HIGH, "Macro Stepper", "See every macro expansion step (⇧⌘M)");
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(160.0, 32.0));
-        let resp = ui.interact(br, Id::new("start-macros"), Sense::click());
+        let resp = ui.interact(br, Id::unique("start-macros"), Sense::click());
         ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { mix(theme.text_accent, Color32::WHITE, 0.1) } else { theme.text_accent });
         ui.painter().text(br.center(), Align2::CENTER_CENTER, "Expand Program", ui::medium(13.5), Color32::WHITE);
         if resp.clicked() {
@@ -1707,7 +1698,7 @@ fn macros_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
 fn docs_panel(app: &mut App, ui: &mut Ui) {
     let theme = app.theme.clone();
     let tk = app.tokens();
-    let id = Id::new("docs-search");
+    let id = Id::unique("docs-search");
     let w = ui.available_width();
     let resp = search_field(ui, &theme, &mut app.racket.docs.query, "Search Racket documentation", id, w);
     if app.racket.docs.focus {
@@ -1770,7 +1761,7 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
         empty_state(ui, &theme, ic::BUG_REPORT, "Debugger", "Click the gutter to set breakpoints, then Debug (⇧⌘D)");
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(150.0, 32.0));
-        let resp = ui.interact(br, Id::new("start-debug"), Sense::click());
+        let resp = ui.interact(br, Id::unique("start-debug"), Sense::click());
         ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { mix(theme.text_accent, Color32::WHITE, 0.1) } else { theme.text_accent });
         ui.painter().text(br.center(), Align2::CENTER_CENTER, "Start Debugging", ui::medium(13.5), Color32::WHITE);
         if resp.clicked() {
@@ -1835,11 +1826,11 @@ fn debugger_panel(app: &mut App, ui: &mut Ui) {
                 ui.painter().text(pos2(r.right() - 6.0, r.center().y), Align2::RIGHT_CENTER, format!("line {line}"), ui::ui_font(12.0), theme.text_placeholder);
             }
             if resp.clicked() {
-                ui.ctx().data_mut(|d| d.insert_temp(Id::new("dbg-jump"), f.srcloc.pos.unwrap_or(0)));
+                ui.ctx().data_mut(|d| d.insert_temp(Id::unique("dbg-jump"), f.srcloc.pos.unwrap_or(0)));
             }
         }
     });
-    if let Some(pos) = ui.ctx().data_mut(|d| d.remove_temp::<usize>(Id::new("dbg-jump"))) {
+    if let Some(pos) = ui.ctx().data_mut(|d| d.remove_temp::<usize>(Id::unique("dbg-jump"))) {
         app.tabs[i].editor.reveal(pos..pos);
     }
 }
@@ -1857,7 +1848,7 @@ fn profiler_panel(app: &mut App, ui: &mut Ui) {
         empty_state(ui, &theme, ic::SPEED, "Profiler", "Run with Profiling to see where time goes");
         let r = ui.available_rect_before_wrap();
         let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(160.0, 32.0));
-        let resp = ui.interact(br, Id::new("start-profile"), Sense::click());
+        let resp = ui.interact(br, Id::unique("start-profile"), Sense::click());
         ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { mix(theme.text_accent, Color32::WHITE, 0.1) } else { theme.text_accent });
         ui.painter().text(br.center(), Align2::CENTER_CENTER, "Profile Program", ui::medium(13.5), Color32::WHITE);
         if resp.clicked() {

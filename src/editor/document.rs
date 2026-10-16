@@ -337,7 +337,7 @@ impl Document {
                     }
                     if in_str {
                         ("\"".to_string(), 1)
-                    } else if next.is_none_or(|n| is_delimiter(n)) && self.prev_char(start) != Some('\\') {
+                    } else if next.is_none_or(is_delimiter) && self.prev_char(start) != Some('\\') {
                         ("\"\"".to_string(), 1)
                     } else {
                         ("\"".to_string(), 1)
@@ -619,7 +619,7 @@ impl Document {
             if all_commented {
                 let ind = self.buffer.indentation(l);
                 let text = self.buffer.line_text(l);
-                let rest = &text.trim_start()[..];
+                let rest = text.trim_start();
                 let semis = rest.chars().take_while(|c| *c == ';').count().min(2);
                 let space = rest.chars().nth(semis) == Some(' ');
                 let n = semis + usize::from(space);
@@ -902,17 +902,6 @@ impl Document {
         }
     }
 
-    /// `#lang` line of the document, if present.
-    pub fn lang_line(&mut self) -> Option<String> {
-        self.sync();
-        let t = self.tokens.iter().find(|t| !t.is_trivia())?;
-        if t.kind != Kind::Lang {
-            return None;
-        }
-        let name = self.tokens.iter().find(|t| t.kind == Kind::LangName)?;
-        Some(self.chars[name.start..name.end].iter().collect::<String>().trim().to_string())
-    }
-
     /// The symbol at the head of the list enclosing `pos` (for signature help).
     pub fn enclosing_call(&mut self, pos: usize) -> Option<(String, usize)> {
         self.sync();
@@ -1057,7 +1046,6 @@ mod tests {
         let o = d.outline();
         let names: Vec<_> = o.iter().map(|i| (i.name.as_str(), i.kind)).collect();
         assert_eq!(names, vec![("f", OutlineKind::Function), ("y", OutlineKind::Value), ("p", OutlineKind::Struct), ("test", OutlineKind::Module), ("z", OutlineKind::Value)]);
-        assert_eq!(d.lang_line().as_deref(), Some("racket"));
     }
 
     #[test]

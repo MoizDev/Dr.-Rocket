@@ -18,11 +18,10 @@ pub fn enclosing_open(toks: &[Token], pos: usize) -> Option<usize> {
                     j = p as usize;
                 }
             }
-            Kind::Open => {
-                if t.end <= pos && t.partner.is_none_or(|p| toks[p as usize].start >= pos) {
+            Kind::Open
+                if t.end <= pos && t.partner.is_none_or(|p| toks[p as usize].start >= pos) => {
                     return Some(j);
                 }
-            }
             _ => {}
         }
     }
@@ -240,9 +239,8 @@ fn style_for(head: &str) -> Option<Style> {
         "syntax-case" | "syntax-case*" | "for/fold" | "for*/fold" | "for/foldr" | "for*/foldr" | "for/lists"
         | "for*/lists" | "do" | "module" | "module*" | "type-case" | "cases" | "define-datatype" => Body(2),
         _ => {
-            if head.starts_with("define") || head.starts_with("def") && head.len() > 3 && head.as_bytes()[3] == b'-' {
-                Body(1)
-            } else if head.starts_with("with-") || head.starts_with("call-with-") || head.starts_with("let-") {
+            let define_like = head.starts_with("define") || head.starts_with("def") && head.len() > 3 && head.as_bytes()[3] == b'-';
+            if define_like || head.starts_with("with-") || head.starts_with("call-with-") || head.starts_with("let-") {
                 Body(1)
             } else if head.starts_with("begin") {
                 Begin

@@ -84,9 +84,6 @@ impl Token {
     pub fn is_open(&self) -> bool {
         self.kind == Kind::Open
     }
-    pub fn is_close(&self) -> bool {
-        self.kind == Kind::Close
-    }
     pub fn is_trivia(&self) -> bool {
         matches!(self.kind, Kind::LineComment | Kind::BlockComment)
     }
@@ -100,23 +97,11 @@ pub fn is_keyword(s: &str) -> bool {
     KEYWORDS.binary_search(&s).is_ok()
 }
 
-pub fn is_operator(s: &str) -> bool {
-    matches!(s, "+" | "-" | "*" | "/" | "=" | ">" | "<" | ">=" | "<=")
-}
-
 pub fn closer_for(open: char) -> char {
     match open {
         '[' => ']',
         '{' => '}',
         _ => ')',
-    }
-}
-
-pub fn opener_for(close: char) -> char {
-    match close {
-        ']' => '[',
-        '}' => '{',
-        _ => '(',
     }
 }
 
@@ -138,9 +123,6 @@ impl<'a> Lexer<'a> {
     }
     fn starts_with(&self, pat: &str) -> bool {
         pat.chars().enumerate().all(|(k, c)| self.peek(k) == Some(c))
-    }
-    fn starts_with_ci(&self, pat: &str) -> bool {
-        pat.chars().enumerate().all(|(k, c)| self.peek(k).is_some_and(|x| x.eq_ignore_ascii_case(&c)))
     }
 
     /// Advance over a delimited atom (symbol/number), honoring `|...|` and `\x` escapes.
@@ -371,8 +353,6 @@ impl<'a> Lexer<'a> {
                     Kind::Symbol
                 } else if is_number(&text) {
                     Kind::Number
-                } else if self.starts_with_ci("#") && text.len() == 1 {
-                    Kind::Error
                 } else {
                     Kind::Error
                 };
@@ -526,6 +506,7 @@ fn is_uint(s: &str, radix: u32) -> bool {
 }
 
 /// Lex `text` into classified tokens.
+#[cfg(test)]
 pub fn lex(text: &str) -> Vec<Token> {
     let chars: Vec<char> = text.chars().collect();
     lex_chars(&chars)
@@ -620,9 +601,8 @@ fn classify_range(toks: &mut [Token], chars: &[char], from: usize, min_end: usiz
     }
 
     // Base classes.
-    for i in from..end {
-        let t = toks[i];
-        toks[i].class = match t.kind {
+    for t in toks.iter_mut().take(end).skip(from) {
+        t.class = match t.kind {
             Kind::LineComment | Kind::BlockComment | Kind::DatumComment => Class::Comment,
             Kind::String | Kind::ByteString | Kind::HereString => Class::String,
             Kind::StringEscape => Class::Escape,

@@ -12,7 +12,7 @@ impl App {
         let theme = self.theme.clone();
         let tk = self.tokens();
         // Drag the window by its title bar; double-click zooms (macOS behavior).
-        let drag = ui.interact(rect, Id::new("titlebar-drag"), Sense::click_and_drag());
+        let drag = ui.interact(rect, Id::unique("titlebar-drag"), Sense::click_and_drag());
         if drag.drag_started() {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
         }
@@ -61,7 +61,7 @@ impl App {
         rb.painter().vline(sep.center().x, sep.y_range(), Stroke::new(1.0, tk.subtle_border));
         rb.add_space(6.0);
         if icon_button_sized(&mut rb, &theme, ic::MORE_VERT, "More", 30.0, 19.0, None, false).clicked() {
-            self.run_command(Command::CommandPalette);
+            self.run_command(Command::Palette);
         }
         // Run / Stop.
         let running = crate::racket_ui::is_running(self);
@@ -251,7 +251,7 @@ impl App {
             // Current top-level definition.
             let head = tab.editor.doc.buffer.selections.primary().head;
             let outline = tab.editor.doc.outline();
-            if let Some(def) = outline.iter().filter(|o| o.level == 0 && o.pos <= head).last() {
+            if let Some(def) = outline.iter().rfind(|o| o.level == 0 && o.pos <= head) {
                 chevron(&mut bar);
                 bar.label(egui::RichText::new(ic::FUNCTION).font(ui::icon_font(15.0)).color(theme.syntax.function.color));
                 bar.label(egui::RichText::new(&def.name).font(crumb_font.clone()).color(theme.text_muted));

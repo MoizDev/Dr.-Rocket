@@ -103,7 +103,11 @@ impl Automation {
         match &step {
             Step::Open(p) => app.open_file(p),
             Step::OpenFolder(p) => app.open_folder(p),
-            Step::NewFile(_) => app.new_file(),
+            Step::NewFile(yes) => {
+                if *yes {
+                    app.new_file();
+                }
+            }
             Step::Type(t) => {
                 // One event per keystroke, like real typing; "\n" presses Enter.
                 for ch in t.chars() {
@@ -183,9 +187,11 @@ impl Automation {
             }
             Step::Theme(name) => app.set_theme(name, false),
             Step::Log(msg) => eprintln!("automation: {msg}"),
-            Step::Quit(_) => {
-                app.quit_confirmed = true;
-                std::process::exit(0);
+            Step::Quit(yes) => {
+                if *yes {
+                    app.quit_confirmed = true;
+                    std::process::exit(0);
+                }
             }
         }
         self.index += 1;

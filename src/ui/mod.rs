@@ -130,8 +130,6 @@ pub struct Tokens {
     pub subtle_border: Color32,
     pub popup: Color32,
     pub shadow: Color32,
-    pub accent: Color32,
-    pub accent_soft: Color32,
     pub run: Color32,
 }
 
@@ -149,8 +147,6 @@ impl Tokens {
             subtle_border: mix(island, t.text, if t.dark { 0.1 } else { 0.14 }),
             popup: if t.dark { mix(island, t.text, 0.045) } else { Color32::WHITE },
             shadow: if t.dark { Color32::from_black_alpha(140) } else { Color32::from_black_alpha(45) },
-            accent: t.text_accent,
-            accent_soft: with_alpha(t.text_accent, 40),
             run: if t.dark { Color32::from_rgb(0x5f, 0xd0, 0x6a) } else { Color32::from_rgb(0x1f, 0x9d, 0x3a) },
         }
     }

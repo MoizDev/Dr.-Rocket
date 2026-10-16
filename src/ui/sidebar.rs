@@ -15,8 +15,6 @@ pub struct SidebarState {
     pub search_results: Vec<SearchHit>,
     search_key: String,
     pub focus_search: bool,
-    pub selected: Option<PathBuf>,
-    pub outline_filter: String,
 }
 
 #[derive(Clone)]
@@ -33,11 +31,10 @@ const ROW_H: f32 = 28.0;
 impl App {
     pub(crate) fn new_file_in_project(&mut self) {
         let Some(ws) = &self.workspace else { return };
-        if let Some(p) = rfd::FileDialog::new().set_directory(&ws.root).set_file_name("untitled.rkt").save_file() {
-            if std::fs::write(&p, "#lang racket\n\n").is_ok() {
+        if let Some(p) = rfd::FileDialog::new().set_directory(&ws.root).set_file_name("untitled.rkt").save_file()
+            && std::fs::write(&p, "#lang racket\n\n").is_ok() {
                 self.open_file(&p);
             }
-        }
     }
 
     pub(crate) fn files_view(&mut self, ui: &mut Ui) {
@@ -47,7 +44,7 @@ impl App {
             empty_state(ui, &theme, ic::FOLDER_OPEN, "No folder open", "");
             let r = ui.available_rect_before_wrap();
             let br = Rect::from_center_size(r.center() + vec2(0.0, 40.0), vec2(150.0, 32.0));
-            let resp = ui.interact(br, Id::new("open-folder-btn"), Sense::click());
+            let resp = ui.interact(br, Id::unique("open-folder-btn"), Sense::click());
             ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { tk.pressed } else { tk.hover });
             ui.painter().text(br.center(), Align2::CENTER_CENTER, "Open Folder…", ui::medium(13.5), theme.text);
             if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
@@ -178,7 +175,7 @@ impl App {
     pub(crate) fn search_view(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
         let tk = self.tokens();
-        let id = Id::new("project-search");
+        let id = Id::unique("project-search");
         let w = ui.available_width();
         let resp = search_field(ui, &theme, &mut self.sidebar.search_query, "Search in project", id, w);
         if self.sidebar.focus_search {

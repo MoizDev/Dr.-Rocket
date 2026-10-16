@@ -83,36 +83,6 @@ pub fn pill_button(ui: &mut Ui, theme: &Theme, leading: Option<(&str, Color32)>,
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-/// Segmented control (e.g. "Definitions | Interactions"). Returns the clicked index.
-pub fn segmented(ui: &mut Ui, theme: &Theme, options: &[&str], selected: usize) -> Option<usize> {
-    let tk = Tokens::of(theme);
-    let font = medium(ui.style().text_styles[&egui::TextStyle::Body].size - 0.5);
-    let galleys: Vec<_> = options.iter().map(|o| ui.painter().layout_no_wrap(o.to_string(), font.clone(), theme.text)).collect();
-    let pad = 12.0;
-    let total: f32 = galleys.iter().map(|g| g.size().x + pad * 2.0).sum::<f32>() + 4.0;
-    let (rect, _) = ui.allocate_exact_size(vec2(total, 30.0), Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(8), with_alpha(tk.hover, 160));
-    let mut x = rect.left() + 2.0;
-    let mut clicked = None;
-    for (i, g) in galleys.into_iter().enumerate() {
-        let w = g.size().x + pad * 2.0;
-        let r = Rect::from_min_size(pos2(x, rect.top() + 2.0), vec2(w, rect.height() - 4.0));
-        let resp = ui.interact(r, ui.scope_id().with(("seg", i)), Sense::click());
-        if i == selected {
-            ui.painter().rect_filled(r, CornerRadius::same(6), tk.selected);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(r, CornerRadius::same(6), with_alpha(tk.selected, 110));
-        }
-        let color = if i == selected { theme.text } else { theme.text_muted };
-        ui.painter().galley(pos2(r.left() + pad, r.center().y - g.size().y / 2.0), g, color);
-        if resp.clicked() {
-            clicked = Some(i);
-        }
-        x += w;
-    }
-    clicked
-}
-
 pub struct TabResponse {
     pub clicked: bool,
     pub close: bool,
@@ -122,10 +92,10 @@ pub struct TabResponse {
 pub enum TabIcon<'a> {
     Image(egui::Image<'a>),
     Glyph(&'a str, Color32),
-    None,
 }
 
 /// An editor/panel tab: icon, label, dirty dot or close button.
+#[allow(clippy::too_many_arguments)]
 pub fn tab(ui: &mut Ui, theme: &Theme, icon: TabIcon<'_>, label: &str, active: bool, dirty: bool, closable: bool, italic: bool) -> TabResponse {
     let tk = Tokens::of(theme);
     let size = ui.style().text_styles[&egui::TextStyle::Body].size;
@@ -135,8 +105,7 @@ pub fn tab(ui: &mut Ui, theme: &Theme, icon: TabIcon<'_>, label: &str, active: b
         job.sections[0].format.italics = true;
     }
     let galley = ui.painter().layout_job(job);
-    let has_icon = !matches!(icon, TabIcon::None);
-    let icon_w = if has_icon { 22.0 } else { 0.0 };
+    let icon_w = 22.0;
     let close_w = if closable || dirty { 22.0 } else { 0.0 };
     let h = super::TAB_BAR_H - 8.0;
     let w = 10.0 + icon_w + galley.size().x + 6.0 + close_w + 6.0;
@@ -161,7 +130,6 @@ pub fn tab(ui: &mut Ui, theme: &Theme, icon: TabIcon<'_>, label: &str, active: b
             let r = Rect::from_center_size(pos2(x + 8.0, rect.center().y), Vec2::splat(18.0));
             paint_icon(ui, r, g, 17.0, c);
         }
-        TabIcon::None => {}
     }
     x += icon_w;
     ui.painter().galley(pos2(x, rect.center().y - galley.size().y / 2.0), galley.clone(), theme.text);
@@ -186,18 +154,6 @@ pub fn tab(ui: &mut Ui, theme: &Theme, icon: TabIcon<'_>, label: &str, active: b
     out
 }
 
-/// Small rounded counter badge.
-pub fn badge(ui: &mut Ui, theme: &Theme, text: &str, color: Color32) -> Response {
-    let font = medium(11.5);
-    let g = ui.painter().layout_no_wrap(text.to_string(), font, color);
-    let size = vec2((g.size().x + 10.0).max(18.0), 18.0);
-    let (rect, resp) = ui.allocate_exact_size(size, Sense::hover());
-    ui.painter().rect_filled(rect, CornerRadius::same(9), with_alpha(color, 36));
-    ui.painter().galley(rect.center() - g.size() / 2.0, g, color);
-    let _ = theme;
-    resp
-}
-
 /// Single-line search/text field with a leading icon, in a rounded frame.
 pub fn search_field(ui: &mut Ui, theme: &Theme, text: &mut String, hint: &str, id: egui::Id, width: f32) -> Response {
     let tk = Tokens::of(theme);
@@ -220,22 +176,10 @@ pub fn search_field(ui: &mut Ui, theme: &Theme, text: &mut String, hint: &str, i
         .frame(egui::Frame::NONE)
         .desired_width(inner.width())
         .min_size(vec2(inner.width(), h))
-        .vertical_align(egui::Align::Center)
+        .align(egui::Align2::LEFT_CENTER)
         .margin(egui::Margin::ZERO)
         .font(egui::TextStyle::Body);
     child.add(te)
-}
-
-/// A horizontal hairline separator inside an island.
-pub fn hairline(ui: &Ui, y: f32, x0: f32, x1: f32, theme: &Theme) {
-    let tk = Tokens::of(theme);
-    ui.painter().hline(x0..=x1, y, Stroke::new(1.0, tk.island_border));
-}
-
-/// Paint an island (rounded panel) background.
-pub fn island(ui: &Ui, rect: Rect, theme: &Theme) {
-    let tk = Tokens::of(theme);
-    ui.painter().rect(rect, CornerRadius::same(super::ISLAND_RADIUS), tk.island, Stroke::new(1.0, tk.island_border), StrokeKind::Inside);
 }
 
 /// Draw a label clipped with an ellipsis to `max_w`.
@@ -259,14 +203,3 @@ pub fn empty_state(ui: &mut Ui, theme: &Theme, glyph: &str, title: &str, subtitl
     }
 }
 
-/// Keyboard shortcut chips, e.g. ["⌘", "R"].
-pub fn kbd(ui: &mut Ui, theme: &Theme, keys: &str) {
-    let tk = Tokens::of(theme);
-    let font = medium(11.5);
-    for k in keys.split(' ') {
-        let g = ui.painter().layout_no_wrap(k.to_string(), font.clone(), theme.text_muted);
-        let (rect, _) = ui.allocate_exact_size(vec2((g.size().x + 10.0).max(20.0), 20.0), Sense::hover());
-        ui.painter().rect(rect, CornerRadius::same(5), tk.hover, Stroke::new(1.0, tk.island_border), StrokeKind::Inside);
-        ui.painter().galley(rect.center() - g.size() / 2.0, g, theme.text_muted);
-    }
-}

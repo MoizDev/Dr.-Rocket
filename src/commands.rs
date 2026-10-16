@@ -18,7 +18,7 @@ pub enum Command {
     CloseFolder,
     RevealInFinder,
     // Navigation
-    CommandPalette,
+    Palette,
     QuickOpen,
     GoToLine,
     GoToSymbol,
@@ -118,7 +118,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::ReopenClosedTab, label: "Reopen Closed Tab", group: "File", icon: ic::HISTORY, shortcut: sc(cmd_shift(), Key::T) },
     CommandInfo { cmd: Command::CloseFolder, label: "Close Folder", group: "File", icon: ic::FOLDER, shortcut: None },
     CommandInfo { cmd: Command::RevealInFinder, label: "Reveal in Finder", group: "File", icon: ic::OPEN_IN_NEW, shortcut: None },
-    CommandInfo { cmd: Command::CommandPalette, label: "Command Palette", group: "Go", icon: ic::KEYBOARD_COMMAND_KEY, shortcut: sc(cmd_shift(), Key::P) },
+    CommandInfo { cmd: Command::Palette, label: "Command Palette", group: "Go", icon: ic::KEYBOARD_COMMAND_KEY, shortcut: sc(cmd_shift(), Key::P) },
     CommandInfo { cmd: Command::QuickOpen, label: "Go to File…", group: "Go", icon: ic::SEARCH, shortcut: sc(CMD, Key::P) },
     CommandInfo { cmd: Command::GoToLine, label: "Go to Line…", group: "Go", icon: ic::FORMAT_LIST_NUMBERED, shortcut: sc(ctrl(), Key::G) },
     CommandInfo { cmd: Command::GoToSymbol, label: "Go to Definition in File…", group: "Go", icon: ic::FUNCTION, shortcut: sc(cmd_shift(), Key::Period) },

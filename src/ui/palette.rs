@@ -155,14 +155,14 @@ impl App {
         let mut close = false;
         let mut accept = None;
         // Dim the background.
-        egui::Area::new(Id::new("palette-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
+        egui::Area::new(Id::unique("palette-scrim")).order(egui::Order::Middle).fixed_pos(screen.min).show(ctx, |ui| {
             let (r, resp) = ui.allocate_exact_size(screen.size(), Sense::click());
             ui.painter().rect_filled(r, CornerRadius::ZERO, egui::Color32::from_black_alpha(if theme.dark { 90 } else { 40 }));
             if resp.clicked() {
                 close = true;
             }
         });
-        egui::Area::new(Id::new("palette")).order(egui::Order::Foreground).fixed_pos(pos2(screen.center().x - width / 2.0, screen.top() + 70.0)).show(ctx, |ui: &mut Ui| {
+        egui::Area::new(Id::unique("palette")).order(egui::Order::Foreground).fixed_pos(pos2(screen.center().x - width / 2.0, screen.top() + 70.0)).show(ctx, |ui: &mut Ui| {
             egui::Frame::popup(ui.style()).fill(tk.popup).corner_radius(CornerRadius::same(12)).inner_margin(egui::Margin::same(8)).show(ui, |ui| {
                 ui.set_width(width - 16.0);
                 let hint = match mode {
@@ -172,7 +172,7 @@ impl App {
                     Mode::Symbols => "Go to definition…",
                     Mode::Themes => "Select a theme…",
                 };
-                let id = Id::new("palette-input");
+                let id = Id::unique("palette-input");
                 let resp = crate::ui::widgets::search_field(ui, &theme, &mut p.query, hint, id, width - 16.0);
                 if p.focus {
                     resp.request_focus();
