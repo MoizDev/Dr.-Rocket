@@ -56,7 +56,8 @@ IDE -> runner:
 runner -> IDE:
 ```
 {"ev":"started","racket_version":"9.3","language":"..."}
-{"ev":"output","stream":"out"|"err","text":"..."}
+{"ev":"output","stream":"out"|"err","text":"...","image":{"png":..,"width":w,"height":h}|absent}
+                                 ; output is coalesced (~25 ms / 64 KB batches)
 {"ev":"value","text":"...","segments":[{"text":"..."}|{"png":"<base64>","width":w,"height":h}]}
 {"ev":"error","message":"...","kind":"read"|"syntax"|"runtime"|"break",
  "srclocs":[srcloc...],"stack":[{"name":"f"|null, ...srcloc}]}
@@ -71,15 +72,24 @@ runner -> IDE:
 {"ev":"input-wanted"}
 {"ev":"completions","id":3,"items":["string-append",...]}
 {"ev":"ready","id":7|null}     ; definitions finished (id null) or an eval finished
-{"ev":"exit","code":0}
+{"ev":"exit","code":0}          ; the program called `exit` (or ran out of memory: code 1)
 ```
+Teaching-language results print exactly like DrRacket (constructor style, `#true`, repeating
+decimals as `0.3̅` using U+0305). Teaching-language errors carry DrRacket's rewritten messages
+("f: expects only 1 argument, but found 2"); messages never carry a source-location prefix.
+Stack frames from Racketeer itself and from installed libraries are omitted. Coverage gives a
+character the coverage of its innermost instrumented expression (forms such as `define` count as
+covered when anything inside them ran).
 
 ### stepper
 
 ```
 IDE -> {"cmd":"step","path":..,"source":"<buffer text without header>","level":"beginner"|
-        "beginner-abbr"|"intermediate"|"intermediate-lambda"|"advanced"|"module",
-        "settings":{...htdp settings...},"teachpacks":[...],"width":72}
+        "beginner-abbr"|"intermediate"|"intermediate-lambda"|"advanced"|"sdp-beginner"|
+        "sdp-vanilla"|"module",          ; "module": a `#lang htdp/bsl|bsl+|isl|isl+` buffer
+        "settings":{"printing_style","fraction_style","show_sharing","insert_newlines",
+                    "case_sensitive","true_false_empty_as_ids","writing_style"},
+        "teachpacks":["(lib \"image.rkt\" \"teachpack\" \"2htdp\")",...],"width":72}
 IDE -> {"cmd":"more"}                       ; after a "paused" event
 <- {"ev":"step","index":i,"kind":"normal"|"user-application"|...,
     "before":[{"text":"...","highlights":[[s,e],...]}],
@@ -99,28 +109,32 @@ the same path cancels the older one.
 ```
 {"id":1,"cmd":"check-syntax","path":..,"source":..,"offset":n}
  -> {"id":1,"ok":true,"result":{
-      "arrows":[{"from":[s,e],"to":[s,e],"kind":"lexical"|"imported"|"tail"}],
+      "arrows":[{"from":[s,e],"to":[s,e],"kind":"lexical"|"imported"|"tail","actual":bool}],
       "tooltips":[{"start":s,"end":e,"text":"..."}],
       "colors":[{"start":s,"end":e,"style":"lexically-bound"|"imported"|"set!d"|"free-variable"|"unused-identifier"|...}],
       "unused_requires":[[s,e]],
       "docs":[{"start":s,"end":e,"label":"map","path":"/.../doc/reference/pairs.html","anchor":"..."}],
       "jumps":[{"start":s,"end":e,"path":"/abs/other.rkt","id":"foo"}],
       "definitions":[{"start":s,"end":e,"name":"foo"}],
+      "require_opens":[{"start":s,"end":e,"path":"/abs/required.rkt"}],
       "errors":[{"message":"...","srclocs":[srcloc...]}]}}
-{"id":2,"cmd":"bluebox","path":..,"source":..,"offset":n,"pos":p}
- -> {"id":2,"ok":true,"result":{"lines":["(map proc lst ...+) -> list?", ...],"doc":{"path":..,"anchor":..}}|null}
+     ; read/expansion errors are results (ok:true, errors non-empty), not failures
+{"id":2,"cmd":"bluebox","path":..,"source":..,"offset":n,"pos":p|null,"name":"map"|null}
+ -> {"id":2,"ok":true,"result":{"lines":["(map proc lst ...+) -> list?", ...],"kind":"procedure",
+                                "doc":{"path":..,"anchor":..}}|null}
 {"id":3,"cmd":"docs-search","query":"map","limit":50}
  -> {"id":3,"ok":true,"result":[{"name":"map","libs":["racket/base"],"path":..,"anchor":..,"kind":"procedure"}]}
 {"id":4,"cmd":"completions","language":"racket"|"lang/htdp-beginner"|<module path>}
  -> {"id":4,"ok":true,"result":["define","map",...]}
-{"id":5,"cmd":"macro-steps","path":..,"source":..,"offset":n}
- -> {"id":5,"ok":true,"result":[{"type":"macro","name":"define","before":"...","after":"...",
-     "foci_before":[[s,e]],"foci_after":[[s,e]]}]}
-{"id":6,"cmd":"module-graph","path":..}
- -> {"id":6,"ok":true,"result":{"nodes":[{"path":..,"label":..}],"edges":[[i,j]...]}}
-{"id":7,"cmd":"jump-target","path":"/abs/other.rkt","id":"foo"}
- -> {"id":7,"ok":true,"result":{"pos":p}|null}
-{"cmd":"cancel","id":1}
+{"id":5,"cmd":"macro-steps","path":..,"source":..,"offset":n,"width":80,"policy":"standard"|"all"}
+ -> {"id":5,"ok":true,"result":[{"type":"macro","name":"Macro transformation","before":"...",
+     "after":"...","foci_before":[[s,e]],"foci_after":[[s,e]]}]}  ; foci index into before/after
+{"id":6,"cmd":"module-graph","path":..,"source":""|"<unsaved text>","include_libs":false}
+ -> {"id":6,"ok":true,"result":{"nodes":[{"path":..,"label":"main.rkt","lib":false}],"edges":[[i,j]...]}}
+{"id":7,"cmd":"jump-target","path":"/abs/other.rkt","name":"foo"}
+ -> {"id":7,"ok":true,"result":{"pos":p,"line":n,"header_length":n}|null}
+     ; pos/line are relative to that file's visible text (after any DrRacket header)
+{"cmd":"cancel","id":1}            ; that request then answers {"id":1,"ok":false,"error":"cancelled"}
 errors: {"id":1,"ok":false,"error":"..."}
 ```
 
@@ -134,8 +148,8 @@ errors: {"id":1,"ok":false,"error":"..."}
   Settings: case sensitivity, output style (constructor / quasiquote / write / print), fraction
   style (mixed / repeating decimal / improper), show sharing, insert newlines, tracing,
   teachpacks, true/false/empty as ids, enable tests.
-- **DeinProgramm** (Schreibe Dein Programm!): Anfänger, Fortgeschritten, mit Zuweisungen;
-  Die Macht der Abstraktion family when installed.
+- **DeinProgramm**: Schreibe Dein Programm! - Anfänger, Schreibe Dein Programm!,
+  Schreibe Dein Programm! - fortgeschritten (the DMdA family is not part of current Racket).
 - **Legacy**: R5RS, Pretty Big.
 
 Files saved in a teaching language carry DrRacket's three-line metadata header

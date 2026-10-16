@@ -1,0 +1,614 @@
+//! End-to-end tests against a real Racket installation. They are skipped (pass trivially)
+//! when Racket can't be found.
+
+use super::lang::{self, Language};
+use super::protocol::*;
+use super::runner::{RunConfig, RunSession};
+use super::*;
+use std::path::PathBuf;
+use std::sync::OnceLock;
+use std::time::{Duration, Instant};
+
+const TIMEOUT: Duration = Duration::from_secs(60);
+
+fn backend() -> Option<&'static Backend> {
+    static BACKEND: OnceLock<Option<Backend>> = OnceLock::new();
+    BACKEND
+        .get_or_init(|| {
+            let install = discover(std::env::var("RACKETEER_RACKET").ok().as_deref())?;
+            let dir = std::env::temp_dir().join(format!("racketeer-tests-{:016x}", super::scripts_hash(&install)));
+            let b = Backend::start_in(install, dir, None).expect("install scripts");
+            assert!(b.wait_compiled(Duration::from_secs(300)), "raco make timed out");
+            assert_eq!(b.status(), BackendStatus::Ready, "backend failed to compile");
+            Some(b)
+        })
+        .as_ref()
+}
+
+macro_rules! need_racket {
+    () => {
+        match backend() {
+            Some(b) => b,
+            None => {
+                eprintln!("racket not found; skipping");
+                return;
+            }
+        }
+    };
+}
+
+fn scratch_dir() -> PathBuf {
+    let d = std::env::temp_dir().join("racketeer-test-files");
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
+/// Receive run events until `done` matches one (inclusive). Panics on timeout.
+fn run_until(session: &RunSession, mut done: impl FnMut(&RunEvent) -> bool) -> Vec<RunEvent> {
+    let deadline = Instant::now() + TIMEOUT;
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.checked_duration_since(Instant::now()).unwrap_or_else(|| panic!("timed out; got {seen:#?}"));
+        match session.events().recv_timeout(left) {
+            Ok(ev) => {
+                let stop = done(&ev);
+                if let RunEvent::Terminated { stderr, .. } = &ev
+                    && !stop
+                {
+                    panic!("runner terminated: {stderr}\nevents: {seen:#?}");
+                }
+                seen.push(ev);
+                if stop {
+                    return seen;
+                }
+            }
+            Err(_) => panic!("timed out; got {seen:#?}"),
+        }
+    }
+}
+
+fn ready(id: Option<u64>) -> impl FnMut(&RunEvent) -> bool {
+    move |e| matches!(e, RunEvent::Ready { id: got } if *got == id)
+}
+
+fn values(events: &[RunEvent]) -> Vec<String> {
+    events
+        .iter()
+        .filter_map(|e| match e {
+            RunEvent::Value { text, .. } => Some(text.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn module_config(path: Option<PathBuf>, source: &str, instrument: Instrument) -> RunConfig {
+    RunConfig {
+        path,
+        source: source.to_string(),
+        offset: 0,
+        language: RunLanguage::Module,
+        options: RunOptions { instrument, ..RunOptions::default() },
+    }
+}
+
+#[test]
+fn runs_racket_program_with_output_values_and_error_location() {
+    let b = need_racket!();
+    let path = scratch_dir().join("hello.rkt");
+    let src = "#lang racket\n(displayln \"hello\")\n(list 1 2 \"s\")\n(car 5)\n";
+    let mut s = RunSession::start(b, &module_config(Some(path.clone()), src, Instrument::Errortrace)).unwrap();
+    let events = run_until(&s, ready(None));
+    assert!(events.iter().any(|e| matches!(e, RunEvent::Output { stream: Stream::Out, text, .. } if text == "hello\n")));
+    assert_eq!(values(&events), vec!["'(1 2 \"s\")"]);
+    let err = events.iter().find_map(|e| if let RunEvent::Error(r) = e { Some(r) } else { None }).expect("error");
+    assert!(err.message.starts_with("car: contract violation"), "{}", err.message);
+    assert_eq!(err.kind, ErrorKind::Runtime);
+    let loc = &err.srclocs[0];
+    assert_eq!(loc.path.as_deref(), Some(path.to_str().unwrap()));
+    assert_eq!(loc.line, Some(4));
+    assert_eq!(&src[loc.pos.unwrap()..loc.pos.unwrap() + loc.span.unwrap()], "(car 5)");
+
+    // REPL after the run, in the module's namespace.
+    let id = s.eval("(+ 1 2) (string-append \"a\" \"b\")");
+    let events = run_until(&s, ready(Some(id)));
+    assert_eq!(values(&events), vec!["3", "\"ab\""]);
+}
+
+#[test]
+fn teaching_language_prints_tests_and_errors_like_drracket() {
+    let b = need_racket!();
+    let path = scratch_dir().join("bsl-test.rkt");
+    let body = "(define (f x) (* x 2))\n(check-expect (f 2) 4)\n(check-expect (f 2) 5)\n(list 1 2)\n(/ 1 3)\ntrue\n";
+    let settings = Language::Beginner.default_settings();
+    let (source, offset) = lang::program_text(Language::Beginner, &settings, Some(&path), body);
+    let config = RunConfig {
+        path: Some(path),
+        source,
+        offset,
+        language: Language::Beginner.run_language(),
+        options: RunOptions::default(),
+    };
+    let mut s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, ready(None));
+    assert_eq!(values(&events), vec!["(cons 1 (cons 2 '()))", "0.3\u{305}", "#true"]);
+    let tests = events.iter().find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None }).expect("tests");
+    assert_eq!((tests.passed, tests.total), (1, 2));
+    assert_eq!(tests.failures.len(), 1);
+    let failure = &tests.failures[0];
+    assert!(failure.message.contains("Actual value 4 differs from 5"), "{}", failure.message);
+    assert_eq!(failure.srcloc.line, Some(3), "lines are relative to the visible buffer");
+    let pos = failure.srcloc.pos.unwrap();
+    assert!(body[pos..].starts_with("(check-expect (f 2) 5)"));
+
+    let id = s.eval("(f 1 2)");
+    let events = run_until(&s, ready(Some(id)));
+    let err = events.iter().find_map(|e| if let RunEvent::Error(r) = e { Some(r) } else { None }).expect("error");
+    assert_eq!(err.message, "f: expects only 1 argument, but found 2");
+
+    let id = s.eval("(check-expect (f 1) 3)");
+    let events = run_until(&s, ready(Some(id)));
+    let tests = events.iter().find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None }).expect("tests rerun");
+    assert_eq!(tests.total, 3);
+}
+
+#[test]
+fn image_values_arrive_as_png_segments() {
+    let b = need_racket!();
+    let src = "#lang racket\n(require 2htdp/image)\n(circle 5 \"solid\" \"red\")\n(list 1 (square 3 \"solid\" \"blue\"))\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::None)).unwrap();
+    let events = run_until(&s, ready(None));
+    let segs: Vec<&Vec<Segment>> = events
+        .iter()
+        .filter_map(|e| if let RunEvent::Value { segments, .. } = e { Some(segments) } else { None })
+        .collect();
+    assert_eq!(segs.len(), 2);
+    match &segs[0][..] {
+        [Segment::Image(img)] => {
+            assert_eq!((img.width, img.height), (10, 10));
+            assert_eq!(&img.decode_png().unwrap()[1..4], b"PNG");
+        }
+        other => panic!("expected one image, got {other:?}"),
+    }
+    assert!(segs[1].iter().any(|s| matches!(s, Segment::Image(i) if i.width == 3)));
+    assert!(segs[1].iter().any(|s| matches!(s, Segment::Text { text } if text.starts_with("(list 1 "))));
+}
+
+#[test]
+fn input_is_requested_and_delivered() {
+    let b = need_racket!();
+    let mut s = RunSession::start(b, &module_config(None, "#lang racket\n", Instrument::None)).unwrap();
+    run_until(&s, ready(None));
+    let id = s.eval("(read-line)");
+    run_until(&s, |e| matches!(e, RunEvent::InputWanted));
+    s.send_input("typed line\n");
+    let events = run_until(&s, ready(Some(id)));
+    assert_eq!(values(&events), vec!["\"typed line\""]);
+}
+
+#[test]
+fn break_interrupts_a_loop() {
+    let b = need_racket!();
+    let mut s = RunSession::start(b, &module_config(None, "#lang racket\n(define (spin) (spin))\n", Instrument::None)).unwrap();
+    run_until(&s, ready(None));
+    let id = s.eval("(spin)");
+    std::thread::sleep(Duration::from_millis(300));
+    s.interrupt();
+    let events = run_until(&s, ready(Some(id)));
+    assert!(events.iter().any(|e| matches!(e, RunEvent::Error(r) if r.kind == ErrorKind::Break)));
+    let id = s.eval("(+ 2 2)");
+    assert_eq!(values(&run_until(&s, ready(Some(id)))), vec!["4"]);
+}
+
+#[test]
+fn coverage_reports_unexecuted_code() {
+    let b = need_racket!();
+    let src = "#lang racket\n(define (used x) (+ x 1))\n(define (unused x) (* x 2))\n(used 1)\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::Coverage)).unwrap();
+    let events = run_until(&s, ready(None));
+    let uncovered = events
+        .iter()
+        .find_map(|e| if let RunEvent::Coverage { uncovered, .. } = e { Some(uncovered.clone()) } else { None })
+        .expect("coverage");
+    let texts: Vec<&str> = uncovered.iter().map(|(p, n)| &src[*p..p + n]).collect();
+    assert_eq!(texts, vec!["(* x 2)"]);
+}
+
+#[test]
+fn debugger_pauses_at_breakpoints_with_locals() {
+    let b = need_racket!();
+    let src = "#lang racket\n(define (f x)\n  (+ x 1))\n(f 5)\n";
+    let bp = src.find("(+ x 1)").unwrap();
+    let mut config = module_config(None, src, Instrument::Debug);
+    config.options.breakpoints = vec![bp];
+    let mut s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, |e| matches!(e, RunEvent::Paused(_)));
+    let RunEvent::Paused(p) = events.last().unwrap() else { unreachable!() };
+    assert_eq!(p.srcloc.pos, Some(bp));
+    assert!(p.locals.iter().any(|l| l.name == "x" && l.value == "5"), "{:?}", p.locals);
+    assert_eq!(p.stack[0].name, "(+ x 1)");
+    s.debug(DebugAction::Continue);
+    let events = run_until(&s, ready(None));
+    assert_eq!(values(&events), vec!["6"]);
+}
+
+#[test]
+fn profiler_reports_user_functions() {
+    let b = need_racket!();
+    let src = "#lang racket\n(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(void (fib 27))\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::Profile)).unwrap();
+    let events = run_until(&s, ready(None));
+    let report = events.iter().find_map(|e| if let RunEvent::Profile(r) = e { Some(r) } else { None }).expect("profile");
+    assert!(report.nodes.iter().any(|n| n.name == "fib"), "{:?}", report.nodes.iter().map(|n| &n.name).collect::<Vec<_>>());
+}
+
+#[test]
+fn r5rs_toplevel_language() {
+    let b = need_racket!();
+    let config = RunConfig {
+        path: None,
+        source: "(define x 5)\n(* x 2)\n".into(),
+        offset: 0,
+        language: Language::R5rs.run_language(),
+        options: RunOptions { instrument: Instrument::None, ..RunOptions::default() },
+    };
+    let s = RunSession::start(b, &config).unwrap();
+    assert_eq!(values(&run_until(&s, ready(None))), vec!["10"]);
+}
+
+fn step_until(session: &StepperSession) -> Vec<StepperEvent> {
+    let deadline = Instant::now() + TIMEOUT;
+    let mut seen = Vec::new();
+    loop {
+        let left = deadline.checked_duration_since(Instant::now()).unwrap_or_else(|| panic!("timed out; got {seen:#?}"));
+        let ev = session.events().recv_timeout(left).unwrap_or_else(|_| panic!("timed out; got {seen:#?}"));
+        let done = matches!(ev, StepperEvent::Finished { .. } | StepperEvent::Terminated { .. });
+        seen.push(ev);
+        if done {
+            return seen;
+        }
+    }
+}
+
+#[test]
+fn stepper_produces_highlighted_reductions() {
+    let b = need_racket!();
+    let source = "(define (f x) (* x 2))\n(f (+ 1 2))\n".to_string();
+    let settings = Language::Beginner.default_settings();
+    let request = StepRequest {
+        path: None,
+        source: source.clone(),
+        level: Language::Beginner.stepper_level(&source).unwrap().into(),
+        settings: settings.stepper_json(),
+        teachpacks: vec![],
+        width: 60,
+    };
+    let s = StepperSession::start(b, &request).unwrap();
+    let events = step_until(&s);
+    let steps: Vec<&Step> = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
+    assert_eq!(steps.len(), 3, "{events:#?}");
+    let first = steps[0];
+    let before = first.before.last().unwrap();
+    assert_eq!(before.text, "(f (+ 1 2))");
+    let (a, z) = before.highlights[0];
+    assert_eq!(before.text.chars().skip(a).take(z - a).collect::<String>(), "(+ 1 2)");
+    assert_eq!(first.after.last().unwrap().text, "(f 3)");
+    let src = first.before_src.unwrap();
+    assert_eq!(&source[src.pos..src.pos + src.span], "(+ 1 2)");
+    assert_eq!(steps[1].kind, "user-application");
+    assert_eq!(steps[2].after.last().unwrap().text, "6");
+    assert!(matches!(events.last(), Some(StepperEvent::Finished { count: 3 })));
+}
+
+#[test]
+fn stepper_handles_hash_lang_teaching_buffers() {
+    let b = need_racket!();
+    let source = "#lang htdp/bsl\n(+ 1 (* 2 3))\n".to_string();
+    let level = Language::Module.stepper_level(&source).expect("htdp/bsl is steppable");
+    let request = StepRequest {
+        path: None,
+        source,
+        level: level.into(),
+        settings: Language::Beginner.default_settings().stepper_json(),
+        teachpacks: vec![],
+        width: 60,
+    };
+    let events = step_until(&StepperSession::start(b, &request).unwrap());
+    let texts: Vec<String> = events
+        .iter()
+        .filter_map(|e| if let StepperEvent::Step(s) = e { Some(s.after.last().unwrap().text.clone()) } else { None })
+        .collect();
+    assert_eq!(texts, vec!["(+ 1 6)", "7"]);
+}
+
+fn server_result(server: &mut Server, req: ServerRequest) -> ServerResponse {
+    let id = server.request(req);
+    server.wait(id, TIMEOUT).expect("server timed out").expect("server error")
+}
+
+#[test]
+fn server_check_syntax_bluebox_docs_and_completions() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let path = scratch_dir().join("cs.rkt");
+    let src = "#lang racket\n(define (f x) (map add1 x))\n(define unused 3)\n(f (list 1 2))\n";
+    let ServerResponse::CheckSyntax(cs) = server_result(
+        &mut server,
+        ServerRequest::CheckSyntax { path: Some(path.to_string_lossy().into()), source: src.into(), offset: 0 },
+    ) else {
+        panic!()
+    };
+    assert!(cs.errors.is_empty(), "{:?}", cs.errors);
+    let x_binder = src.find("x)").unwrap();
+    let x_use = src.find("x))").unwrap();
+    assert!(cs.arrows.iter().any(|a| a.kind == ArrowKind::Lexical && a.from == (x_binder, x_binder + 1) && a.to == (x_use, x_use + 1)));
+    assert_eq!(cs.occurrences(x_use), vec![(x_binder, x_binder + 1), (x_use, x_use + 1)]);
+    let map_pos = src.find("map").unwrap();
+    let doc = cs.docs.iter().find(|d| d.start == map_pos).expect("docs for map");
+    assert!(doc.url().unwrap().contains("pairs.html#"), "{doc:?}");
+    let unused = src.find("unused").unwrap();
+    assert!(cs.colors.iter().any(|c| c.start == unused && c.style == "unused-identifier"));
+    assert!(cs.tooltips.iter().any(|t| t.start == map_pos && t.text.contains("imported from racket")));
+
+    let ServerResponse::Bluebox(Some(bb)) = server_result(
+        &mut server,
+        ServerRequest::Bluebox {
+            path: Some(path.to_string_lossy().into()),
+            source: src.into(),
+            offset: 0,
+            pos: Some(map_pos + 1),
+            name: None,
+        },
+    ) else {
+        panic!("no bluebox")
+    };
+    assert!(bb.lines[0].starts_with("(map proc lst"), "{bb:?}");
+
+    let ServerResponse::DocsSearch(hits) = server_result(&mut server, ServerRequest::DocsSearch { query: "string-append".into(), limit: 5 })
+    else {
+        panic!()
+    };
+    assert_eq!(hits[0].name, "string-append");
+    assert!(hits[0].libs.iter().any(|l| l == "racket/base"));
+
+    let ServerResponse::Completions(words) =
+        server_result(&mut server, ServerRequest::Completions { language: Language::Beginner.language_module().into() })
+    else {
+        panic!()
+    };
+    assert!(words.iter().any(|w| w == "check-expect"));
+    assert!(!words.iter().any(|w| w == "set!"), "BSL has no set!");
+}
+
+#[test]
+fn server_reports_syntax_errors_and_macro_steps() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let src = "#lang racket\n(define (f x) (+ x y))\n";
+    let ServerResponse::CheckSyntax(cs) =
+        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source: src.into(), offset: 0 })
+    else {
+        panic!()
+    };
+    assert_eq!(cs.errors.len(), 1);
+    assert_eq!(cs.errors[0].message, "y: unbound identifier");
+    assert_eq!(cs.errors[0].srclocs[0].pos, src.find("y)"));
+
+    let src = "#lang racket\n(define-syntax-rule (swap! a b) (let ([t a]) (set! a b) (set! b t)))\n(define x 1) (define y 2)\n(swap! x y)\n";
+    let ServerResponse::MacroSteps(steps) = server_result(
+        &mut server,
+        ServerRequest::MacroSteps { path: None, source: src.into(), offset: 0, width: 80, policy: "standard".into() },
+    ) else {
+        panic!()
+    };
+    let swap = steps.iter().find(|s| s.step_type == "macro").expect("a macro step");
+    let (a, z) = swap.foci_before[0];
+    assert_eq!(swap.before.chars().skip(a).take(z - a).collect::<String>(), "(swap! x y)");
+    assert!(swap.after.contains("(let ((t x)) (set! x y) (set! y t))"));
+}
+
+#[test]
+fn server_module_graph_and_jump_target() {
+    let b = need_racket!();
+    let dir = scratch_dir().join("graph");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("util.rkt"), "#lang racket/base\n(provide helper)\n\n(define (helper x)\n  (* x 2))\n").unwrap();
+    std::fs::write(dir.join("main.rkt"), "#lang racket\n(require \"util.rkt\")\n(helper 3)\n").unwrap();
+    let mut server = Server::start(b).unwrap();
+    let ServerResponse::ModuleGraph(g) = server_result(
+        &mut server,
+        ServerRequest::ModuleGraph { path: dir.join("main.rkt").to_string_lossy().into(), source: String::new(), include_libs: false },
+    ) else {
+        panic!()
+    };
+    let labels: Vec<&str> = g.nodes.iter().map(|n| n.label.as_str()).collect();
+    assert_eq!(labels, vec!["main.rkt", "util.rkt"]);
+    assert_eq!(g.edges, vec![(0, 1)]);
+
+    let ServerResponse::JumpTarget(Some(t)) = server_result(
+        &mut server,
+        ServerRequest::JumpTarget { path: dir.join("util.rkt").to_string_lossy().into(), name: "helper".into() },
+    ) else {
+        panic!()
+    };
+    assert_eq!(t.line, 4);
+}
+
+#[test]
+fn headers_round_trip_for_every_teaching_language() {
+    for language in Language::ALL {
+        let mut settings = language.default_settings();
+        let header = lang::header(language, "my-program", &settings);
+        assert_eq!(header.is_some(), language.is_teaching(), "{language:?}");
+        let Some(header) = header else { continue };
+        let parsed = lang::parse_header(&format!("{header}(+ 1 2)\n")).expect("parses");
+        assert_eq!(parsed.language, language);
+        assert_eq!(parsed.settings, settings);
+        assert_eq!(parsed.modname.as_deref(), Some("my-program"));
+        assert_eq!(parsed.len_chars, header.chars().count());
+
+        settings.teachpacks = vec![lang::TEACHPACKS[0].1.to_string()];
+        settings.printing_style = lang::PrintingStyle::Write;
+        let file = lang::save(language, &settings, Some(std::path::Path::new("/x/a b.rkt")), "(define x 1)\n");
+        let loaded = lang::load(&file);
+        assert_eq!(loaded.language, language);
+        assert_eq!(loaded.settings, settings);
+        assert_eq!(loaded.body, "(define x 1)\n");
+        assert_eq!(loaded.header + &loaded.body, file);
+    }
+}
+
+#[test]
+fn headers_match_racket_printer_byte_for_byte() {
+    let Some(install) = discover(std::env::var("RACKETEER_RACKET").ok().as_deref()) else { return };
+    let mut settings = Language::Intermediate.default_settings();
+    settings.teachpacks = vec![lang::TEACHPACKS[0].1.to_string(), lang::TEACHPACKS[1].1.to_string()];
+    let ours = lang::header(Language::Intermediate, "two words", &settings).unwrap();
+    let expr = r##"(printf "#reader~s~s\n" '(lib "htdp-intermediate-reader.ss" "lang") '((modname |two words|) (read-case-sensitive #t) (teachpacks ((lib "image.rkt" "teachpack" "2htdp") (lib "universe.rkt" "teachpack" "2htdp"))) (htdp-settings #(#t constructor repeating-decimal #f #t none #f ((lib "image.rkt" "teachpack" "2htdp") (lib "universe.rkt" "teachpack" "2htdp")) #f))))"##;
+    let out = std::process::Command::new(&install.racket).args(["-l", "racket/base", "-e", expr]).output().unwrap();
+    let racket_line = String::from_utf8(out.stdout).unwrap();
+    assert_eq!(ours.lines().nth(2).unwrap(), racket_line.trim_end());
+
+    let sdp = lang::header(Language::SdpAdvanced, "prog", &Language::SdpAdvanced.default_settings()).unwrap();
+    let expr = r##"(printf "#reader~s~s\n" '(lib "advanced-reader.rkt" "deinprogramm" "sdp") '((modname prog) (read-case-sensitive #f) (teachpacks ()) (deinprogramm-settings #(#f write repeating-decimal #f #t none datum #f ()))))"##;
+    let out = std::process::Command::new(&install.racket).args(["-l", "racket/base", "-e", expr]).output().unwrap();
+    assert_eq!(sdp.lines().nth(2).unwrap(), String::from_utf8(out.stdout).unwrap().trim_end());
+}
+
+#[test]
+fn parses_drracket_written_file() {
+    // Exactly what DrRacket writes for a BSL file with the old true/false setting on.
+    let file = ";; The first three lines of this file were inserted by DrRacket. They record metadata\n;; about the language level of this file in a form that our tools can easily process.\n#reader(lib \"htdp-beginner-reader.ss\" \"lang\")((modname bsl) (read-case-sensitive #t) (teachpacks ()) (htdp-settings #(#t constructor repeating-decimal #f #t none #f () #t)))\n(define x 1)\n";
+    let loaded = lang::load(file);
+    assert_eq!(loaded.language, Language::Beginner);
+    assert!(loaded.settings.true_false_empty_as_ids);
+    assert_eq!(loaded.body, "(define x 1)\n");
+    assert_eq!(lang::save(loaded.language, &loaded.settings, Some(std::path::Path::new("bsl.rkt")), &loaded.body), file);
+}
+
+#[test]
+fn detects_hash_lang_lines() {
+    assert_eq!(lang::hash_lang("#lang racket/base\n(x)").as_deref(), Some("racket/base"));
+    assert_eq!(lang::hash_lang(";; comment\n#| block |#\n  #lang htdp/bsl\n").as_deref(), Some("htdp/bsl"));
+    assert_eq!(lang::hash_lang("#!racket\n").as_deref(), Some("racket"));
+    assert_eq!(lang::hash_lang("(define x 1)"), None);
+    assert_eq!(Language::Module.stepper_level("#lang htdp/isl+\n"), Some("module"));
+    assert_eq!(Language::Module.stepper_level("#lang htdp/asl\n"), None);
+    assert_eq!(Language::Module.stepper_level("#lang racket\n"), None);
+    assert_eq!(Language::Module.completions_language("#lang at-exp racket/base\n"), "racket/base");
+    assert_eq!(Language::Module.completions_language("#lang htdp/bsl\n"), "lang/htdp-beginner");
+    for l in Language::ALL {
+        assert_eq!(Language::from_id(l.id()), Some(l));
+    }
+    let grouped: usize = lang::GROUPS.iter().map(|g| g.languages.len()).sum();
+    assert_eq!(grouped, Language::ALL.len());
+}
+
+#[test]
+fn discovers_racket() {
+    if let Some(install) = discover(None) {
+        assert!(install.racket.is_file());
+        assert!(install.version().is_some());
+    }
+    assert!(discover(Some("/definitely/not/here/racket")).is_none());
+}
+
+#[test]
+fn heavy_output_is_coalesced() {
+    let b = need_racket!();
+    let src = "#lang racket/base\n(for ([i 100000]) (displayln i))\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::None)).unwrap();
+    let events = run_until(&s, ready(None));
+    let outputs: Vec<&str> = events
+        .iter()
+        .filter_map(|e| if let RunEvent::Output { text, .. } = e { Some(text.as_str()) } else { None })
+        .collect();
+    let all: String = outputs.concat();
+    assert_eq!(all.lines().count(), 100_000);
+    assert!(all.ends_with("99999\n"));
+    assert!(outputs.len() < 200, "{} output events", outputs.len());
+}
+
+#[test]
+fn exit_reports_code() {
+    let b = need_racket!();
+    let s = RunSession::start(b, &module_config(None, "#lang racket/base\n(display \"bye\")\n(exit 3)\n", Instrument::None)).unwrap();
+    let events = run_until(&s, |e| matches!(e, RunEvent::Exit { .. }));
+    assert!(events.iter().any(|e| matches!(e, RunEvent::Output { text, .. } if text == "bye")));
+    assert!(matches!(events.last(), Some(RunEvent::Exit { code: 3 })));
+}
+
+#[test]
+fn memory_limit_stops_the_program() {
+    let b = need_racket!();
+    let mut config = module_config(None, "#lang racket/base\n(define (grow l) (grow (cons (make-vector 1000) l)))\n(grow '())\n", Instrument::None);
+    config.options.memory_limit_mb = Some(64);
+    let s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, |e| matches!(e, RunEvent::Exit { .. } | RunEvent::Terminated { .. }));
+    assert!(events.iter().any(|e| matches!(e, RunEvent::Error(r) if r.message.contains("out of memory"))), "{events:#?}");
+}
+
+#[test]
+fn newer_check_syntax_cancels_older_for_same_file() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let req = |n: u32| ServerRequest::CheckSyntax {
+        path: Some("/tmp/racketeer-supersede.rkt".into()),
+        source: format!("#lang racket\n(define x {n})\n"),
+        offset: 0,
+    };
+    let first = server.request(req(1));
+    let second = server.request(req(2));
+    let r1 = server.wait(first, TIMEOUT).unwrap();
+    let r2 = server.wait(second, TIMEOUT).unwrap();
+    assert!(r2.is_ok(), "{r2:?}");
+    // The first either finished before the second arrived, or was cancelled.
+    assert!(r1.is_ok() || r1 == Err("cancelled".into()), "{r1:?}");
+
+    let slow = server.request(ServerRequest::DocsSearch { query: "a".into(), limit: 5 });
+    server.cancel(slow);
+    let r = server.wait(slow, TIMEOUT).unwrap();
+    assert!(r.is_ok() || r == Err("cancelled".into()));
+    // The server still works afterwards.
+    let ServerResponse::Completions(words) = server_result(&mut server, ServerRequest::Completions { language: "racket/base".into() }) else {
+        panic!()
+    };
+    assert!(words.iter().any(|w| w == "lambda"));
+}
+
+/// `cargo test latency -- --ignored --nocapture` prints how long common operations take.
+#[test]
+#[ignore]
+fn latency_report() {
+    let b = need_racket!();
+    for (name, src, instrument) in [
+        ("racket/base, no instrumentation", "#lang racket/base\n(+ 1 2)\n", Instrument::None),
+        ("racket, errortrace", "#lang racket\n(+ 1 2)\n", Instrument::Errortrace),
+    ] {
+        let t = Instant::now();
+        let s = RunSession::start(b, &module_config(None, src, instrument)).unwrap();
+        run_until(&s, ready(None));
+        eprintln!("run {name}: {:?}", t.elapsed());
+    }
+    let settings = Language::Beginner.default_settings();
+    let (source, offset) = lang::program_text(Language::Beginner, &settings, None, "(+ 1 2)\n");
+    let t = Instant::now();
+    let config = RunConfig { path: None, source, offset, language: RunLanguage::Module, options: RunOptions::default() };
+    let s = RunSession::start(b, &config).unwrap();
+    run_until(&s, ready(None));
+    eprintln!("run BSL: {:?}", t.elapsed());
+
+    let idle = super::runner::IdleRunner::spawn(b).unwrap();
+    std::thread::sleep(Duration::from_millis(800));
+    let t = Instant::now();
+    let s = RunSession::start_with(idle, &module_config(None, "#lang racket\n(+ 1 2)\n", Instrument::Errortrace)).unwrap();
+    run_until(&s, ready(None));
+    eprintln!("run racket, errortrace, prewarmed: {:?}", t.elapsed());
+
+    let mut server = Server::start(b).unwrap();
+    for i in 0..3 {
+        let t = Instant::now();
+        let source = format!("#lang racket\n(define x {i})\n");
+        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source, offset: 0 });
+        eprintln!("check-syntax #{i}: {:?}", t.elapsed());
+    }
+}
