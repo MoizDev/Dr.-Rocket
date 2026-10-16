@@ -81,6 +81,8 @@ pub struct Settings {
     pub auto_close_brackets: bool,
     pub online_check_syntax: bool,
     pub show_binding_arrows: bool,
+    /// Pop up completions while typing (Ctrl-Space always opens them).
+    pub auto_complete: bool,
     /// Count the stepper's closing "All of the definitions have been successfully evaluated"
     /// screen as a step, as DrRacket does ("9/9" rather than "8 of 8" plus a note).
     pub stepper_count_finish: bool,
@@ -118,6 +120,7 @@ impl Default for Settings {
             auto_close_brackets: true,
             online_check_syntax: true,
             show_binding_arrows: true,
+            auto_complete: false,
             stepper_count_finish: true,
             racket_path: None,
             shell: None,

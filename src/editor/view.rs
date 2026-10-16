@@ -1420,7 +1420,7 @@ impl EditorView {
                     }
                     self.doc.type_text(&t, auto_close);
                     self.goal_col = None;
-                    self.update_completion_after_typing(&t);
+                    self.update_completion_after_typing(&t, style.settings.auto_complete);
                 }
                 Event::Ime(egui::ImeEvent::Commit(t)) => {
                     self.doc.type_text(&t, auto_close);
@@ -1655,7 +1655,9 @@ impl EditorView {
         Some((s, prefix))
     }
 
-    fn update_completion_after_typing(&mut self, typed: &str) {
+    /// Keep an open completion list in sync with typing; open one automatically only when
+    /// `auto` is on (otherwise Ctrl-Space opens it).
+    fn update_completion_after_typing(&mut self, typed: &str, auto: bool) {
         let ident = typed.chars().all(|c| !lexer::is_delimiter(c));
         if !ident {
             self.completion = None;
@@ -1663,7 +1665,7 @@ impl EditorView {
         }
         if self.completion.is_some() {
             self.refresh_completion();
-        } else if self.word_prefix().is_some_and(|(_, p)| p.chars().count() >= 2) {
+        } else if auto && self.word_prefix().is_some_and(|(_, p)| p.chars().count() >= 2) {
             self.open_completion(false);
         }
     }
@@ -1743,11 +1745,15 @@ impl EditorView {
         let theme = style.theme;
         let tk = Tokens::of(theme);
         let line = self.doc.buffer.line_of(c.anchor);
-        let x = self.x_of(line, c.anchor - self.doc.buffer.line_start(line)) - 28.0;
-        let y = self.line_y(line) + self.geom.line_h + 2.0;
         let row_h = 26.0;
         let shown = c.items.len().min(10);
         let width = 300.0;
+        // Below the line when it fits, otherwise above it: never over the line being typed.
+        let screen = ui.ctx().content_rect();
+        let height = shown as f32 * row_h + 10.0;
+        let below = self.line_y(line) + self.geom.line_h + 2.0;
+        let y = if below + height <= screen.bottom() - 4.0 { below } else { self.line_y(line) - 2.0 - height };
+        let x = (self.x_of(line, c.anchor - self.doc.buffer.line_start(line)) - 28.0).min(screen.right() - width - 12.0);
         let mut chosen = None;
         egui::Area::new(self.id.with("completion")).order(egui::Order::Foreground).fixed_pos(pos2(x, y)).show(ui.ctx(), |ui| {
             egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(4)).corner_radius(CornerRadius::same(8)).fill(tk.popup).show(ui, |ui| {

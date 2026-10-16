@@ -470,6 +470,9 @@ impl App {
         row(ui, &theme, "Auto-close brackets and quotes", "Typing ) always inserts the matching closer, like DrRacket", |ui| {
             toggle(ui, &theme, &mut s.auto_close_brackets);
         });
+        row(ui, &theme, "Autocomplete while typing", "Show suggestions as you type. Ctrl-Space shows them on demand either way", |ui| {
+            toggle(ui, &theme, &mut s.auto_complete);
+        });
         row(ui, &theme, "Restore session on launch", "Reopen the last project and files", |ui| {
             toggle(ui, &theme, &mut s.restore_session);
         });
