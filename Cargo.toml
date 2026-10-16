@@ -44,6 +44,8 @@ strip = true
 
 [profile.dev]
 opt-level = 1
+# Line tables are enough for backtraces, and keep target/debug a fraction of the size.
+debug = "line-tables-only"
 
 [profile.dev.package."*"]
 opt-level = 3

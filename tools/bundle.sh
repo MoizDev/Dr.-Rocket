@@ -1,13 +1,43 @@
 #!/bin/sh
-# Build a release Dr. Rocket.app in target/ (and optionally install it to ~/Applications).
-# Usage: tools/bundle.sh [--install]
+# Build a release Dr. Rocket.app in target/, and optionally a universal binary, a DMG, a
+# signed and notarized build, and an install to ~/Applications.
+#
+# Usage: tools/bundle.sh [--universal] [--dmg] [--install]
+#
+#   --universal   one app for Apple Silicon and Intel Macs (needs the x86_64-apple-darwin
+#                 Rust target: `rustup target add x86_64-apple-darwin`)
+#   --dmg         also make target/Dr. Rocket-<version>.dmg (drag to Applications)
+#   --install     copy the app to ~/Applications
+#
+# Distribution signing (otherwise the app is signed ad hoc, which only runs on this Mac):
+#   DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"   sign for distribution
+#   NOTARY_PROFILE=<profile>   also notarize the DMG with Apple and staple the ticket
+#                              (create the profile once with `xcrun notarytool store-credentials`)
 set -e
 cd "$(dirname "$0")/.."
-cargo build --release
+
+universal=0; dmg=0; install=0
+for arg in "$@"; do
+  case "$arg" in
+    --universal) universal=1 ;;
+    --dmg) dmg=1 ;;
+    --install) install=1 ;;
+    *) echo "unknown option: $arg" >&2; exit 2 ;;
+  esac
+done
+
 app="target/Dr. Rocket.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp target/release/drrocket "$app/Contents/MacOS/drrocket"
+if [ "$universal" = 1 ]; then
+  cargo build --release --target aarch64-apple-darwin
+  cargo build --release --target x86_64-apple-darwin
+  lipo -create -output "$app/Contents/MacOS/drrocket" \
+    target/aarch64-apple-darwin/release/drrocket target/x86_64-apple-darwin/release/drrocket
+else
+  cargo build --release
+  cp target/release/drrocket "$app/Contents/MacOS/drrocket"
+fi
 
 # Icon set from the rendered PNGs (regenerate with `cargo run --example make_icon`).
 iconset="$(mktemp -d)/AppIcon.iconset"
@@ -49,9 +79,36 @@ cat > "$app/Contents/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
-codesign --force --deep -s - "$app" >/dev/null 2>&1 || true
+
+if [ -n "$DEVELOPER_ID" ]; then
+  # Hardened runtime and a secure timestamp are required for notarization.
+  codesign --force --options runtime --timestamp -s "$DEVELOPER_ID" "$app"
+  echo "Signed with $DEVELOPER_ID"
+else
+  codesign --force --deep -s - "$app" >/dev/null 2>&1 || true
+fi
 echo "Built $app"
-if [ "$1" = "--install" ]; then
+
+if [ "$dmg" = 1 ]; then
+  image="target/Dr. Rocket-$version.dmg"
+  staging="$(mktemp -d)/Dr. Rocket"
+  mkdir -p "$staging"
+  cp -R "$app" "$staging/"
+  ln -s /Applications "$staging/Applications"
+  rm -f "$image"
+  hdiutil create -volname "Dr. Rocket" -srcfolder "$staging" -fs HFS+ -format UDZO "$image" >/dev/null
+  if [ -n "$DEVELOPER_ID" ]; then
+    codesign --force --timestamp -s "$DEVELOPER_ID" "$image"
+  fi
+  if [ -n "$NOTARY_PROFILE" ]; then
+    xcrun notarytool submit "$image" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$image"
+    echo "Notarized and stapled"
+  fi
+  echo "Built $image"
+fi
+
+if [ "$install" = 1 ]; then
   mkdir -p "$HOME/Applications"
   rm -rf "$HOME/Applications/Dr. Rocket.app"
   cp -R "$app" "$HOME/Applications/"
