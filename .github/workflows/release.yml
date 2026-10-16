@@ -1,0 +1,40 @@
+# Build the Windows download and attach it to a GitHub release (the macOS DMG is built
+# locally with tools/bundle.sh --universal --dmg and uploaded alongside). Manual only.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag, e.g. v1.0.0-beta.1 (the release must already exist)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        shell: pwsh
+        run: |
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"').Matches[0].Groups[1].Value
+          $dir = "Dr. Rocket"
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Copy-Item target/release/drrocket.exe "$dir/Dr. Rocket.exe"
+          Copy-Item BETA.md "$dir/README.md"
+          $zip = "Dr. Rocket-$version-windows-x64.zip"
+          Compress-Archive -Path $dir -DestinationPath $zip
+          "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" "${{ env.ZIP }}" --clobber
