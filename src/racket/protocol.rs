@@ -25,6 +25,9 @@ impl Srcloc {
 /// A half-open char range `[start, end)`, serialized as a two-element array.
 pub type Range = (usize, usize);
 
+/// A `(position, length)` pair, serialized as a two-element array (used by coverage).
+pub type Span = (usize, usize);
+
 // ---------------------------------------------------------------------------
 // Runner
 
@@ -254,8 +257,8 @@ pub enum RunEvent {
     Error(ErrorReport),
     Tests(TestReport),
     Coverage {
-        covered: Vec<Range>,
-        uncovered: Vec<Range>,
+        covered: Vec<Span>,
+        uncovered: Vec<Span>,
     },
     Profile(ProfileReport),
     Paused(PausedState),

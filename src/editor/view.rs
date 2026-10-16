@@ -615,7 +615,8 @@ impl EditorView {
             let (fill, border) = match m.kind {
                 MarkKind::Error => (with_alpha(theme.error, 46), Some(theme.error)),
                 MarkKind::StepBefore => (with_alpha(theme.syntax.function.color, 50), Some(theme.syntax.function.color)),
-                MarkKind::Uncovered => (with_alpha(theme.warning, 40), None),
+                // Uncovered code stands out like DrRacket's orange-on-black coverage display.
+                MarkKind::Uncovered => (with_alpha(theme.warning, if theme.dark { 72 } else { 90 }), Some(theme.warning)),
                 MarkKind::Debug => (with_alpha(theme.success, 50), Some(theme.success)),
             };
             self.paint_range_bg(&tp, m.range.start, m.range.end, first, last, fill);

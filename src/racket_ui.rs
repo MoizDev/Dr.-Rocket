@@ -651,8 +651,9 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
         }
         RunEvent::Coverage { uncovered, .. } => {
             tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Uncovered);
-            for (s, e) in uncovered {
-                tab.editor.deco.marks.push(Mark { range: s..e, kind: MarkKind::Uncovered });
+            // Coverage ranges are [position, span] pairs.
+            for (pos, span) in uncovered {
+                tab.editor.deco.marks.push(Mark { range: pos..pos + span, kind: MarkKind::Uncovered });
             }
             let n = tab.editor.deco.marks.iter().filter(|m| m.kind == MarkKind::Uncovered).count();
             let msg = match n {
@@ -1041,9 +1042,15 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
         }
         EditorAction::Rename(pos) => {
             let tab = &mut app.tabs[i];
-            let occ = tab.rk.check.as_ref().map(|c| c.occurrences(pos)).unwrap_or_default();
+            let Some(check) = tab.rk.check.as_ref() else {
+                app.toast("Rename needs Check Syntax information; it runs automatically after edits (or ⇧⌘C).", ToastKind::Info);
+                return;
+            };
+            let occ = check.occurrences(pos);
             if occ.is_empty() {
-                app.toast("Rename needs Check Syntax information for this identifier (try ⇧⌘C).", ToastKind::Info);
+                let imported = check.arrows.iter().any(|a| a.kind == proto::ArrowKind::Imported && a.to.0 <= pos && pos <= a.to.1);
+                let msg = if imported { "This identifier is imported from another module, so it can only be renamed where it is defined." } else { "Place the caret on an identifier defined in this file to rename it." };
+                app.toast(msg, ToastKind::Info);
                 return;
             }
             let name = tab.editor.doc.buffer.slice(occ[0].0..occ[0].1);
