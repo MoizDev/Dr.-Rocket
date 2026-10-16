@@ -1,4 +1,4 @@
-# Build the Windows download and attach it to a GitHub release (the macOS DMG is built
+# Build the Windows and Linux downloads and attach them to a GitHub release (the macOS DMG is built
 # locally with tools/bundle.sh --universal --dmg and uploaded alongside). Manual only.
 name: Release
 
@@ -38,3 +38,42 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: gh release upload "${{ inputs.tag }}" "${{ env.ZIP }}" --clobber
+
+  linux:
+    # Built on the oldest supported Ubuntu so the binary runs on older glibc versions too.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
+      - name: Build
+        run: cargo build --release
+      - name: Package
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          dir="Dr. Rocket"
+          mkdir -p "$dir"
+          cp target/release/drrocket "$dir/drrocket"
+          cp BETA.md "$dir/README.md"
+          cp assets/icon/icon_256.png "$dir/drrocket.png"
+          cat > "$dir/drrocket.desktop" <<DESKTOP
+          [Desktop Entry]
+          Type=Application
+          Name=Dr. Rocket
+          Comment=A fast, modern Racket IDE
+          Exec=drrocket %F
+          Icon=drrocket
+          Categories=Development;IDE;
+          MimeType=text/x-racket;
+          DESKTOP
+          tarball="Dr.Rocket-$version-linux-x64.tar.gz"
+          tar -czf "$tarball" "$dir"
+          echo "TARBALL=$tarball" >> "$GITHUB_ENV"
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "${{ inputs.tag }}" "${{ env.TARBALL }}" --clobber

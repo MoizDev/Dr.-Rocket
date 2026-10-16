@@ -17,6 +17,11 @@ choose Open**, then Open again. (If macOS only offers "Move to Trash", open Syst
 may show "Windows protected your PC" because the beta isn't signed: click **More info** →
 **Run anyway**.
 
+**Linux (x64):** extract `Dr.Rocket-<version>-linux-x64.tar.gz` and run `drrocket` inside
+it. To add it to your app launcher, copy `drrocket` onto your `PATH` (e.g. `~/.local/bin`),
+`drrocket.desktop` to `~/.local/share/applications` and `drrocket.png` to
+`~/.local/share/icons`.
+
 Dr. Rocket finds Racket on its own. If it says "Racket not found", set the path in
 Settings → Racket.
 
