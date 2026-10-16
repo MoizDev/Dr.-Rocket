@@ -30,6 +30,7 @@ pub fn setup_window(handle: &impl raw_window_handle::HasWindowHandle) {
     let Some(window) = view.window() else { return };
     let toolbar = NSToolbar::new(mtm);
     window.setToolbar(Some(&toolbar));
+    WINDOW.with(|w| *w.borrow_mut() = Some(window.clone()));
     window.setToolbarStyle(NSWindowToolbarStyle::Unified);
     window.setTitleVisibility(NSWindowTitleVisibility::Hidden);
     window.setTitlebarAppearsTransparent(true);
@@ -48,6 +49,27 @@ pub fn setup_window(handle: &impl raw_window_handle::HasWindowHandle) {
 
 #[cfg(not(target_os = "macos"))]
 pub fn setup_window(_handle: &impl raw_window_handle::HasWindowHandle) {}
+
+#[cfg(target_os = "macos")]
+thread_local! {
+    static WINDOW: std::cell::RefCell<Option<objc2::rc::Retained<objc2_app_kit::NSWindow>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// In full screen the (empty) toolbar would show as a blank strip over Dr. Rocket's own title
+/// bar, so hide it there and bring it back afterwards (it centers the traffic lights).
+#[cfg(target_os = "macos")]
+pub fn set_fullscreen(fullscreen: bool) {
+    WINDOW.with(|w| {
+        if let Some(toolbar) = w.borrow().as_ref().and_then(|w| w.toolbar())
+            && toolbar.isVisible() == fullscreen
+        {
+            toolbar.setVisible(!fullscreen);
+        }
+    });
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn set_fullscreen(_fullscreen: bool) {}
 
 // ---------------------------------------------------------------------------------------
 // Files opened from Finder ("Open With", double-click, `open -a`).

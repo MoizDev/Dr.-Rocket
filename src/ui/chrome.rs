@@ -21,7 +21,10 @@ impl App {
             ui.ctx().send_viewport_cmd(egui::ViewportCommand::Maximized(!max));
         }
 
-        let left = rect.left() + crate::platform::TRAFFIC_LIGHTS_W + 10.0;
+        let fullscreen = ui.ctx().input(|i| i.viewport().fullscreen.unwrap_or(false));
+        crate::platform::set_fullscreen(fullscreen);
+        // No traffic lights in full screen.
+        let left = rect.left() + if fullscreen { 4.0 } else { crate::platform::TRAFFIC_LIGHTS_W + 10.0 };
         let row = Rect::from_min_max(pos2(left, rect.top()), pos2(rect.right() - 10.0, rect.bottom()));
         let mut bar = ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.spacing_mut().item_spacing.x = 4.0;
