@@ -615,6 +615,7 @@ dependencies = [
  "trash",
  "unicode-segmentation",
  "unicode-width",
+ "winit",
 ]
 
 [[package]]

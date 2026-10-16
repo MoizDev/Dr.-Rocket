@@ -309,6 +309,7 @@ impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>) -> Self {
         crate::platform::setup_window(cc);
         crate::platform::set_repaint_context(&cc.egui_ctx);
+        crate::platform::install_menu(crate::ui::brand::APP_NAME, &crate::commands::menu_specs());
         egui_extras::install_image_loaders(&cc.egui_ctx);
         ui::install_fonts(&cc.egui_ctx);
         let settings = Settings::load();
@@ -1065,6 +1066,27 @@ impl eframe::App for App {
         if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.tabs.iter().any(|t| t.dirty()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.modal = Modal::ConfirmQuit;
+        }
+        for action in crate::platform::take_menu_actions() {
+            match action {
+                crate::platform::MenuAction::Quit => {
+                    if self.tabs.iter().any(|t| t.dirty()) {
+                        self.modal = Modal::ConfirmQuit;
+                    } else {
+                        self.quit_confirmed = true;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    }
+                }
+                crate::platform::MenuAction::Command(i) => {
+                    if let Some(c) = COMMANDS.get(i) {
+                        // Menus act like their shortcuts: ignored while a dialog is open,
+                        // except for commands that open one.
+                        if matches!(self.modal, Modal::None) {
+                            self.run_command(c.cmd);
+                        }
+                    }
+                }
+            }
         }
         for p in crate::platform::take_opened_files() {
             if p.is_dir() {

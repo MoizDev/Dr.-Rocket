@@ -146,6 +146,109 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::About, label: "About Dr. Rocket", group: "App", icon: ic::INFO, shortcut: None },
 ];
 
+/// The native menu bar: commands grouped into menus (`None` = separator).
+pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
+    use crate::platform::{MenuAction, MenuEntry, MenuSpec};
+    let entry = |cmd: Command| {
+        let i = COMMANDS.iter().position(|c| c.cmd == cmd).expect("command in table");
+        Some(MenuEntry { label: COMMANDS[i].label.to_string(), action: MenuAction::Command(i), shortcut: COMMANDS[i].shortcut })
+    };
+    let about = entry(Command::About).map(|mut e| {
+        e.label = format!("About {}", crate::ui::brand::APP_NAME);
+        e
+    });
+    let settings = entry(Command::Settings).map(|mut e| {
+        e.label = "Settings…".into();
+        e
+    });
+    vec![
+        MenuSpec { title: "App", entries: vec![about, None, settings, entry(Command::SelectTheme), entry(Command::KeyboardShortcuts)] },
+        MenuSpec {
+            title: "File",
+            entries: vec![
+                entry(Command::NewFile),
+                entry(Command::OpenFile),
+                entry(Command::OpenFolder),
+                None,
+                entry(Command::Save),
+                entry(Command::SaveAs),
+                entry(Command::SaveAll),
+                None,
+                entry(Command::CloseTab),
+                entry(Command::ReopenClosedTab),
+                entry(Command::CloseFolder),
+                None,
+                entry(Command::RevealInFinder),
+            ],
+        },
+        MenuSpec {
+            title: "View",
+            entries: vec![
+                entry(Command::Palette),
+                None,
+                entry(Command::ToggleLeftPanel),
+                entry(Command::ToggleRightPanel),
+                entry(Command::ToggleBottomPanel),
+                entry(Command::MoveInteractions),
+                None,
+                entry(Command::ShowFiles),
+                entry(Command::ShowOutline),
+                entry(Command::ShowSearch),
+                entry(Command::NewTerminal),
+                None,
+                entry(Command::ZoomIn),
+                entry(Command::ZoomOut),
+                entry(Command::ZoomReset),
+                None,
+                entry(Command::ToggleRainbowBrackets),
+                entry(Command::ToggleBindingArrows),
+            ],
+        },
+        MenuSpec {
+            title: "Racket",
+            entries: vec![
+                entry(Command::Run),
+                entry(Command::Break),
+                entry(Command::Kill),
+                None,
+                entry(Command::Stepper),
+                entry(Command::Debug),
+                entry(Command::CheckSyntax),
+                entry(Command::MacroStepper),
+                entry(Command::RunTests),
+                entry(Command::RunWithCoverage),
+                entry(Command::Profile),
+                entry(Command::ModuleBrowser),
+                None,
+                entry(Command::ChooseLanguage),
+                entry(Command::ClearInteractions),
+                entry(Command::ReindentAll),
+                entry(Command::InsertLambda),
+                None,
+                entry(Command::CreateExecutable),
+                entry(Command::InstallPackage),
+            ],
+        },
+        MenuSpec {
+            title: "Go",
+            entries: vec![
+                entry(Command::QuickOpen),
+                entry(Command::GoToLine),
+                entry(Command::GoToSymbol),
+                None,
+                entry(Command::NextTab),
+                entry(Command::PrevTab),
+                entry(Command::NextProblem),
+                None,
+                entry(Command::FocusEditor),
+                entry(Command::FocusInteractions),
+            ],
+        },
+        MenuSpec { title: "Window", entries: vec![] },
+        MenuSpec { title: "Help", entries: vec![entry(Command::SearchDocs), entry(Command::KeyboardShortcuts)] },
+    ]
+}
+
 pub fn info(cmd: Command) -> &'static CommandInfo {
     COMMANDS.iter().find(|c| c.cmd == cmd).expect("every command has info")
 }

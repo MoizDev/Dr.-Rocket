@@ -22,6 +22,8 @@ pub enum Step {
     Type(String),
     Key(String),
     Command(String),
+    /// `["Racket", "Run"]`: invoke a native menu item.
+    Menu([String; 2]),
     Click([f32; 2]),
     DoubleClick([f32; 2]),
     RightClick([f32; 2]),
@@ -134,6 +136,11 @@ impl Automation {
                     app.run_command(cmd);
                 } else {
                     eprintln!("automation: unknown command {name}");
+                }
+            }
+            Step::Menu([menu, item]) => {
+                if !crate::platform::perform_menu_item(menu, item) {
+                    eprintln!("automation: no menu item {menu} / {item}");
                 }
             }
             Step::Click(p) | Step::DoubleClick(p) | Step::RightClick(p) => {

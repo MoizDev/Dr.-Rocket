@@ -38,6 +38,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         persist_window: !automated,
+        event_loop_builder: platform::event_loop_hook(),
         ..Default::default()
     };
     eframe::run_native(ui::welcome::APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, open)))))
