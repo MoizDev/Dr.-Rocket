@@ -114,7 +114,7 @@ impl App {
             PanelItem::Search => self.search_view(&mut b),
             PanelItem::Problems => self.problems_view(&mut b),
             PanelItem::Terminal(id) => self.terminal_panel(&mut b, id),
-            PanelItem::Interactions | PanelItem::Stepper | PanelItem::Tests | PanelItem::Macros | PanelItem::Docs | PanelItem::Debugger | PanelItem::Profiler => {
+            PanelItem::Interactions | PanelItem::Stepper | PanelItem::Tests | PanelItem::Macros | PanelItem::Docs | PanelItem::Debugger | PanelItem::Profiler | PanelItem::Modules => {
                 crate::racket_ui::panel(self, &mut b, inner, active)
             }
         }

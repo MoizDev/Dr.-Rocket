@@ -37,6 +37,9 @@ impl LanguageDialog {
 pub enum PromptKind {
     Rename { tab: u64, ranges: Vec<(usize, usize)> },
     InstallPackage,
+    NewFile { dir: std::path::PathBuf },
+    NewFolder { dir: std::path::PathBuf },
+    RenamePath { path: std::path::PathBuf },
 }
 
 pub struct Prompt {
@@ -51,6 +54,16 @@ impl Prompt {
     pub fn rename(tab: u64, ranges: Vec<(usize, usize)>, current: String) -> Self {
         let n = ranges.len();
         Self { kind: PromptKind::Rename { tab, ranges }, title: format!("Rename “{current}” ({n} occurrences)"), hint: "New name".into(), text: current, focus: true }
+    }
+    pub fn new_file(dir: std::path::PathBuf) -> Self {
+        Self { kind: PromptKind::NewFile { dir }, title: "New File".into(), hint: "name.rkt".into(), text: String::new(), focus: true }
+    }
+    pub fn new_folder(dir: std::path::PathBuf) -> Self {
+        Self { kind: PromptKind::NewFolder { dir }, title: "New Folder".into(), hint: "folder name".into(), text: String::new(), focus: true }
+    }
+    pub fn rename_path(path: std::path::PathBuf) -> Self {
+        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        Self { kind: PromptKind::RenamePath { path }, title: format!("Rename “{name}”"), hint: "new name".into(), text: name, focus: true }
     }
     pub fn install_package() -> Self {
         Self { kind: PromptKind::InstallPackage, title: "Install Package".into(), hint: "Package name or URL, e.g. threading".into(), text: String::new(), focus: true }
@@ -105,6 +118,52 @@ impl App {
                     let name = p.text.trim().to_string();
                     if !name.is_empty() {
                         crate::racket_ui::install_package(self, &name);
+                    }
+                }
+                PromptKind::NewFile { dir } => {
+                    let name = p.text.trim();
+                    if name.is_empty() || name.contains('/') {
+                        return;
+                    }
+                    let path = dir.join(name);
+                    let initial = if path.extension().is_some_and(|e| e == "rkt") { "#lang racket\n\n" } else { "" };
+                    match std::fs::OpenOptions::new().write(true).create_new(true).open(&path).and_then(|mut f| std::io::Write::write_all(&mut f, initial.as_bytes())) {
+                        Ok(()) => {
+                            self.refresh_tree();
+                            self.open_file(&path);
+                        }
+                        Err(e) => self.toast(format!("Could not create {name}: {e}"), crate::app::ToastKind::Error),
+                    }
+                }
+                PromptKind::NewFolder { dir } => {
+                    let name = p.text.trim();
+                    if name.is_empty() {
+                        return;
+                    }
+                    match std::fs::create_dir_all(dir.join(name)) {
+                        Ok(()) => self.refresh_tree(),
+                        Err(e) => self.toast(format!("Could not create folder: {e}"), crate::app::ToastKind::Error),
+                    }
+                }
+                PromptKind::RenamePath { path } => {
+                    let name = p.text.trim();
+                    if name.is_empty() || name.contains('/') {
+                        return;
+                    }
+                    let Some(parent) = path.parent() else { return };
+                    let to = parent.join(name);
+                    match std::fs::rename(&path, &to) {
+                        Ok(()) => {
+                            for t in self.tabs.iter_mut() {
+                                if let Some(tp) = &t.path
+                                    && let Ok(rest) = tp.strip_prefix(&path)
+                                {
+                                    t.path = Some(if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
+                                }
+                            }
+                            self.refresh_tree();
+                        }
+                        Err(e) => self.toast(format!("Rename failed: {e}"), crate::app::ToastKind::Error),
                     }
                 }
             },

@@ -25,6 +25,7 @@ pub enum PanelItem {
     Problems,
     Debugger,
     Profiler,
+    Modules,
     Terminal(u64),
 }
 
@@ -42,6 +43,7 @@ impl PanelItem {
             PanelItem::Problems => "Problems",
             PanelItem::Debugger => "Debugger",
             PanelItem::Profiler => "Profiler",
+            PanelItem::Modules => "Modules",
             PanelItem::Terminal(_) => "Terminal",
         }
     }
@@ -59,6 +61,7 @@ impl PanelItem {
             PanelItem::Problems => ic::ERROR,
             PanelItem::Debugger => ic::BUG_REPORT,
             PanelItem::Profiler => ic::SPEED,
+            PanelItem::Modules => ic::ACCOUNT_TREE,
             PanelItem::Terminal(_) => ic::TERMINAL,
         }
     }
@@ -222,6 +225,8 @@ pub struct Tab {
     pub lang_changed: bool,
     pub disk_mtime: Option<SystemTime>,
     pub rk: crate::racket_ui::RacketTab,
+    /// (buffer version, time it was first seen) for autosave debouncing.
+    edit_seen: (u64, f64),
 }
 
 impl Tab {
@@ -426,7 +431,7 @@ impl App {
             editor.completion_words = words.clone();
             rk.input.completion_words = words.clone();
         }
-        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk });
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, edit_seen: (0, 0.0) });
         self.tabs.len() - 1
     }
 
@@ -567,6 +572,57 @@ impl App {
                 tab.editor.doc.buffer.selections = sel;
                 tab.disk_mtime = mtime;
             }
+        }
+    }
+
+    /// Save dirty files after the configured delay since their last edit.
+    fn autosave(&mut self, now: f64) {
+        if !self.settings.autosave {
+            return;
+        }
+        let delay = self.settings.autosave_delay_ms as f64 / 1000.0;
+        let mut due = Vec::new();
+        for (i, t) in self.tabs.iter_mut().enumerate() {
+            let v = t.editor.doc.version();
+            if t.edit_seen.0 != v {
+                t.edit_seen = (v, now);
+            }
+            if t.path.is_some() && t.dirty() {
+                if now - t.edit_seen.1 >= delay {
+                    due.push(i);
+                } else {
+                    self.ctx.request_repaint_after(std::time::Duration::from_secs_f64(delay - (now - t.edit_seen.1) + 0.01));
+                }
+            }
+        }
+        for i in due {
+            self.save_tab(i, false);
+        }
+    }
+
+    /// Files dropped on the window open as tabs (folders open as the project).
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped = ctx.input(|i| i.raw.dropped_files.clone());
+        for f in dropped {
+            let p = f.path().to_path_buf();
+            if p.as_os_str().is_empty() {
+                continue;
+            }
+            if p.is_dir() {
+                self.open_folder(&p);
+            } else {
+                self.open_file(&p);
+            }
+        }
+        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        if hovering {
+            let screen = ctx.content_rect();
+            let theme = self.theme.clone();
+            egui::Area::new(Id::unique("drop-overlay")).order(egui::Order::Foreground).fixed_pos(screen.min).interactable(false).show(ctx, |ui| {
+                let r = screen.shrink(10.0);
+                ui.painter().rect(r, CornerRadius::same(14), crate::theme::with_alpha(theme.text_accent, 30), Stroke::new(2.0, crate::theme::with_alpha(theme.text_accent, 180)), StrokeKind::Inside);
+                ui.painter().text(r.center(), egui::Align2::CENTER_CENTER, "Drop to open", ui::semibold(22.0), theme.text);
+            });
         }
     }
 
@@ -725,6 +781,24 @@ impl App {
             Ok(view) => {
                 let id = self.next_id;
                 self.next_id += 1;
+                self.terminals.push(TerminalTab { id, view, focus: true });
+                self.layout.show(PanelItem::Terminal(id), dock);
+            }
+            Err(e) => self.toast(format!("Could not start terminal: {e}"), ToastKind::Error),
+        }
+    }
+
+    pub fn refresh_tree(&mut self) {
+        if let Some(ws) = &mut self.workspace {
+            ws.invalidate();
+        }
+    }
+
+    /// Open a terminal whose working directory is `dir`.
+    pub fn terminal_at(&mut self, dir: &Path, dock: Dock) {
+        match crate::terminal::TerminalView::spawn(dir, self.settings.shell.as_deref(), &self.ctx) {
+            Ok(view) => {
+                let id = self.alloc_id();
                 self.terminals.push(TerminalTab { id, view, focus: true });
                 self.layout.show(PanelItem::Terminal(id), dock);
             }
@@ -995,6 +1069,8 @@ impl eframe::App for App {
             ws.poll();
         }
         self.reload_changed_files();
+        let now = ctx.input(|i| i.time);
+        self.autosave(now);
         crate::racket_ui::poll(self, ctx);
     }
 
@@ -1007,6 +1083,7 @@ impl eframe::App for App {
         self.layout_and_paint(ui);
         self.modal_ui(&ctx);
         self.toasts_ui(&ctx);
+        self.handle_dropped_files(&ctx);
         if let Some((n, total, max, since)) = &mut self.frame_stats {
             let dt = started.elapsed();
             *n += 1;

@@ -17,6 +17,15 @@ pub struct SidebarState {
     pub focus_search: bool,
 }
 
+enum TreeAction {
+    NewFile(PathBuf),
+    NewFolder(PathBuf),
+    Rename(PathBuf),
+    Trash(PathBuf),
+    CopyRelative(PathBuf),
+    Terminal(PathBuf),
+}
+
 #[derive(Clone)]
 pub struct SearchHit {
     pub path: PathBuf,
@@ -60,6 +69,7 @@ impl App {
         let dirty: std::collections::HashSet<PathBuf> = self.tabs.iter().filter(|t| t.dirty()).filter_map(|t| t.path.clone()).collect();
         let mut toggle = None;
         let mut open = None;
+        let mut action: Option<TreeAction> = None;
         let width = ui.available_width();
         egui::ScrollArea::vertical().id_salt("files").auto_shrink([false, false]).show_rows(ui, ROW_H, rows.len(), |ui, range| {
             for row in &rows[range] {
@@ -98,16 +108,42 @@ impl App {
                         open = Some(row.entry.path.clone());
                     }
                 }
+                let entry = row.entry.clone();
                 resp.context_menu(|ui| {
-                    if ui.button("Reveal in Finder").clicked() {
-                        let _ = std::process::Command::new("open").arg("-R").arg(&row.entry.path).spawn();
+                    ui.set_min_width(220.0);
+                    let dir = if entry.is_dir { entry.path.clone() } else { entry.path.parent().map(|p| p.to_path_buf()).unwrap_or_default() };
+                    if ui.button("New File…").clicked() {
+                        action = Some(TreeAction::NewFile(dir.clone()));
                         ui.close();
                     }
+                    if ui.button("New Folder…").clicked() {
+                        action = Some(TreeAction::NewFolder(dir.clone()));
+                        ui.close();
+                    }
+                    ui.separator();
+                    if ui.button("Rename…").clicked() {
+                        action = Some(TreeAction::Rename(entry.path.clone()));
+                        ui.close();
+                    }
+                    if ui.button("Move to Trash").clicked() {
+                        action = Some(TreeAction::Trash(entry.path.clone()));
+                        ui.close();
+                    }
+                    ui.separator();
                     if ui.button("Copy Path").clicked() {
-                        ui.ctx().copy_text(row.entry.path.display().to_string());
+                        ui.ctx().copy_text(entry.path.display().to_string());
                         ui.close();
                     }
-                    if !row.entry.is_dir && ui.button("Open in Terminal").clicked() {
+                    if ui.button("Copy Relative Path").clicked() {
+                        action = Some(TreeAction::CopyRelative(entry.path.clone()));
+                        ui.close();
+                    }
+                    if ui.button("Reveal in Finder").clicked() {
+                        let _ = std::process::Command::new("open").arg("-R").arg(&entry.path).spawn();
+                        ui.close();
+                    }
+                    if ui.button("Open Terminal Here").clicked() {
+                        action = Some(TreeAction::Terminal(dir.clone()));
                         ui.close();
                     }
                 });
@@ -120,6 +156,25 @@ impl App {
         }
         if let Some(p) = open {
             self.open_file(&p);
+        }
+        match action {
+            Some(TreeAction::NewFile(d)) => self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::new_file(d)),
+            Some(TreeAction::NewFolder(d)) => self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::new_folder(d)),
+            Some(TreeAction::Rename(p)) => self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::rename_path(p)),
+            Some(TreeAction::Trash(p)) => match trash::delete(&p) {
+                Ok(()) => {
+                    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                    self.toast(format!("Moved “{name}” to the Trash"), crate::app::ToastKind::Info);
+                    self.refresh_tree();
+                }
+                Err(e) => self.toast(format!("Could not move to Trash: {e}"), crate::app::ToastKind::Error),
+            },
+            Some(TreeAction::CopyRelative(p)) => {
+                let rel = self.workspace.as_ref().map(|w| w.relative(&p)).unwrap_or(p);
+                ui.ctx().copy_text(rel.display().to_string());
+            }
+            Some(TreeAction::Terminal(d)) => self.terminal_at(&d, crate::app::Dock::Bottom),
+            None => {}
         }
     }
 

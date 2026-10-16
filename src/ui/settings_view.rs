@@ -473,6 +473,12 @@ impl App {
         row(ui, &theme, "Restore session on launch", "Reopen the last project and files", |ui| {
             toggle(ui, &theme, &mut s.restore_session);
         });
+        row(ui, &theme, "Autosave", "Save files shortly after you stop typing", |ui| {
+            if s.autosave {
+                ui.add(egui::DragValue::new(&mut s.autosave_delay_ms).range(100..=10_000).speed(10.0).suffix(" ms"));
+            }
+            toggle(ui, &theme, &mut s.autosave);
+        });
     }
 
     fn settings_racket(&mut self, ui: &mut Ui) {

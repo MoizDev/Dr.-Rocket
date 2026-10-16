@@ -173,6 +173,10 @@ impl Settings {
             Some("bar") => s.cursor_shape = CursorShape::Bar,
             _ => {}
         }
+        if let Some(ms) = v.pointer("/autosave/after_delay/milliseconds").and_then(|x| x.as_u64()) {
+            s.autosave = true;
+            s.autosave_delay_ms = ms.max(100);
+        }
         if let Some(b) = v.get("cursor_blink").and_then(|x| x.as_bool()) {
             s.cursor_blink = b;
         }

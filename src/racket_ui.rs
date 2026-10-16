@@ -31,6 +31,7 @@ enum Pending {
     Docs,
     Completions { key: String },
     MacroSteps { tab: u64 },
+    Modules { tab: u64 },
 }
 
 /// App-wide Racket state.
@@ -114,6 +115,13 @@ pub enum StepItem {
     Error { before: Vec<proto::StepExpr>, message: String, before_src: Option<proto::SrcSpan> },
 }
 
+pub struct ModulesView {
+    pub graph: Option<proto::ModuleGraph>,
+    pub include_libs: bool,
+    pub loading: bool,
+    pub error: Option<String>,
+}
+
 pub struct MacroView {
     pub steps: Vec<proto::MacroStep>,
     pub current: usize,
@@ -139,6 +147,7 @@ pub struct RacketTab {
     pub instrument: Instrument,
     pub stepper: Option<StepperView>,
     pub macros: Option<MacroView>,
+    pub modules: Option<ModulesView>,
     pub check: Option<CheckSyntaxResult>,
     check_due: Option<f64>,
     check_req: Option<RequestId>,
@@ -169,6 +178,7 @@ impl RacketTab {
             instrument: Instrument::Errortrace,
             stepper: None,
             macros: None,
+            modules: None,
             check: None,
             check_due: None,
             check_req: None,
@@ -380,6 +390,21 @@ fn poll_server(app: &mut App) {
                     app.tabs[i].rk.macros = None;
                 }
                 app.toast(format!("Macro stepper: {e}"), ToastKind::Error);
+            }
+            (Pending::Modules { tab }, res) => {
+                if let Some(i) = tab_index(app, tab)
+                    && let Some(mv) = app.tabs[i].rk.modules.as_mut()
+                {
+                    mv.loading = false;
+                    match res {
+                        Ok(ServerResponse::ModuleGraph(g)) => {
+                            mv.graph = Some(g);
+                            mv.error = None;
+                        }
+                        Err(e) => mv.error = Some(e),
+                        Ok(_) => {}
+                    }
+                }
             }
             (_, Err(e)) if e != "cancelled" => log_error(&e),
             _ => {}
@@ -892,10 +917,24 @@ pub fn run(app: &mut App, cmd: Command) {
         }
         Command::InstallPackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::install_package()),
         Command::ModuleBrowser => {
-            app.toast("Module browser: showing requires in Check Syntax arrows", ToastKind::Info);
+            let include_libs = app.tabs[i].rk.modules.as_ref().is_some_and(|m| m.include_libs);
+            request_modules(app, i, include_libs);
+            app.layout.show(PanelItem::Modules, Dock::Right);
         }
         _ => {}
     }
+}
+
+fn request_modules(app: &mut App, i: usize, include_libs: bool) {
+    let tab = &app.tabs[i];
+    let Some(path) = path_string(tab) else {
+        app.toast("Save the file to browse its modules", ToastKind::Info);
+        return;
+    };
+    let source = lang::save(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
+    let id = tab.id;
+    app.tabs[i].rk.modules = Some(ModulesView { graph: None, include_libs, loading: true, error: None });
+    request(app, ServerRequest::ModuleGraph { path, source, include_libs }, Pending::Modules { tab: id });
 }
 
 pub fn run_in_terminal(app: &mut App, program: &str, args: &[String]) {
@@ -1123,6 +1162,7 @@ pub fn panel(app: &mut App, ui: &mut Ui, rect: Rect, item: PanelItem) {
         PanelItem::Docs => docs_panel(app, ui),
         PanelItem::Debugger => debugger_panel(app, ui),
         PanelItem::Profiler => profiler_panel(app, ui),
+        PanelItem::Modules => modules_panel(app, ui, rect),
         _ => {}
     }
 }
@@ -1880,6 +1920,134 @@ fn profiler_panel(app: &mut App, ui: &mut Ui) {
     });
     if let Some(l) = jump {
         jump_to_srcloc(app, &l);
+    }
+}
+
+// ---------------------------------------------------------------------------------- module browser
+
+fn modules_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
+    if no_tab(app, ui, ic::ACCOUNT_TREE, "Module Browser", "") {
+        return;
+    }
+    let theme = app.theme.clone();
+    let tk = app.tokens();
+    let i = app.active;
+    let Some(mv) = app.tabs[i].rk.modules.as_ref() else {
+        empty_state(ui, &theme, ic::ACCOUNT_TREE, "Module Browser", "See which modules this file requires");
+        let r = ui.available_rect_before_wrap();
+        let br = Rect::from_center_size(r.center() + vec2(0.0, 64.0), vec2(160.0, 32.0));
+        let resp = ui.interact(br, Id::unique("start-modules"), Sense::click());
+        ui.painter().rect_filled(br, CornerRadius::same(8), if resp.hovered() { mix(theme.text_accent, Color32::WHITE, 0.1) } else { theme.text_accent });
+        ui.painter().text(br.center(), Align2::CENTER_CENTER, "Show Modules", ui::medium(13.5), Color32::WHITE);
+        if resp.clicked() {
+            request_modules(app, i, false);
+        }
+        return;
+    };
+    // Toolbar.
+    let include_libs = mv.include_libs;
+    let mut toggle_libs = false;
+    let bar = Rect::from_min_size(rect.min + vec2(10.0, 4.0), vec2(rect.width() - 20.0, 34.0));
+    let mut b = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    let mut on = include_libs;
+    if crate::ui::settings_view::toggle(&mut b, &theme, &mut on).changed() {
+        toggle_libs = true;
+    }
+    b.label(egui::RichText::new("Show library modules").color(theme.text_muted));
+    if toggle_libs {
+        request_modules(app, i, !include_libs);
+        return;
+    }
+    let mv = app.tabs[i].rk.modules.as_ref().unwrap();
+    if mv.loading {
+        let mut c = ui.new_child(UiBuilder::new().max_rect(rect.shrink(40.0)));
+        c.spinner();
+        return;
+    }
+    if let Some(e) = &mv.error {
+        let mut c = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 50.0))));
+        c.label(egui::RichText::new(e).color(theme.error));
+        return;
+    }
+    let Some(g) = mv.graph.clone() else { return };
+    // Layer nodes by longest path from the root (node 0 is the file itself).
+    let n = g.nodes.len();
+    let mut layer = vec![0usize; n];
+    for _ in 0..n {
+        let mut changed = false;
+        for &(a, b) in &g.edges {
+            if a < n && b < n && layer[b] < layer[a] + 1 && layer[a] + 1 < n {
+                layer[b] = layer[a] + 1;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let layers = layer.iter().copied().max().unwrap_or(0) + 1;
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new(); layers];
+    for (k, &l) in layer.iter().enumerate() {
+        rows[l].push(k);
+    }
+    let node_h = 30.0;
+    let gap_y = 56.0;
+    let font = ui::medium(12.5);
+    let widths: Vec<f32> = g.nodes.iter().map(|nd| ui.painter().layout_no_wrap(nd.label.clone(), font.clone(), theme.text).size().x + 40.0).collect();
+    let row_w: Vec<f32> = rows.iter().map(|r| r.iter().map(|&k| widths[k] + 14.0).sum::<f32>()).collect();
+    let canvas_w = row_w.iter().copied().fold(rect.width() - 30.0, f32::max);
+    let canvas_h = layers as f32 * (node_h + gap_y) + 20.0;
+    let body = Rect::from_min_max(pos2(rect.left(), rect.top() + 44.0), rect.max);
+    ui.painter().hline(rect.left()..=rect.right(), body.top() - 2.0, Stroke::new(1.0, tk.island_border));
+    let mut child = ui.new_child(UiBuilder::new().max_rect(body));
+    child.set_clip_rect(body.intersect(ui.clip_rect()));
+    let mut open_path = None;
+    egui::ScrollArea::both().id_salt("modules").auto_shrink([false, false]).show(&mut child, |ui| {
+        let (area, _) = ui.allocate_exact_size(vec2(canvas_w + 20.0, canvas_h), Sense::hover());
+        let mut pos = vec![Rect::NOTHING; n];
+        for (l, row) in rows.iter().enumerate() {
+            let mut x = area.left() + 10.0 + (canvas_w - row_w[l]) / 2.0;
+            let y = area.top() + 14.0 + l as f32 * (node_h + gap_y);
+            for &k in row {
+                pos[k] = Rect::from_min_size(pos2(x, y), vec2(widths[k], node_h));
+                x += widths[k] + 14.0;
+            }
+        }
+        let p = ui.painter();
+        for &(a, b) in &g.edges {
+            if a >= n || b >= n {
+                continue;
+            }
+            let from = pos[a].center_bottom();
+            let to = pos[b].center_top();
+            let c = if g.nodes[b].lib { with_alpha(theme.text_muted, 70) } else { with_alpha(theme.text_accent, 140) };
+            let mid = (to.y - from.y) * 0.5;
+            p.add(egui::epaint::CubicBezierShape::from_points_stroke([from, from + vec2(0.0, mid), to - vec2(0.0, mid), to], false, Color32::TRANSPARENT, Stroke::new(1.3, c)));
+            p.circle_filled(to, 2.5, c);
+        }
+        for (k, nd) in g.nodes.iter().enumerate() {
+            let r = pos[k];
+            let resp = ui.interact(r, Id::unique(("module-node", k)), Sense::click());
+            let root = k == 0;
+            let fill = if root { mix(tk.island, theme.text_accent, 0.22) } else if resp.hovered() { tk.pressed } else { tk.hover };
+            let stroke = if root { Stroke::new(1.0, with_alpha(theme.text_accent, 180)) } else { Stroke::new(1.0, tk.island_border) };
+            ui.painter().rect(r, CornerRadius::same(15), fill, stroke, StrokeKind::Inside);
+            let glyph = if nd.lib { ic::INVENTORY_2 } else { ic::DESCRIPTION };
+            let gc = if nd.lib { theme.text_placeholder } else { theme.syntax.function.color };
+            ui.painter().text(pos2(r.left() + 16.0, r.center().y), Align2::CENTER_CENTER, glyph, ui::icon_font(15.0), gc);
+            ui.painter().text(pos2(r.left() + 30.0, r.center().y), Align2::LEFT_CENTER, &nd.label, font.clone(), if nd.lib { theme.text_muted } else { theme.text });
+            if let Some(path) = &nd.path
+                && !nd.lib
+            {
+                let resp = resp.on_hover_text(crate::config::tildify(Path::new(path))).on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.clicked() {
+                    open_path = Some(PathBuf::from(path));
+                }
+            }
+        }
+    });
+    if let Some(p) = open_path {
+        app.open_file(&p);
     }
 }
 
