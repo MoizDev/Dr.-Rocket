@@ -331,6 +331,7 @@ impl App {
             terminals: Vec::new(),
             racket: Default::default(),
         };
+        app.apply_theme_overrides();
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
         if restore {
             let s = Session::load();
@@ -380,10 +381,26 @@ impl App {
 
     pub fn set_theme(&mut self, name: &str, persist: bool) {
         self.theme = self.themes.get_or_default(name);
+        self.apply_theme_overrides();
         if persist {
             self.settings.theme = self.theme.name.clone();
             let _ = self.settings.save();
         }
+    }
+
+    /// Re-derive the active theme from the registry plus user overrides (caret color,
+    /// bracket palette). Call after the theme or those settings change.
+    pub fn apply_theme_overrides(&mut self) {
+        let mut t = self.themes.get_or_default(&self.theme.name);
+        if let Some(c) = self.settings.cursor_color.as_deref().and_then(crate::theme::parse_color) {
+            t.cursor = c;
+        }
+        let palette: Vec<_> = self.settings.rainbow_colors.iter().filter_map(|c| crate::theme::parse_color(c)).collect();
+        if !palette.is_empty() {
+            t.rainbow = palette;
+        }
+        self.theme = t;
+        self.styled_for = None;
     }
 
     // ------------------------------------------------------------------ files

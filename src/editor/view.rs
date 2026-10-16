@@ -448,6 +448,9 @@ impl EditorView {
 
         // ---- interaction
         let resp = ui.interact(rect, self.id, Sense::click_and_drag());
+        if resp.clicked() || resp.drag_started() {
+            resp.request_focus();
+        }
         if self.focus_request {
             resp.request_focus();
             self.focus_request = false;
@@ -573,7 +576,13 @@ impl EditorView {
         let bracket = if sels.list.len() == 1 && primary.is_empty() { sexp::bracket_pair_at(toks, primary.head) } else { None };
         if let Some((o, c)) = bracket {
             let (s, e) = (toks[o].start, toks[c].end);
-            self.paint_range_bg(&tp, s, e, first, last, with_alpha(theme.text, if theme.dark { 9 } else { 12 }));
+            // The pair's own rainbow color makes it easy to see which brackets belong together.
+            let pair_color = if style.settings.bracket_pair_highlight && style.settings.rainbow_brackets { Some(theme.rainbow(toks[o].depth as usize)) } else { None };
+            let shade = match pair_color {
+                Some(pc) => with_alpha(pc, if theme.dark { 12 } else { 18 }),
+                None => with_alpha(theme.text, if theme.dark { 9 } else { 12 }),
+            };
+            self.paint_range_bg(&tp, s, e, first, last, shade);
             for k in [o, c] {
                 let t = toks[k];
                 let line = self.doc.buffer.line_of(t.start);
@@ -582,7 +591,11 @@ impl EditorView {
                     let x1 = self.x_of(line, t.end - self.doc.buffer.line_start(line));
                     let y = self.line_y(line);
                     let r = Rect::from_min_max(pos2(x0 - 1.0, y + 3.0), pos2(x1 + 1.0, y + line_h - 3.0));
-                    tp.rect(r, CornerRadius::same(3), with_alpha(theme.bracket_match, 150), Stroke::new(1.0, with_alpha(theme.text_muted, 90)), StrokeKind::Inside);
+                    let (fill, stroke) = match pair_color {
+                        Some(pc) => (with_alpha(pc, 45), Stroke::new(1.0, with_alpha(pc, 200))),
+                        None => (with_alpha(theme.bracket_match, 150), Stroke::new(1.0, with_alpha(theme.text_muted, 90))),
+                    };
+                    tp.rect(r, CornerRadius::same(3), fill, stroke, StrokeKind::Inside);
                 }
             }
         }
@@ -640,7 +653,7 @@ impl EditorView {
 
         // Indent guides (structure-aware: one guide per enclosing multi-line list).
         if style.settings.indent_guides && code {
-            self.paint_indent_guides(&tp, toks, first, last, theme, primary.head);
+            self.paint_indent_guides(&tp, toks, first, last, style, primary.head);
         }
 
         // Text.
@@ -845,7 +858,7 @@ impl EditorView {
             let col = s.head - self.doc.buffer.line_start(line);
             let target = pos2(self.x_of(line, col), self.line_y(line));
             // Animate the primary caret (smooth caret movement).
-            let pos = if k == sels.primary {
+            let pos = if k == sels.primary && style.settings.smooth_caret {
                 let prev = self.caret_anim.unwrap_or(target);
                 let d = target - prev;
                 let next = if d.length() < 0.5 || d.length() > 400.0 { target } else { prev + d * 0.45 };
@@ -864,7 +877,8 @@ impl EditorView {
             let color = if focused { theme.cursor } else { with_alpha(theme.cursor, 110) };
             match shape {
                 CursorShape::Bar => {
-                    p.rect_filled(Rect::from_min_size(pos2(pos.x - 1.0, pos.y + 3.0), vec2(2.0, line_h - 6.0)), CornerRadius::same(1), color);
+                    let w = style.settings.cursor_width.clamp(1.0, 8.0);
+                    p.rect_filled(Rect::from_min_size(pos2(pos.x - w / 2.0, pos.y + 3.0), vec2(w, line_h - 6.0)), CornerRadius::same((w / 2.0).min(2.0) as u8), color);
                 }
                 CursorShape::Block => {
                     let w = self.geom.char_w;
@@ -879,7 +893,8 @@ impl EditorView {
                     }
                 }
                 CursorShape::Underline => {
-                    p.rect_filled(Rect::from_min_size(pos2(pos.x, pos.y + line_h - 4.0), vec2(self.geom.char_w, 2.0)), CornerRadius::ZERO, color);
+                    let w = style.settings.cursor_width.clamp(1.0, 6.0);
+                    p.rect_filled(Rect::from_min_size(pos2(pos.x, pos.y + line_h - 2.0 - w), vec2(self.geom.char_w, w)), CornerRadius::ZERO, color);
                 }
             }
         }
@@ -931,34 +946,70 @@ impl EditorView {
         let _ = ui;
     }
 
-    fn paint_indent_guides(&self, p: &egui::Painter, toks: &[Token], first: usize, last: usize, theme: &Theme, cursor: usize) {
+    /// Structure-aware indent guides: one per enclosing multi-line list, at its bracket's
+    /// column. Optionally colored by depth (rainbow) and with a translucent depth fill.
+    fn paint_indent_guides(&self, p: &egui::Painter, toks: &[Token], first: usize, last: usize, style: &EditorStyle, cursor: usize) {
+        let theme = style.theme;
+        let rainbow = style.settings.rainbow_indent_guides;
+        let fill = style.settings.indent_rainbow_fill;
         let b = &self.doc.buffer;
         let active_open = sexp::enclosing_open(toks, cursor);
+        let col_x = |line: usize, col: usize| -> f32 {
+            if self.galleys.contains_key(&line) && col <= b.line_len(line) {
+                self.x_of(line, col)
+            } else {
+                self.geom.text_left - self.scroll.x + col as f32 * self.geom.char_w
+            }
+        };
+        let mut guides: Vec<(usize, u16, bool)> = Vec::with_capacity(16);
         for line in first..=last {
             let ls = b.line_start(line);
             let indent = b.indentation(line);
             let blank = b.line_len(line) == indent;
-            // Opens enclosing this line's start, innermost first.
+            // Opens enclosing this line's start that began on an earlier line.
+            guides.clear();
             let mut probe = ls;
-            let mut depth = 0;
+            let mut n = 0;
             while let Some(o) = sexp::enclosing_open(toks, probe) {
-                let ol = b.line_of(toks[o].start);
-                if ol < line {
+                if b.line_of(toks[o].start) < line {
                     let col = b.col_of(toks[o].end - 1);
                     if col < indent || (blank && col < 200) {
-                        let x = self.x_of(line, col).round() + 0.5;
-                        let x = if self.galleys.contains_key(&line) && col > b.line_len(line) { self.geom.text_left - self.scroll.x + col as f32 * self.geom.char_w + 0.5 } else { x };
-                        let y = self.line_y(line);
-                        let active = Some(o) == active_open;
-                        let c = if active { theme.indent_guide_active } else { theme.indent_guide };
-                        p.line_segment([pos2(x, y), pos2(x, y + self.geom.line_h)], Stroke::new(1.0, c));
+                        guides.push((col, toks[o].depth, Some(o) == active_open));
                     }
                 }
                 probe = toks[o].start;
-                depth += 1;
-                if depth > 24 {
+                n += 1;
+                if n > 32 {
                     break;
                 }
+            }
+            if guides.is_empty() {
+                continue;
+            }
+            guides.reverse(); // outermost first
+            let y = self.line_y(line);
+            let h = self.geom.line_h;
+            if fill && !blank {
+                // Bands from each guide to the next (or to the end of the indentation).
+                for (k, &(col, depth, _)) in guides.iter().enumerate() {
+                    let x0 = col_x(line, col);
+                    let next = guides.get(k + 1).map(|g| g.0).unwrap_or(indent);
+                    let x1 = col_x(line, next.max(col));
+                    if x1 > x0 + 1.0 {
+                        p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + h)), CornerRadius::ZERO, with_alpha(theme.rainbow(depth as usize), if theme.dark { 16 } else { 26 }));
+                    }
+                }
+            }
+            for &(col, depth, active) in &guides {
+                let x = col_x(line, col).round() + 0.5;
+                let c = if rainbow {
+                    with_alpha(theme.rainbow(depth as usize), if active { 210 } else { 80 })
+                } else if active {
+                    theme.indent_guide_active
+                } else {
+                    theme.indent_guide
+                };
+                p.line_segment([pos2(x, y), pos2(x, y + h)], Stroke::new(if active && rainbow { 1.5 } else { 1.0 }, c));
             }
         }
     }
@@ -1820,7 +1871,7 @@ impl EditorView {
                         self.find_step(!back);
                         resp.request_focus();
                     }
-                    if ui.input(|i| i.key_pressed(Key::Escape)) && resp.has_focus() {
+                    if ui.input(|i| i.key_pressed(Key::Escape)) && (resp.has_focus() || resp.lost_focus()) {
                         self.find.open = false;
                         self.focus_request = true;
                     }

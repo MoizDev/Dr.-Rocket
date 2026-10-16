@@ -292,6 +292,9 @@ impl App {
         });
         if self.settings != before {
             let _ = self.settings.save();
+            if self.settings.cursor_color != before.cursor_color || self.settings.rainbow_colors != before.rainbow_colors {
+                self.apply_theme_overrides();
+            }
         }
         if !close {
             self.modal = Modal::Settings(sv);
@@ -346,27 +349,115 @@ impl App {
 
     fn settings_editor(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
-        let s = &mut self.settings;
-        ui.label(egui::RichText::new("Editor").font(ui::semibold(15.0)).color(theme.text));
+        caret_and_brackets_preview(ui, &theme, &self.settings, self.settings.buffer_font_size.min(17.0));
+        ui.add_space(10.0);
+
+        ui.label(egui::RichText::new("Caret").font(ui::semibold(15.0)).color(theme.text));
         ui.add_space(4.0);
-        row(ui, &theme, "Cursor shape", "", |ui| {
-            egui::ComboBox::from_id_salt("cursor-shape")
-                .selected_text(format!("{:?}", s.cursor_shape))
-                .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut s.cursor_shape, CursorShape::Bar, "Bar");
-                    ui.selectable_value(&mut s.cursor_shape, CursorShape::Block, "Block");
-                    ui.selectable_value(&mut s.cursor_shape, CursorShape::Underline, "Underline");
-                });
+        let s = &mut self.settings;
+        row(ui, &theme, "Shape", "Block is the thick, terminal-style caret", |ui| {
+            for (shape, label) in [(CursorShape::Underline, "Underline"), (CursorShape::Block, "Block"), (CursorShape::Bar, "Bar")] {
+                if ui.add(egui::Button::new(label).selected(s.cursor_shape == shape)).clicked() {
+                    s.cursor_shape = shape;
+                }
+            }
         });
-        row(ui, &theme, "Blinking cursor", "", |ui| {
+        row(ui, &theme, "Thickness", "Width of the bar caret, height of the underline", |ui| {
+            ui.add(egui::Slider::new(&mut s.cursor_width, 1.0..=6.0).step_by(0.5).suffix(" px"));
+        });
+        row(ui, &theme, "Smooth caret", "The caret glides to its new position", |ui| {
+            toggle(ui, &theme, &mut s.smooth_caret);
+        });
+        row(ui, &theme, "Blinking caret", "", |ui| {
             toggle(ui, &theme, &mut s.cursor_blink);
         });
+        let mut custom = s.cursor_color.is_some();
+        let mut color = s.cursor_color.as_deref().and_then(crate::theme::parse_color).unwrap_or(theme.cursor);
+        row(ui, &theme, "Custom caret color", "Otherwise the theme's caret color", |ui| {
+            if custom && ui.color_edit_button_srgba(&mut color).changed() {
+                s.cursor_color = Some(hex(color));
+            }
+            if toggle(ui, &theme, &mut custom).changed() {
+                s.cursor_color = if custom { Some(hex(color)) } else { None };
+            }
+        });
+
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Brackets & Indentation").font(ui::semibold(15.0)).color(theme.text));
+        ui.add_space(4.0);
         row(ui, &theme, "Rainbow brackets", "Color parentheses by nesting depth", |ui| {
             toggle(ui, &theme, &mut s.rainbow_brackets);
         });
-        row(ui, &theme, "Indent guides", "Structure-aware guides for each open list", |ui| {
+        row(ui, &theme, "Highlight the bracket pair at the caret", "In its own depth color, with its s-expression shaded", |ui| {
+            toggle(ui, &theme, &mut s.bracket_pair_highlight);
+        });
+        // Palette editor.
+        ui.add_space(4.0);
+        ui.label(egui::RichText::new("Bracket colors").font(ui::medium(14.0)).color(theme.text));
+        ui.label(egui::RichText::new("Used for brackets and indent guides, cycling by depth.").size(12.5).color(theme.text_placeholder));
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            let theme_default = s.rainbow_colors.is_empty();
+            if ui.add(egui::Button::new("Theme").selected(theme_default)).clicked() {
+                s.rainbow_colors.clear();
+            }
+            for (name, colors) in crate::config::RAINBOW_PRESETS {
+                let selected = s.rainbow_colors.iter().map(|c| c.to_ascii_uppercase()).eq(colors.iter().map(|c| c.to_ascii_uppercase()));
+                let (r, resp) = ui.allocate_exact_size(vec2(18.0 + colors.len() as f32 * 9.0 + ui.painter().layout_no_wrap(name.to_string(), ui::ui_font(13.0), theme.text).size().x + 8.0, 28.0), Sense::click());
+                let tk = crate::ui::Tokens::of(&theme);
+                ui.painter().rect(r, CornerRadius::same(7), if selected { tk.selected } else if resp.hovered() { tk.hover } else { egui::Color32::TRANSPARENT }, Stroke::new(1.0, if selected { theme.text_accent } else { tk.island_border }), StrokeKind::Inside);
+                for (k, c) in colors.iter().enumerate() {
+                    if let Some(c) = crate::theme::parse_color(c) {
+                        ui.painter().circle_filled(pos2(r.left() + 12.0 + k as f32 * 9.0, r.center().y), 5.0, c);
+                    }
+                }
+                ui.painter().text(pos2(r.left() + 14.0 + colors.len() as f32 * 9.0, r.center().y), Align2::LEFT_CENTER, *name, ui::ui_font(13.0), theme.text);
+                if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    s.rainbow_colors = colors.iter().map(|c| c.to_string()).collect();
+                }
+            }
+        });
+        ui.add_space(6.0);
+        ui.horizontal_wrapped(|ui| {
+            let mut colors: Vec<egui::Color32> = if s.rainbow_colors.is_empty() { theme.rainbow.clone() } else { s.rainbow_colors.iter().filter_map(|c| crate::theme::parse_color(c)).collect() };
+            let mut changed = false;
+            let mut remove = None;
+            for (k, c) in colors.iter_mut().enumerate() {
+                ui.vertical(|ui| {
+                    if ui.color_edit_button_srgba(c).changed() {
+                        changed = true;
+                    }
+                    if colors_len_gt1(&s.rainbow_colors, &theme) && ui.small_button("✕").on_hover_text("Remove").clicked() {
+                        remove = Some(k);
+                    }
+                });
+            }
+            if let Some(k) = remove {
+                colors.remove(k);
+                changed = true;
+            }
+            if colors.len() < 8 && ui.button("+ Add").clicked() {
+                colors.push(theme.text_accent);
+                changed = true;
+            }
+            if changed {
+                s.rainbow_colors = colors.iter().map(|c| hex(*c)).collect();
+            }
+        });
+        ui.add_space(8.0);
+        row(ui, &theme, "Indent guides", "One guide per open list, at its bracket", |ui| {
             toggle(ui, &theme, &mut s.indent_guides);
         });
+        row(ui, &theme, "Rainbow indent guides", "Guides use the bracket colors of their depth", |ui| {
+            toggle(ui, &theme, &mut s.rainbow_indent_guides);
+        });
+        row(ui, &theme, "Rainbow indentation fill", "Tint each level of indentation", |ui| {
+            toggle(ui, &theme, &mut s.indent_rainbow_fill);
+        });
+
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Editor").font(ui::semibold(15.0)).color(theme.text));
+        ui.add_space(4.0);
         row(ui, &theme, "Line numbers", "", |ui| {
             toggle(ui, &theme, &mut s.show_line_numbers);
         });
@@ -375,9 +466,6 @@ impl App {
         });
         row(ui, &theme, "Auto-close brackets and quotes", "Typing ) always inserts the matching closer, like DrRacket", |ui| {
             toggle(ui, &theme, &mut s.auto_close_brackets);
-        });
-        row(ui, &theme, "Show tab bar", "", |ui| {
-            toggle(ui, &theme, &mut s.show_tab_bar);
         });
         row(ui, &theme, "Restore session on launch", "Reopen the last project and files", |ui| {
             toggle(ui, &theme, &mut s.restore_session);
@@ -421,4 +509,80 @@ impl App {
 /// Accent-filled button for the primary action of a dialog.
 pub fn primary_button(theme: &Theme, label: &str) -> egui::Button<'static> {
     egui::Button::new(egui::RichText::new(label.to_string()).color(egui::Color32::WHITE).font(ui::medium(13.5))).fill(theme.text_accent).corner_radius(CornerRadius::same(7))
+}
+
+fn colors_len_gt1(custom: &[String], theme: &Theme) -> bool {
+    if custom.is_empty() { theme.rainbow.len() > 1 } else { custom.len() > 1 }
+}
+
+fn hex(c: egui::Color32) -> String {
+    let [r, g, b, _] = c.to_srgba_unmultiplied();
+    format!("#{r:02X}{g:02X}{b:02X}")
+}
+
+/// A live preview of the caret and bracket settings.
+fn caret_and_brackets_preview(ui: &mut Ui, theme: &Theme, s: &crate::config::Settings, size: f32) {
+    let tk = crate::ui::Tokens::of(theme);
+    let font = ui::mono(size);
+    let line_h = (size * 1.6).round();
+    let lines: [(usize, &str); 5] = [(0, "(define (sum-squares lst)"), (2, "(for/fold ([acc 0])"), (12, "([x (in-list lst)])"), (4, "(+ acc (* x x))))"), (0, "")];
+    let w = ui.available_width();
+    let (rect, _) = ui.allocate_exact_size(vec2(w, line_h * 4.0 + 24.0), Sense::hover());
+    ui.painter().rect(rect, CornerRadius::same(10), theme.editor_bg, Stroke::new(1.0, tk.island_border), StrokeKind::Inside);
+    let cw = ui.fonts_mut(|f| f.glyph_width(&font, 'M'));
+    let x0 = rect.left() + 18.0;
+    let rainbow = |d: usize| if s.rainbow_brackets { theme.rainbow(d) } else { theme.syntax.punctuation.color };
+    let p = ui.painter().with_clip_rect(rect.shrink(1.0));
+    // Indent guides at columns 0 and 2 (the define and for/fold brackets).
+    for (li, &(indent, _)) in lines.iter().enumerate().take(4) {
+        let y = rect.top() + 12.0 + li as f32 * line_h;
+        let guides: &[(usize, usize)] = match li {
+            1 => &[(0, 0)],
+            2 | 3 => &[(0, 0), (2, 1)],
+            _ => &[],
+        };
+        for (k, &(col, depth)) in guides.iter().enumerate() {
+            let gx = x0 + col as f32 * cw;
+            if s.indent_guides && s.indent_rainbow_fill {
+                let next = guides.get(k + 1).map(|g| g.0).unwrap_or(indent);
+                p.rect_filled(Rect::from_min_max(pos2(gx, y), pos2(x0 + next as f32 * cw, y + line_h)), CornerRadius::ZERO, with_alpha(rainbow(depth), if theme.dark { 16 } else { 26 }));
+            }
+            if s.indent_guides {
+                let c = if s.rainbow_indent_guides { with_alpha(rainbow(depth), 110) } else { theme.indent_guide };
+                p.vline(gx.round() + 0.5, y..=y + line_h, Stroke::new(1.0, c));
+            }
+        }
+    }
+    let mut depth: i32 = 0;
+    for (li, &(indent, text)) in lines.iter().enumerate().take(4) {
+        let y = rect.top() + 12.0 + li as f32 * line_h;
+        let mut job = egui::text::LayoutJob::default();
+        for ch in text.chars() {
+            let color = match ch {
+                '(' | '[' => {
+                    let c = rainbow(depth.max(0) as usize);
+                    depth += 1;
+                    c
+                }
+                ')' | ']' => {
+                    depth -= 1;
+                    rainbow(depth.max(0) as usize)
+                }
+                _ => theme.syntax.variable.color,
+            };
+            job.append(&ch.to_string(), 0.0, egui::TextFormat { font_id: font.clone(), color, ..Default::default() });
+        }
+        let g = p.layout_job(job);
+        p.galley(pos2(x0 + indent as f32 * cw, y + (line_h - g.size().y) / 2.0), g, theme.editor_fg);
+    }
+    // Caret after "acc" on the last line.
+    let cy = rect.top() + 12.0 + 3.0 * line_h;
+    let cx = x0 + (4 + 6) as f32 * cw;
+    let color = s.cursor_color.as_deref().and_then(crate::theme::parse_color).unwrap_or(theme.cursor);
+    let width = s.cursor_width.clamp(1.0, 8.0);
+    match s.cursor_shape {
+        CursorShape::Bar => p.rect_filled(Rect::from_min_size(pos2(cx - width / 2.0, cy + 3.0), vec2(width, line_h - 6.0)), CornerRadius::same(1), color),
+        CursorShape::Block => p.rect_filled(Rect::from_min_size(pos2(cx, cy + 2.0), vec2(cw, line_h - 4.0)), CornerRadius::same(2), with_alpha(color, 200)),
+        CursorShape::Underline => p.rect_filled(Rect::from_min_size(pos2(cx, cy + line_h - 2.0 - width), vec2(cw, width)), CornerRadius::ZERO, color),
+    };
 }

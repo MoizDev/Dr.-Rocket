@@ -177,6 +177,8 @@ pub fn apply_style(ctx: &egui::Context, t: &Theme, ui_size: f32) {
         v.resize_corner_size = 10.0;
         v.text_cursor.stroke = Stroke::new(2.0, t.cursor);
         v.striped = false;
+        v.slider_trailing_fill = true;
+        v.handle_shape = egui::style::HandleShape::Circle;
         v.indent_has_left_vline = false;
         v.collapsing_header_frame = false;
         let r = CornerRadius::same(6);

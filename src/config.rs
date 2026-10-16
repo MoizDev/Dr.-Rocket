@@ -18,6 +18,16 @@ pub fn cache_dir() -> PathBuf {
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("dr-rocket")
 }
 
+/// Ready-made bracket palettes offered in Settings (name, colors).
+pub const RAINBOW_PRESETS: &[(&str, &[&str])] = &[
+    ("Classic", &["#FFD700", "#DA70D6", "#179FFF"]),
+    ("Pastel", &["#F2C14E", "#C792EA", "#82AAFF", "#89DDFF", "#C3E88D"]),
+    ("Neon", &["#FF6AC1", "#00F5D4", "#FEE440", "#9B5DE5", "#00BBF9"]),
+    ("Sunset", &["#FF8A65", "#FFB74D", "#F06292", "#BA68C8", "#7986CB"]),
+    ("Forest", &["#A3BE8C", "#EBCB8B", "#88C0D0", "#B48EAD", "#D08770"]),
+    ("Mono", &["#9DA5B4", "#7F848E", "#5C6370"]),
+];
+
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum CursorShape {
@@ -36,8 +46,23 @@ pub struct Settings {
     pub line_height: f32,
     pub cursor_shape: CursorShape,
     pub cursor_blink: bool,
+    /// Animate the caret gliding to its new position.
+    pub smooth_caret: bool,
+    /// Width of the bar caret (and height of the underline caret) in points.
+    pub cursor_width: f32,
+    /// Custom caret color (`#rrggbb`); the theme's cursor color when unset.
+    pub cursor_color: Option<String>,
     pub rainbow_brackets: bool,
+    /// Custom rainbow palette for brackets and indent guides (`#rrggbb` each); the
+    /// theme's palette when empty.
+    pub rainbow_colors: Vec<String>,
+    /// Highlight the bracket pair at the cursor in its own depth color.
+    pub bracket_pair_highlight: bool,
     pub indent_guides: bool,
+    /// Color indent guides by nesting depth.
+    pub rainbow_indent_guides: bool,
+    /// Tint the indentation of each line with translucent depth colors.
+    pub indent_rainbow_fill: bool,
     pub show_line_numbers: bool,
     pub highlight_active_line: bool,
     pub wrap_guide_column: Option<usize>,
@@ -64,8 +89,15 @@ impl Default for Settings {
             line_height: 1.6,
             cursor_shape: CursorShape::Bar,
             cursor_blink: true,
+            smooth_caret: true,
+            cursor_width: 2.0,
+            cursor_color: None,
             rainbow_brackets: true,
+            rainbow_colors: Vec::new(),
+            bracket_pair_highlight: true,
             indent_guides: true,
+            rainbow_indent_guides: true,
+            indent_rainbow_fill: false,
             show_line_numbers: true,
             highlight_active_line: true,
             wrap_guide_column: Some(102),

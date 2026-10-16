@@ -27,9 +27,12 @@ fn main() -> eframe::Result {
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
         .with_title_shown(false);
+    // Automation windows float above everything so macOS keeps redrawing them.
+    let automated = std::env::var("DRROCKET_AUTOMATION").is_ok();
+    let viewport = if automated { viewport.with_window_level(egui::WindowLevel::AlwaysOnTop) } else { viewport };
     let options = eframe::NativeOptions {
         viewport,
-        persist_window: std::env::var("DRROCKET_AUTOMATION").is_err(),
+        persist_window: !automated,
         ..Default::default()
     };
     eframe::run_native(ui::welcome::APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, open)))))

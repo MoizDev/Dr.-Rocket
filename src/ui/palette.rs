@@ -235,6 +235,7 @@ impl App {
             && &self.theme.name != name
         {
             self.theme = self.themes.get_or_default(name);
+            self.apply_theme_overrides();
         }
         if close {
             if let Some(orig) = &p.original_theme {
