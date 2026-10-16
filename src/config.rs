@@ -119,7 +119,7 @@ impl Default for Settings {
             show_tab_bar: true,
             auto_close_brackets: true,
             online_check_syntax: true,
-            show_binding_arrows: true,
+            show_binding_arrows: false,
             auto_complete: false,
             stepper_count_finish: true,
             racket_path: None,
