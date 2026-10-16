@@ -997,6 +997,11 @@ fn poll_stepper(app: &mut App, i: usize) {
             }
         }
     }
+    // Every step has arrived: the stepper process has nothing left to do, so end it (it
+    // otherwise sits in memory until the next stepping).
+    if st.finished {
+        st.session = None;
+    }
     if first && !st.steps.is_empty() {
         show_step_marks(tab);
     }
