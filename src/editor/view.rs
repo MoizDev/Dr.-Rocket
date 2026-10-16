@@ -484,6 +484,8 @@ impl EditorView {
         }
         self.doc.sync();
         self.shift_decorations();
+        // Input may have added or removed lines; everything below lays out the edited text.
+        let line_count = self.doc.buffer.line_count();
         if self.doc.version() != version_before || self.doc.buffer.selections != sel_before {
             self.last_activity = now;
             self.scroll_to_cursor = true;
@@ -1959,3 +1961,46 @@ pub fn hover_card(ui: &Ui, id: Id, anchor: Pos2, theme: &Theme, doc_lines: &[Str
     });
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Run one editor frame with the given input events.
+    fn frame(ctx: &egui::Context, ed: &mut EditorView, style: &EditorStyle, events: Vec<Event>) {
+        let input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0))),
+            events,
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(input, |ui| {
+            let rect = ui.max_rect();
+            ed.show(ui, rect, style);
+        });
+        out.textures_delta.clear();
+    }
+
+    fn key(k: Key) -> Event {
+        Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+    }
+
+    /// Deleting the last line must not paint the stale line count (crashed in the indent
+    /// highlight painter: "Attempt to index past end of Rope").
+    #[test]
+    fn deleting_last_line_in_the_same_frame_does_not_panic() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap().clone();
+        let settings = crate::config::Settings::default();
+        let style = EditorStyle { theme: &theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        let ctx = egui::Context::default();
+        let mut ed = EditorView::new("(big-bang 0\n  [on-tick add1]\n  [stop-when stop?])\n  x\n", Id::unique("t"));
+        ed.request_focus();
+        frame(&ctx, &mut ed, &style, vec![]);
+        let end = ed.doc.buffer.len();
+        ed.doc.buffer.selections = crate::editor::buffer::Selections::single(crate::editor::buffer::Selection::caret(end));
+        for _ in 0..6 {
+            frame(&ctx, &mut ed, &style, vec![key(Key::Backspace)]);
+        }
+        assert!(ed.doc.buffer.line_count() < 5, "{:?}", ed.doc.text());
+    }
+}
