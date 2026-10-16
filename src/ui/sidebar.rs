@@ -36,6 +36,8 @@ pub struct SearchHit {
 }
 
 const ROW_H: f32 = 28.0;
+/// File tree rows: packed edge to edge like Zed's project panel.
+const FILE_ROW_H: f32 = 26.0;
 
 impl App {
     pub(crate) fn new_file_in_project(&mut self) {
@@ -71,9 +73,11 @@ impl App {
         let mut open = None;
         let mut action: Option<TreeAction> = None;
         let width = ui.available_width();
-        egui::ScrollArea::vertical().id_salt("files").auto_shrink([false, false]).show_rows(ui, ROW_H, rows.len(), |ui, range| {
+        let spacing = ui.spacing().item_spacing.y;
+        ui.spacing_mut().item_spacing.y = 0.0;
+        egui::ScrollArea::vertical().id_salt("files").auto_shrink([false, false]).show_rows(ui, FILE_ROW_H, rows.len(), |ui, range| {
             for row in &rows[range] {
-                let (r, resp) = ui.allocate_exact_size(vec2(width, ROW_H), Sense::click());
+                let (r, resp) = ui.allocate_exact_size(vec2(width, FILE_ROW_H), Sense::click());
                 let selected = active_path.as_ref() == Some(&row.entry.path);
                 if selected {
                     ui.painter().rect_filled(r, CornerRadius::same(6), tk.selected);
@@ -93,8 +97,8 @@ impl App {
                 }
                 x += 16.0;
                 let icon = if row.entry.is_dir { file_icons::folder_icon(&row.entry.name, row.expanded) } else { file_icons::file_icon(&row.entry.name) };
-                file_icons::image(icon, 16.0).paint_at(ui, Rect::from_center_size(pos2(x + 8.0, r.center().y), vec2(16.0, 16.0)));
-                x += 24.0;
+                file_icons::image(icon, 17.0).paint_at(ui, Rect::from_center_size(pos2(x + 8.5, r.center().y), vec2(17.0, 17.0)));
+                x += 22.0;
                 let is_dirty = dirty.contains(&row.entry.path);
                 let color = if selected { theme.text } else if is_dirty { theme.modified } else { crate::theme::mix(theme.text, theme.text_muted, 0.35) };
                 truncated_label(ui, pos2(x, r.center().y), &row.entry.name, ui::ui_font(13.5), color, r.right() - x - 14.0);
@@ -149,6 +153,7 @@ impl App {
                 });
             }
         });
+        ui.spacing_mut().item_spacing.y = spacing;
         if let Some(p) = toggle
             && let Some(ws) = &mut self.workspace
         {
