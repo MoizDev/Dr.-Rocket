@@ -52,9 +52,6 @@ impl App {
         let sep = rb.allocate_exact_size(vec2(1.0, 20.0), Sense::hover()).0;
         rb.painter().vline(sep.center().x, sep.y_range(), Stroke::new(1.0, tk.subtle_border));
         rb.add_space(6.0);
-        if icon_button_sized(&mut rb, &theme, ic::MORE_VERT, "More", 30.0, 19.0, None, false).clicked() {
-            self.run_command(Command::Palette);
-        }
         // Run / Stop.
         let running = crate::racket_ui::is_running(self);
         let (glyph, color, tip) = if running { (ic::STOP, theme.error, "Stop (⌘K)") } else { (ic::PLAY_ARROW, tk.run, "Run (⌘R)") };
@@ -65,15 +62,6 @@ impl App {
         rb.painter().text(r.center(), Align2::CENTER_CENTER, glyph, ui::icon_font_filled(24.0), color);
         if resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
             self.run_command(if running { Command::Kill } else { Command::Run });
-        }
-        if icon_button_sized(&mut rb, &theme, ic::BUG_REPORT, "Debug (⇧⌘D)", 30.0, 19.0, None, false).clicked() {
-            self.run_command(Command::Debug);
-        }
-        if icon_button_sized(&mut rb, &theme, ic::STEP, "Stepper (⇧⌘E)", 30.0, 19.0, None, self.layout.is_visible(PanelItem::Stepper)).clicked() {
-            self.run_command(Command::Stepper);
-        }
-        if icon_button_sized(&mut rb, &theme, ic::CHECK_CIRCLE, "Check Syntax (⇧⌘C)", 30.0, 19.0, None, false).clicked() {
-            self.run_command(Command::CheckSyntax);
         }
         rb.add_space(6.0);
         // Language selector, styled like the run-configuration pill in the mockup.
