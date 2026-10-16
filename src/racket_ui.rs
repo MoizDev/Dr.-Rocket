@@ -1986,8 +1986,7 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             nav = Some(isize::MAX);
         }
         b.add_space(8.0);
-        let more = if v.trace.finished { "" } else { "+" };
-        b.label(egui::RichText::new(format!("Step {} of {}{more}", v.current + 1, n)).font(ui::medium(13.0)).color(theme.text_muted));
+        let label_x = b.cursor().min.x;
         let mut rb = b.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
         rb.spacing_mut().item_spacing.x = 2.0;
         if icon_button_sized(&mut rb, &theme, ic::REPLAY, "Record again", 30.0, 19.0, None, false).clicked() {
@@ -2009,6 +2008,18 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 "4×" => 10.0,
                 _ => 1.0,
             };
+        }
+        // The step counter takes the room between the two button groups: in full, short, or not
+        // at all on a very narrow panel.
+        let room = rb.min_rect().left() - label_x - 8.0;
+        let more = if v.trace.finished { "" } else { "+" };
+        let font = ui::medium(13.0);
+        let full = format!("Step {} of {}{more}", v.current + 1, n);
+        let short = format!("{}/{}{more}", v.current + 1, n);
+        let fits = |t: &str| ui.painter().layout_no_wrap(t.to_string(), font.clone(), theme.text_muted).size().x <= room;
+        let label = if fits(&full) { Some(full) } else if fits(&short) { Some(short) } else { None };
+        if let Some(t) = label {
+            ui.painter().text(pos2(label_x, bar.center().y), Align2::LEFT_CENTER, t, font, theme.text_muted);
         }
         // Keyboard (when no text field has focus).
         if !ui.ctx().memory(|m| m.focused().is_some()) && ui.rect_contains_pointer(rect) {
