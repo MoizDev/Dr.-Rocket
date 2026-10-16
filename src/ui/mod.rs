@@ -3,6 +3,7 @@
 pub mod chrome;
 pub mod docks;
 pub mod icon_glyphs;
+pub mod language_dialog;
 pub mod palette;
 pub mod settings_view;
 pub mod sidebar;

@@ -23,6 +23,8 @@ pub enum PanelItem {
     Macros,
     Docs,
     Problems,
+    Debugger,
+    Profiler,
     Terminal(u64),
 }
 
@@ -38,6 +40,8 @@ impl PanelItem {
             PanelItem::Macros => "Macro Stepper",
             PanelItem::Docs => "Docs",
             PanelItem::Problems => "Problems",
+            PanelItem::Debugger => "Debugger",
+            PanelItem::Profiler => "Profiler",
             PanelItem::Terminal(_) => "Terminal",
         }
     }
@@ -53,6 +57,8 @@ impl PanelItem {
             PanelItem::Macros => ic::AUTO_FIX_HIGH,
             PanelItem::Docs => ic::MENU_BOOK,
             PanelItem::Problems => ic::ERROR,
+            PanelItem::Debugger => ic::BUG_REPORT,
+            PanelItem::Profiler => ic::SPEED,
             PanelItem::Terminal(_) => ic::TERMINAL,
         }
     }
@@ -208,10 +214,14 @@ pub struct Tab {
     pub path: Option<PathBuf>,
     pub untitled: usize,
     pub editor: EditorView,
-    /// DrRacket metadata header hidden from the editor (teaching languages).
-    pub header: Option<String>,
-    pub lang_label: String,
+    /// The language level (DrRacket's "Choose Language"); teaching languages are saved as a
+    /// hidden DrRacket metadata header.
+    pub language: crate::racket::lang::Language,
+    pub lang_settings: crate::racket::lang::TeachingSettings,
+    /// The language changed since the last save (the header must be rewritten).
+    pub lang_changed: bool,
     pub disk_mtime: Option<SystemTime>,
+    pub rk: crate::racket_ui::RacketTab,
 }
 
 impl Tab {
@@ -228,7 +238,7 @@ impl Tab {
         }
     }
     pub fn dirty(&self) -> bool {
-        self.editor.doc.buffer.is_dirty()
+        self.editor.doc.buffer.is_dirty() || self.lang_changed
     }
 }
 
@@ -239,6 +249,8 @@ pub enum Modal {
     ConfirmClose { tab: u64, then_quit: bool },
     ConfirmQuit,
     Settings(crate::ui::settings_view::SettingsView),
+    Language(crate::ui::language_dialog::LanguageDialog),
+    Prompt(crate::ui::language_dialog::Prompt),
     About,
     Message { title: String, body: String },
 }
@@ -278,6 +290,7 @@ pub struct App {
     pub automation: Option<crate::automation::Automation>,
     pub frame_count: u64,
     pub terminals: Vec<TerminalTab>,
+    pub racket: crate::racket_ui::RacketState,
 }
 
 pub struct TerminalTab {
@@ -317,6 +330,7 @@ impl App {
             automation: crate::automation::Automation::from_env(),
             frame_count: 0,
             terminals: Vec::new(),
+            racket: Default::default(),
         };
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
         if restore {
@@ -375,28 +389,36 @@ impl App {
 
     // ------------------------------------------------------------------ files
 
-    fn new_tab(&mut self, path: Option<PathBuf>, text: &str) -> usize {
+    pub fn alloc_id(&mut self) -> u64 {
         let id = self.next_id;
         self.next_id += 1;
+        id
+    }
+
+    fn new_tab(&mut self, path: Option<PathBuf>, text: &str) -> usize {
+        let id = self.alloc_id();
         let untitled = if path.is_none() { self.tabs.iter().filter(|t| t.path.is_none()).map(|t| t.untitled).max().unwrap_or(0) + 1 } else { 0 };
-        let mut editor = EditorView::new(text, Id::new(("editor", id)));
+        let (language, lang_settings, body) = crate::racket_ui::load_text(self, path.as_deref(), text);
+        let mut editor = EditorView::new(&body, Id::new(("editor", id)));
         editor.doc.buffer.mark_saved();
         let disk_mtime = path.as_ref().and_then(|p| std::fs::metadata(p).ok()).and_then(|m| m.modified().ok());
-        let lang_label = Self::detect_language_label(text);
-        self.tabs.push(Tab { id, path, untitled, editor, header: None, lang_label, disk_mtime });
+        let mut rk = crate::racket_ui::RacketTab::new(id);
+        if let Some(words) = self.racket.completions.get(&language.completions_language(&body)) {
+            editor.completion_words = words.clone();
+            rk.input.completion_words = words.clone();
+        }
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk });
         self.tabs.len() - 1
     }
 
-    fn detect_language_label(text: &str) -> String {
-        let first = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
-        if let Some(rest) = first.trim().strip_prefix("#lang") {
-            return format!("#lang {}", rest.trim());
-        }
-        "#lang racket".into()
-    }
-
     pub fn new_file(&mut self) {
-        let i = self.new_tab(None, "#lang racket\n\n");
+        let lang = crate::racket::lang::Language::from_id(&self.settings.default_language).unwrap_or(crate::racket::lang::Language::Module);
+        let initial = if lang == crate::racket::lang::Language::Module { "#lang racket\n\n".to_string() } else { String::new() };
+        let i = self.new_tab(None, &initial);
+        if lang != crate::racket::lang::Language::Module {
+            self.tabs[i].language = lang;
+            self.tabs[i].lang_settings = lang.default_settings();
+        }
         let tab = &mut self.tabs[i];
         let n = tab.editor.doc.buffer.len();
         tab.editor.doc.buffer.selections = crate::editor::buffer::Selections::single(crate::editor::buffer::Selection::caret(n));
@@ -457,16 +479,15 @@ impl App {
                 }
             }
         };
-        let tab = &self.tabs[idx];
-        let mut text = tab.editor.doc.text();
-        if let Some(h) = &tab.header {
-            text = format!("{h}{text}");
-        }
+        self.tabs[idx].path = Some(path.clone());
+        let text = crate::racket_ui::save_text(&self.tabs[idx]);
         match crate::config::atomic_write(&path, text.as_bytes()) {
             Ok(()) => {
+                let language = self.tabs[idx].language;
+                crate::racket_ui::remember_language(self, &path, language);
                 let tab = &mut self.tabs[idx];
                 tab.editor.doc.buffer.mark_saved();
-                tab.path = Some(path.clone());
+                tab.lang_changed = false;
                 tab.disk_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
                 self.recents.add_file(&path);
                 true
@@ -849,6 +870,7 @@ impl App {
             tab.editor.show(&mut child, ed_rect, &style);
         }
         self.diagnostics_counter(ui, ed_rect);
+        crate::racket_ui::call_box(self, ui, ed_rect);
         crate::racket_ui::after_editor(self);
     }
 

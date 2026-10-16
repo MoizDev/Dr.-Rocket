@@ -6,3 +6,4 @@ pub mod lexer;
 pub mod sexp;
 pub mod document;
 pub mod view;
+pub mod highlight;

@@ -35,6 +35,21 @@ pub fn toggle(ui: &mut Ui, theme: &Theme, on: &mut bool) -> egui::Response {
     resp.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
+/// Radio button styled like the rest of the UI. Returns true when clicked.
+pub fn radio(ui: &mut Ui, theme: &Theme, selected: bool, label: &str) -> bool {
+    let font = ui::ui_font(14.0);
+    let g = ui.painter().layout_no_wrap(label.to_string(), font, theme.text);
+    let (r, resp) = ui.allocate_exact_size(vec2(26.0 + g.size().x + 4.0, 26.0), Sense::click());
+    let c = pos2(r.left() + 9.0, r.center().y);
+    let ring = if selected { theme.text_accent } else if resp.hovered() { theme.text_muted } else { theme.text_placeholder };
+    ui.painter().circle_stroke(c, 7.0, Stroke::new(1.5, ring));
+    if selected {
+        ui.painter().circle_filled(c, 4.0, theme.text_accent);
+    }
+    ui.painter().galley(pos2(r.left() + 26.0, r.center().y - g.size().y / 2.0), g, theme.text);
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked()
+}
+
 fn row(ui: &mut Ui, theme: &Theme, title: &str, desc: &str, control: impl FnOnce(&mut Ui)) {
     ui.add_space(4.0);
     ui.horizontal(|ui| {
@@ -80,6 +95,8 @@ impl App {
             Modal::None => {}
             Modal::Palette(p) => self.palette_ui(ctx, p),
             Modal::Settings(s) => self.settings_ui(ctx, s),
+            Modal::Language(d) => self.language_dialog_ui(ctx, d),
+            Modal::Prompt(p) => self.prompt_ui(ctx, p),
             Modal::ConfirmClose { tab, then_quit } => self.confirm_close_ui(ctx, tab, then_quit),
             Modal::ConfirmQuit => self.confirm_quit_ui(ctx),
             Modal::About => self.about_ui(ctx),

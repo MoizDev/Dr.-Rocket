@@ -85,7 +85,7 @@ impl App {
         }
         rb.add_space(6.0);
         // Language selector, styled like the run-configuration pill in the mockup.
-        let label = self.active_tab().map(|t| t.lang_label.clone()).unwrap_or_else(|| "Racket".into());
+        let label = self.active_tab().map(crate::racket_ui::language_label).unwrap_or_else(|| "Racket".into());
         let lr = pill_button(&mut rb, &theme, Some((ic::SCHOOL, theme.syntax.keyword.color)), &label, true, true);
         if lr.on_hover_text("Choose Language (⌘L)").clicked() {
             self.run_command(Command::ChooseLanguage);

@@ -308,6 +308,16 @@ impl EditorView {
         self.pending_reveal = Some(self.doc.buffer.line_of(s));
     }
 
+    /// Scroll so `pos` is visible without moving the cursor.
+    pub fn reveal_soft(&mut self, pos: usize) {
+        let line = self.doc.buffer.line_of(pos.min(self.doc.buffer.len()));
+        let top = (self.scroll.y / self.geom.line_h).floor() as usize;
+        let visible = ((self.geom.rect.height() / self.geom.line_h) as usize).saturating_sub(2);
+        if line < top || line > top + visible {
+            self.scroll.y = (line as f32 * self.geom.line_h - self.geom.rect.height() * 0.35).max(0.0);
+        }
+    }
+
     pub fn scroll_offset(&self) -> f32 {
         self.scroll.y
     }
@@ -821,8 +831,15 @@ impl EditorView {
             InlayKind::Hint => (theme.hint, with_alpha(theme.text, 14), None),
         };
         let font = ui::mono((font_size * 0.78).round());
-        let g = p.layout_no_wrap(inlay.text.clone(), font, fg);
         let icon_w = if glyph.is_some() { font_size * 0.85 } else { 0.0 };
+        // Keep the chip inside the editor: truncate long messages with an ellipsis.
+        let room = self.geom.rect.right() - SCROLLBAR_W - 10.0 - x - icon_w - 14.0;
+        if room < 24.0 {
+            return;
+        }
+        let mut job = LayoutJob::simple_singleline(inlay.text.clone(), font, fg);
+        job.wrap = egui::text::TextWrapping::truncate_at_width(room);
+        let g = p.layout_job(job);
         let h = (self.geom.line_h * 0.72).min(font_size * 1.35);
         let r = Rect::from_min_size(pos2(x, y + (self.geom.line_h - h) / 2.0), vec2(g.size().x + icon_w + 14.0, h));
         p.rect_filled(r, CornerRadius::same(5), bg);
