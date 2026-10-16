@@ -830,3 +830,17 @@ fn stepper_shows_images() {
     let img = crate::editor::images::EmbeddedImage::from_b64(png).unwrap();
     assert_eq!((img.width, img.height), (40, 20), "two 20px circles side by side");
 }
+
+/// DrRacket's "Show Log": warnings the program logs reach the IDE; Racket's chatter does not.
+#[test]
+fn runner_forwards_logged_warnings() {
+    let b = need_racket!();
+    let src = "#lang racket\n(log-warning \"careful\")\n(define-logger app)\n(log-app-error \"bad ~a\" 42)\n(collect-garbage)\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::None)).unwrap();
+    let events = run_until(&s, ready(None));
+    let logs: Vec<(String, Option<String>, String)> = events
+        .iter()
+        .filter_map(|e| if let RunEvent::Log { level, topic, message } = e { Some((level.clone(), topic.clone(), message.clone())) } else { None })
+        .collect();
+    assert_eq!(logs, vec![("warning".into(), None, "careful".into()), ("error".into(), Some("app".into()), "app: bad 42".into())]);
+}

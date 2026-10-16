@@ -60,6 +60,20 @@
 (define (start-flusher!)
   (thread (λ () (let loop () (sleep 0.025) (flush-output-events!) (loop)))))
 
+;; DrRacket's "Show Log": forward the program's warnings and errors (Racket's own libraries
+;; log constantly at `info`, so lower levels would bury them).
+(define (start-log-forwarder!)
+  (define receiver (make-log-receiver (current-logger) 'warning))
+  (thread
+   (λ ()
+     (let loop ([sent 0])
+       (define v (sync receiver))
+       (when (< sent 5000)
+         (emit* (hasheq 'ev "log" 'level (symbol->string (vector-ref v 0))
+                        'topic (let ([t (vector-ref v 3)]) (if t (symbol->string t) (json-null)))
+                        'message (truncate-string (vector-ref v 1) 2000))))
+       (loop (add1 sent))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Values: images and number markup
 ;;
@@ -1052,6 +1066,7 @@
 
 (define (main)
   (start-flusher!)
+  (start-log-forwarder!)
   (thread reader-loop)
   ;; The IDE may start a runner before the user presses Run; load the usual tooling while we
   ;; wait so the run itself starts immediately.

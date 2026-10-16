@@ -306,6 +306,12 @@ pub enum RunEvent {
     Exit {
         code: i32,
     },
+    /// A message the program logged (DrRacket's "Show Log").
+    Log {
+        level: String,
+        topic: Option<String>,
+        message: String,
+    },
     /// Visualizer recording started (`instrument: visualize`).
     VizStart {
         max_steps: usize,

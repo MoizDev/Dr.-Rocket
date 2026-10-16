@@ -160,6 +160,8 @@ pub struct RacketTab {
     pub stepper: Option<StepperView>,
     pub viz: Option<crate::visualizer::VisualizerView>,
     pub macros: Option<MacroView>,
+    /// The program's logged warnings and errors: (level, topic, message).
+    pub log: Vec<(String, Option<String>, String)>,
     pub modules: Option<ModulesView>,
     pub check: Option<CheckSyntaxResult>,
     check_due: Option<f64>,
@@ -192,6 +194,7 @@ impl RacketTab {
             stepper: None,
             viz: None,
             macros: None,
+            log: Vec::new(),
             modules: None,
             check: None,
             check_due: None,
@@ -638,6 +641,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
                 tab.rk.profile = None;
             }
             tab.rk.transcript.clear();
+            tab.rk.log.clear();
             let version = app.racket.version.clone().unwrap_or_default();
             let lang_name = if tab.language == Language::Module { language_label(tab) } else { tab.language.name().to_string() };
             tab.rk.push(Entry::Banner(format!("Welcome to Racket {version}\nLanguage: {lang_name}")));
@@ -816,6 +820,11 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             let queued: Vec<String> = std::mem::take(&mut tab.rk.queued);
             for q in queued {
                 eval(tab, &q);
+            }
+        }
+        RunEvent::Log { level, topic, message } => {
+            if tab.rk.log.len() < 5000 {
+                tab.rk.log.push((level, topic, message));
             }
         }
         RunEvent::VizStart { max_steps } => {
@@ -1090,6 +1099,7 @@ pub fn run(app: &mut App, cmd: Command) {
         Command::InstallPackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::install_package()),
         Command::UpdatePackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::update_package()),
         Command::RemovePackage => app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::remove_package()),
+        Command::ShowLog => app.layout.show(PanelItem::Log, Dock::Bottom),
         Command::ShowPackages => raco_pkg(app, "show", vec!["--all".into()]),
         Command::SaveInteractions => save_interactions(app, i),
         Command::ModuleBrowser => {
@@ -1395,6 +1405,7 @@ pub fn panel(app: &mut App, ui: &mut Ui, rect: Rect, item: PanelItem) {
         PanelItem::Debugger => debugger_panel(app, ui),
         PanelItem::Profiler => profiler_panel(app, ui),
         PanelItem::Modules => modules_panel(app, ui, rect),
+        PanelItem::Log => log_panel(app, ui),
         _ => {}
     }
 }
@@ -2134,6 +2145,47 @@ fn tests_panel(app: &mut App, ui: &mut Ui) {
 }
 
 // ---------------------------------------------------------------------------------- macro stepper
+
+fn log_panel(app: &mut App, ui: &mut Ui) {
+    if no_tab(app, ui, ic::NOTES, "Log", "") {
+        return;
+    }
+    let theme = app.theme.clone();
+    let i = app.active;
+    if app.tabs[i].rk.log.is_empty() {
+        empty_state(ui, &theme, ic::NOTES, "No log messages", "Warnings and errors your program logs (log-warning, log-error) appear here");
+        return;
+    }
+    let mono = ui::mono((app.font_size() * 0.8).round());
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        ui.label(egui::RichText::new(format!("{} messages", app.tabs[i].rk.log.len())).color(theme.text_muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Clear").clicked() {
+                clear = true;
+            }
+        });
+    });
+    egui::ScrollArea::vertical().id_salt("log").auto_shrink([false, false]).stick_to_bottom(true).show(ui, |ui| {
+        for (level, topic, message) in &app.tabs[i].rk.log {
+            ui.horizontal_wrapped(|ui| {
+                let color = match level.as_str() {
+                    "fatal" | "error" => theme.error,
+                    "warning" => theme.warning,
+                    _ => theme.text_muted,
+                };
+                ui.label(egui::RichText::new(level.to_uppercase()).font(ui::semibold(10.5)).color(color));
+                if let Some(t) = topic {
+                    ui.label(egui::RichText::new(t).font(mono.clone()).color(theme.text_placeholder));
+                }
+                ui.label(egui::RichText::new(message).font(mono.clone()).color(theme.text));
+            });
+        }
+    });
+    if clear {
+        app.tabs[i].rk.log.clear();
+    }
+}
 
 fn macros_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     if no_tab(app, ui, ic::AUTO_FIX_HIGH, "Macro Stepper", "") {

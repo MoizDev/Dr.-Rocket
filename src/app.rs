@@ -27,6 +27,7 @@ pub enum PanelItem {
     Debugger,
     Profiler,
     Modules,
+    Log,
     Terminal(u64),
 }
 
@@ -46,6 +47,7 @@ impl PanelItem {
             PanelItem::Debugger => "Debugger",
             PanelItem::Profiler => "Profiler",
             PanelItem::Modules => "Modules",
+            PanelItem::Log => "Log",
             PanelItem::Terminal(_) => "Terminal",
         }
     }
@@ -64,7 +66,8 @@ impl PanelItem {
             PanelItem::Problems => ic::ERROR,
             PanelItem::Debugger => ic::BUG_REPORT,
             PanelItem::Profiler => ic::SPEED,
-            PanelItem::Modules => ic::ACCOUNT_TREE,
+            PanelItem::Modules => ic::HUB,
+            PanelItem::Log => ic::NOTES,
             PanelItem::Terminal(_) => ic::TERMINAL,
         }
     }
