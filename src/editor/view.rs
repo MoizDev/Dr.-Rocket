@@ -1017,13 +1017,20 @@ impl EditorView {
                     let x1 = col_x(line, next.max(col));
                     if x1 > x0 + 1.0 {
                         let a = match (theme.dark, active) {
-                            (true, false) => 40,
-                            (true, true) => 66,
-                            (false, false) => 46,
-                            (false, true) => 76,
+                            (true, false) => 16,
+                            (true, true) => 26,
+                            (false, false) => 20,
+                            (false, true) => 32,
                         };
                         p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + h)), CornerRadius::ZERO, with_alpha(theme.rainbow(depth as usize), a));
                     }
+                }
+                // A faint dot on each leading space (indent-rainbow style).
+                let dot = with_alpha(theme.text_placeholder, if theme.dark { 90 } else { 110 });
+                let cy = y + h / 2.0;
+                for col in 0..indent {
+                    let cx = (col_x(line, col) + col_x(line, col + 1)) / 2.0;
+                    p.circle_filled(pos2(cx, cy), 1.0, dot);
                 }
                 continue;
             }
