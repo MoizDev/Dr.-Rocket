@@ -846,14 +846,19 @@
         (format "~s" (syntax->datum s))))
   (truncate-string (regexp-replace* #px"\\s+" text " ") 60))
 
+;; Images pasted into the program (see open-source-port in common.rkt).
+(define source-images (hash))
+
 (define (run-program! cmd)
   (define source (string-of-source (hash-ref cmd 'source "")))
   (set! program-source source)
+
   (define offset (let ([o (hash-ref cmd 'offset 0)]) (if (exact-nonnegative-integer? o) (min o (string-length source)) 0)))
   (define source-name (make-source-name (hash-ref cmd 'path #f)))
   (define language (let ([l (hash-ref cmd 'language (hasheq))]) (if (hash? l) l (hasheq))))
   (define options (let ([o (hash-ref cmd 'options (hasheq))]) (if (hash? o) o (hasheq))))
   (define instrument (string->symbol (setting options 'instrument "errortrace")))
+  (set! source-images (decode-source-images (hash-ref options 'images #f)))
   (define submodules (map string->symbol (filter string? (setting options 'submodules '("main" "test")))))
   (set! print-width (let ([w (setting options 'print_width 80)]) (if (exact-positive-integer? w) w 80)))
   (hash-set! requested-breakpoints (source-key source-name) (filter exact-nonnegative-integer? (setting options 'breakpoints '())))
@@ -947,14 +952,14 @@
         (when (eq? init 'r5rs)
           (with-handlers ([exn:fail? void]) (namespace-require 'r5rs/init)))
         (current-print (make-value-printer (current-print)))))
-     (define port (open-input-string source))
+     (define port (open-source-port source source-images))
      (port-count-lines! port)
      (guard
       (λ ()
         (for ([stx (in-producer (λ () (read-syntax source-name port)) eof-object?)])
           (eval-top-level stx))))]
     [else
-     (define port (open-input-string source))
+     (define port (open-source-port source source-images))
      (port-count-lines! port)
      (define loaded?
        (guard

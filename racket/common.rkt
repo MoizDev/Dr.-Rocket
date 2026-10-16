@@ -3,6 +3,8 @@
 ;; positions, reading program text, and pretty-printing with highlighted subterms.
 
 (require json
+         racket/class
+         net/base64
          racket/port
          racket/pretty
          racket/string)
@@ -26,7 +28,12 @@
          truncate-string
          pretty-with-highlights
          exn->message
-         rational->decimal-string)
+         rational->decimal-string
+         image-char?
+         decode-source-images
+         open-source-port
+         png->image-value
+         image-value->png)
 
 ;; The real stdout, captured at startup before user code can redirect it.
 (define protocol-out (current-output-port))
@@ -265,3 +272,58 @@
 (define (drop* l n) (if (zero? n) l (drop* (cdr l) (sub1 n))))
 
 (define overline (integer->char #x305))
+
+;; ---------------------------------------------------------------------------
+;; Images embedded in source code
+;;
+;; DrRacket files can contain pasted images (saved in its WXME format). The IDE represents
+;; each image in the program text as one character from Supplementary Private Use Area-A
+;; (U+F0000 .. U+FFFFD), and sends the images' PNG data alongside as
+;; {"<code point>": "<base64 png>"}. Reading the text through `open-source-port` turns each
+;; such character into the image itself, as DrRacket's editor ports do.
+
+(define (image-char? c)
+  (<= #xF0000 (char->integer c) #xFFFFD))
+
+;; decode-source-images : (or/c hash #f) -> (hash/c char? bytes?)
+(define (decode-source-images h)
+  (for/hash ([(k v) (in-hash (if (hash? h) h (hash)))]
+             #:when (and (string? v) (string->number (format "~a" k))))
+    (values (integer->char (string->number (format "~a" k)))
+            (base64-decode (string->bytes/latin-1 v)))))
+
+(define image-cache (make-hash)) ; png bytes -> image value
+(define (png->image-value png)
+  (hash-ref! image-cache png
+             (λ ()
+               (define read-bitmap (dynamic-require 'racket/draw 'read-bitmap))
+               (define image-snip% (dynamic-require 'racket/snip 'image-snip%))
+               (make-object image-snip% (read-bitmap (open-input-bytes png) 'png)))))
+
+;; image-value->png : any -> (or/c bytes? #f)
+(define (image-value->png v)
+  (with-handlers ([(λ (e) #t) (λ (e) #f)])
+    (define convertible? (dynamic-require 'file/convertible 'convertible?))
+    (define convert (dynamic-require 'file/convertible 'convert))
+    (and (convertible? v) (let ([b (convert v 'png-bytes)]) (and (bytes? b) b)))))
+
+;; open-source-port : string (hash/c char? bytes?) -> input-port
+(define (open-source-port text images)
+  (cond
+    [(or (hash-empty? images) (not (for/or ([c (in-string text)]) (image-char? c))))
+     (open-input-string text)]
+    [else
+     (define-values (in out) (make-pipe-with-specials))
+     (define start 0)
+     (for ([c (in-string text)] [k (in-naturals)])
+       (when (image-char? c)
+         (write-string text out start k)
+         (set! start (add1 k))
+         (define png (hash-ref images c #f))
+         (if png
+             ;; The image itself, as DrRacket's editor ports deliver image snips.
+             (write-special (png->image-value png) out)
+             (write-char c out))))
+     (write-string text out start)
+     (close-output-port out)
+     in]))

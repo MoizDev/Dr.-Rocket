@@ -7,3 +7,4 @@ pub mod sexp;
 pub mod document;
 pub mod view;
 pub mod highlight;
+pub mod images;

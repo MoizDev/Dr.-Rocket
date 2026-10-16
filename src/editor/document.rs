@@ -17,6 +17,8 @@ pub struct Document {
     edit_log: Vec<(Range<usize>, usize)>,
     /// Outline cached per buffer version (the status bar asks every frame).
     outline_cache: Option<(u64, std::sync::Arc<Vec<OutlineItem>>)>,
+    /// Images embedded in the text (DrRacket's pasted images).
+    pub images: super::images::ImageStore,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,7 +48,7 @@ impl Lines for Buffer {
 
 impl Document {
     pub fn new(text: &str) -> Self {
-        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new(), outline_cache: None };
+        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new(), outline_cache: None, images: Default::default() };
         d.sync();
         d.buffer.take_changes();
         d

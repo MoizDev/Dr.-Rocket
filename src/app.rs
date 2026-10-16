@@ -568,8 +568,8 @@ impl App {
             self.tabs[i].editor.request_focus();
             return;
         }
-        let text = match std::fs::read(&path) {
-            Ok(bytes) => String::from_utf8_lossy(&bytes).replace("\r\n", "\n"),
+        let (text, wxme) = match self.read_source(&path) {
+            Ok(x) => x,
             Err(e) => {
                 self.toast(format!("Could not open {}: {e}", path.display()), ToastKind::Error);
                 return;
@@ -584,12 +584,33 @@ impl App {
             self.tabs.clear();
         }
         let i = self.new_tab(Some(path.clone()), &text);
+        if let Some(w) = wxme {
+            self.tabs[i].editor.doc.images.load(&w.images);
+            if !w.unsupported.is_empty() {
+                // Saving would drop these boxes: keep DrRacket's file intact.
+                self.tabs[i].editor.read_only = true;
+                self.toast(format!("Opened read-only: this file has boxes Dr. Rocket can't edit yet ({}). Use DrRacket to change it.", w.unsupported.join(", ")), ToastKind::Info);
+            } else if w.comments > 0 {
+                self.toast(format!("Comment boxes are shown as #| … |# comments ({}).", w.comments), ToastKind::Info);
+            }
+        }
         self.active = i;
         self.tabs[i].editor.request_focus();
         self.recents.add_file(&path);
         if let Some(ws) = &mut self.workspace {
             ws.expand_to(&path);
         }
+    }
+
+    /// A file's program text. Files DrRacket saved in its editor format (with images or boxes)
+    /// are read through Racket; their images come back alongside the text.
+    fn read_source(&mut self, path: &Path) -> Result<(String, Option<crate::racket::protocol::WxmeFile>), String> {
+        let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        if crate::racket_ui::is_wxme(&bytes) {
+            let w = crate::racket_ui::read_wxme(self, path)?;
+            return Ok((w.text.replace("\r\n", "\n"), Some(w)));
+        }
+        Ok((String::from_utf8_lossy(&bytes).replace("\r\n", "\n"), None))
     }
 
     /// Open a folder as a project tab (or switch to it if it is already open).
@@ -615,7 +636,14 @@ impl App {
         };
         self.tabs[idx].path = Some(path.clone());
         let text = crate::racket_ui::save_text(&self.tabs[idx]);
-        match crate::config::atomic_write(&path, text.as_bytes()) {
+        // Text with pasted images is saved in DrRacket's editor format; everything else as text.
+        let images = self.tabs[idx].editor.doc.images.for_text(&text);
+        let written = if images.is_empty() {
+            crate::config::atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())
+        } else {
+            crate::racket_ui::write_wxme(self, &path, &text, images)
+        };
+        match written {
             Ok(()) => {
                 let language = self.tabs[idx].language;
                 crate::racket_ui::remember_language(self, &path, language);
@@ -661,16 +689,26 @@ impl App {
         if changed.is_empty() {
             return;
         }
-        for tab in &mut self.tabs {
-            let Some(p) = &tab.path else { continue };
-            if !changed.iter().any(|c| c == p) {
-                continue;
-            }
-            let mtime = std::fs::metadata(p).ok().and_then(|m| m.modified().ok());
-            if mtime == tab.disk_mtime || tab.dirty() {
-                continue;
-            }
-            if let Ok(text) = std::fs::read_to_string(p) {
+        let stale: Vec<(usize, PathBuf)> = self
+            .tabs
+            .iter()
+            .enumerate()
+            .filter_map(|(i, tab)| {
+                let p = tab.path.as_ref()?;
+                let mtime = std::fs::metadata(p).ok().and_then(|m| m.modified().ok());
+                (changed.contains(p) && mtime != tab.disk_mtime && !tab.dirty()).then(|| (i, p.clone()))
+            })
+            .collect();
+        for (i, p) in stale {
+            let mtime = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok());
+            if let Ok((text, wxme)) = self.read_source(&p) {
+                // The editor shows the program without DrRacket's hidden header.
+                let (_, _, body) = crate::racket_ui::load_text(self, Some(&p), &text);
+                let tab = &mut self.tabs[i];
+                if let Some(w) = wxme {
+                    tab.editor.doc.images.load(&w.images);
+                }
+                let text = body;
                 let sel = tab.editor.doc.buffer.selections.clone();
                 tab.editor.doc.buffer.set_text(&text);
                 tab.editor.doc.buffer.mark_saved();
@@ -876,6 +914,20 @@ impl App {
             Command::InsertLambda => {
                 if let Some(t) = self.active_tab_mut() {
                     t.editor.doc.type_text("λ", false);
+                }
+            }
+            Command::InsertImage => {
+                if self.active_tab().is_none_or(|t| t.editor.read_only) {
+                    return;
+                }
+                let Some(path) = rfd::FileDialog::new().add_filter("Images", &["png", "jpg", "jpeg", "gif", "bmp", "webp"]).pick_file() else { return };
+                match std::fs::read(&path).ok().and_then(|b| crate::editor::images::EmbeddedImage::from_file_bytes(&b)) {
+                    Some(img) => {
+                        if let Some(t) = self.active_tab_mut() {
+                            t.editor.insert_image(img);
+                        }
+                    }
+                    None => self.toast(format!("Could not read {} as an image.", path.display()), ToastKind::Error),
                 }
             }
             Command::ReindentAll => {

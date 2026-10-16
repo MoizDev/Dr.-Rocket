@@ -18,6 +18,7 @@
          racket/promise
          racket/string
          syntax/modread
+         net/base64
          drracket/check-syntax
          "common.rkt")
 
@@ -95,6 +96,9 @@
     ["macro-steps" (macro-steps req)]
     ["module-graph" (module-graph req)]
     ["jump-target" (jump-target req)]
+    ;; Library loading (wxme, racket/snip, racket/gui) must happen on the loader thread.
+    ["wxme-read" (on-loader (λ () (wxme-read req)))]
+    ["wxme-write" (on-loader (λ () (wxme-write req)))]
     [_ (error 'server "unknown command: ~a" cmd)]))
 
 (define (req-ref req key default)
@@ -175,8 +179,9 @@
       (current-directory)))
 
 ;; read-program : string source -> syntax
+(define current-images (make-parameter (hash)))
 (define (read-program source source-name)
-  (define port (open-input-string source))
+  (define port (open-source-port source (current-images)))
   (port-count-lines! port)
   (with-module-reading-parameterization
    (λ () (read-syntax source-name port))))
@@ -187,6 +192,7 @@
                    (if (exact-nonnegative-integer? o) (min o (string-length source)) 0)))
   (define source-name (make-source-name (req-ref req 'path #f)))
   (parameterize ([main-source source-name]
+                 [current-images (decode-source-images (req-ref req 'images #f))]
                  [source-offset offset]
                  [source-line-offset (for/sum ([c (in-string source 0 offset)])
                                        (if (char=? c #\newline) 1 0))])
@@ -710,3 +716,87 @@
   (if m (cdar m) 0))
 
 (module+ main (main))
+
+;; ---------------------------------------------------------------------------
+;; DrRacket's editor format (WXME): files with pasted images, comment boxes, fractions...
+;;
+;; wxme-read turns such a file into program text for the IDE: images become characters from
+;; Supplementary Private Use Area-A plus their PNG data (see common.rkt), comment boxes become
+;; #| |# comments, and number snips become their value. Boxes the IDE cannot edit (XML,
+;; Racket and test boxes) are listed in `unsupported` so the file opens read-only.
+
+(struct comment-box-text (text))
+
+(define (wxme-read req)
+  (define path (req-ref req 'path #f))
+  (define wxme-port->port (dynamic-require 'wxme 'wxme-port->port))
+  (define readable<%> (dynamic-require 'wxme 'readable<%>))
+  (define image-snip% (dynamic-require 'racket/snip 'image-snip%))
+  (define out (open-output-string))
+  (define images (make-hasheq))
+  (define next #xF0000)
+  (define comments 0)
+  (define unsupported '())
+  (call-with-input-file path
+    (λ (in)
+      ;; Comment boxes must be caught here: past the filter they are only special comments.
+      (define p (wxme-port->port in #t (λ (s)
+                                          (if (and (object? s) (object-method-arity-includes? s 'get-content-port 0))
+                                              (comment-box-text (port->string (send s get-content-port)))
+                                              s))))
+      (let loop ([pos 0])
+        (define c (read-char-or-special p))
+        (cond
+          [(eof-object? c) (void)]
+          [(char? c) (write-char c out) (loop (add1 pos))]
+          [(is-a? c image-snip%)
+           (define bm (send c get-bitmap))
+           (define png (let ([o (open-output-bytes)]) (and bm (send bm save-file o 'png) (get-output-bytes o))))
+           (cond
+             [png
+              (define ch (integer->char next))
+              (set! next (add1 next))
+              (hash-set! images (string->symbol (number->string (char->integer ch))) (bytes->string/latin-1 (base64-encode png #"")))
+              (write-char ch out)]
+             [else (set! unsupported (cons "image" unsupported))])
+           (loop (add1 pos))]
+          [(comment-box-text? c)
+           (define text (comment-box-text-text c))
+           (set! comments (add1 comments))
+           (write-string (string-append "#| " (string-replace text "|#" "| #") " |#") out)
+           (loop (add1 pos))]
+          [(is-a? c readable<%>)
+           (define v (with-handlers ([(λ (e) #t) (λ (e) e)]) (send c read-special path #f #f pos)))
+           (cond
+             [(number? v) (write-string (number->string v) out)]
+             [else (set! unsupported (cons (format "~a" (object-name c)) unsupported))])
+           (loop (add1 pos))]
+          [else
+           (set! unsupported (cons (format "~a" c) unsupported))
+           (loop (add1 pos))]))))
+  (hasheq 'text (get-output-string out)
+          'images images
+          'comments comments
+          'unsupported (remove-duplicates (reverse unsupported))))
+
+;; wxme-write writes program text with embedded images back in DrRacket's format.
+(define (wxme-write req)
+  (define path (req-ref req 'path #f))
+  (define text (string-of-source (req-ref req 'text "")))
+  (define images (decode-source-images (req-ref req 'images #f)))
+  (define text% (dynamic-require 'racket/gui/base 'text%))
+  (define image-snip% (dynamic-require 'racket/gui/base 'image-snip%))
+  (define read-bitmap (dynamic-require 'racket/draw 'read-bitmap))
+  (define t (new text%))
+  (define start 0)
+  (define (flush! k)
+    (when (> k start) (send t insert (substring text start k) (send t last-position))))
+  (for ([c (in-string text)] [k (in-naturals)])
+    (when (and (image-char? c) (hash-ref images c #f))
+      (flush! k)
+      (set! start (add1 k))
+      (send t insert (make-object image-snip% (read-bitmap (open-input-bytes (hash-ref images c)) 'png)) (send t last-position))))
+  (flush! (string-length text))
+  (unless (send t save-file path 'standard #t)
+    (error 'wxme-write "could not save ~a" path))
+  (hasheq 'saved #t))

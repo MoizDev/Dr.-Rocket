@@ -327,6 +327,13 @@ impl EditorView {
         }
     }
 
+    /// Insert an image at the cursor(s).
+    pub fn insert_image(&mut self, image: crate::editor::images::EmbeddedImage) {
+        let c = self.doc.images.add(image);
+        self.doc.paste(&c.to_string());
+        self.completion = None;
+    }
+
     pub fn request_focus(&mut self) {
         self.focus_request = true;
     }
@@ -378,6 +385,56 @@ impl EditorView {
     }
 
     /// Screen x of a char position on its line (uses this frame's galley if available).
+    /// Thumbnail size of an embedded image: as tall as a line, keeping its aspect ratio.
+    fn image_thumb_size(&self, img: &crate::editor::images::EmbeddedImage) -> Vec2 {
+        let h = (self.geom.line_h - 4.0).max(8.0);
+        let w = (h * img.width as f32 / img.height.max(1) as f32).clamp(h * 0.4, self.geom.char_w * 16.0);
+        vec2(w, h)
+    }
+
+    /// Paint embedded images over their placeholder glyphs; hovering shows one full size.
+    fn paint_images(&self, ui: &Ui, first: usize, last: usize) {
+        if self.doc.images.is_empty() {
+            return;
+        }
+        let chars = self.doc.chars();
+        let b = &self.doc.buffer;
+        let pointer = ui.input(|i| i.pointer.hover_pos());
+        let mut preview = None;
+        for line in first..=last {
+            let (ls, le) = (b.line_start(line), b.line_end(line));
+            for (k, &c) in chars[ls..le].iter().enumerate() {
+                if !crate::editor::images::is_image_char(c) {
+                    continue;
+                }
+                let Some(img) = self.doc.images.get(c) else { continue };
+                let size = self.image_thumb_size(img);
+                // egui puts the extra width before the placeholder glyph: end the thumbnail
+                // where the next character starts.
+                let x = self.x_of(line, k + 1) - size.x - 2.0;
+                let r = Rect::from_min_size(pos2(x, self.line_y(line) + (self.geom.line_h - size.y) / 2.0), size);
+                if !ui.clip_rect().intersects(r) {
+                    continue;
+                }
+                let uri = format!("bytes://embedded/{:p}.png", std::sync::Arc::as_ptr(&img.png));
+                egui::Image::from_bytes(uri.clone(), egui::load::Bytes::Shared(img.png.clone())).corner_radius(2).paint_at(ui, r);
+                if pointer.is_some_and(|p| r.contains(p)) {
+                    preview = Some((uri, img.clone(), r));
+                }
+            }
+        }
+        if let Some((uri, img, r)) = preview {
+            let scale = (320.0 / img.width.max(img.height).max(1) as f32).min(2.0);
+            let size = vec2(img.width as f32, img.height as f32) * scale;
+            egui::Area::new(self.id.with("image-preview")).order(egui::Order::Tooltip).fixed_pos(r.left_bottom() + vec2(0.0, 6.0)).show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                    ui.add(egui::Image::from_bytes(uri, egui::load::Bytes::Shared(img.png.clone())).fit_to_exact_size(size));
+                    ui.label(egui::RichText::new(format!("{} × {}", img.width, img.height)).size(11.0).weak());
+                });
+            });
+        }
+    }
+
     fn x_of(&self, line: usize, col: usize) -> f32 {
         if let Some(g) = self.galleys.get(&line) {
             return self.geom.text_left - self.scroll.x + g.pos_from_cursor(CCursor::new(col)).min.x;
@@ -440,13 +497,32 @@ impl EditorView {
         job.wrap.max_width = f32::INFINITY;
         let unused = self.deco.semantic.as_ref().map(|s| &s.unused);
         let local = self.deco.semantic.as_ref().map(|s| &s.local);
+        let images = &self.doc.images;
+        let space_w = self.geom.char_w;
         let push = |job: &mut LayoutJob, from: usize, to: usize, h: Highlight, dim: bool| {
             if from >= to {
                 return;
             }
-            let text: String = chars[from..to].iter().map(|&c| if c == '\t' { ' ' } else { c }).collect();
             let color = if dim { with_alpha(h.color, 120) } else { h.color };
-            job.append(&text, 0.0, TextFormat { font_id: font.clone(), color, italics: h.italic, ..Default::default() });
+            let format = TextFormat { font_id: font.clone(), color, italics: h.italic, ..Default::default() };
+            // An embedded image shows as a space as wide as its thumbnail (one char, one
+            // glyph, so carets and selections line up); the thumbnail is painted over it.
+            let mut run = String::new();
+            for &c in &chars[from..to] {
+                match images.get(c).filter(|_| crate::editor::images::is_image_char(c)) {
+                    Some(img) => {
+                        if !run.is_empty() {
+                            job.append(&std::mem::take(&mut run), 0.0, format.clone());
+                        }
+                        let w = self.image_thumb_size(img).x + 4.0;
+                        job.append(" ", 0.0, TextFormat { extra_letter_spacing: (w - space_w).max(0.0), ..format.clone() });
+                    }
+                    None => run.push(if c == '\t' { ' ' } else { c }),
+                }
+            }
+            if !run.is_empty() {
+                job.append(&run, 0.0, format);
+            }
         };
         let plain = Highlight { color: theme.editor_fg, italic: false, bold: false };
         let mut i = lexer::token_index_at(toks, ls);
@@ -730,6 +806,11 @@ impl EditorView {
                 let y = self.line_y(line) + (line_h - g.size().y) / 2.0;
                 tp.galley(pos2(text_left - self.scroll.x, y), g.clone(), theme.editor_fg);
             }
+        }
+        {
+            let mut iui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            iui.set_clip_rect(tp.clip_rect());
+            self.paint_images(&iui, first, last);
         }
 
         // Diagnostics squiggles.
@@ -1481,13 +1562,26 @@ impl EditorView {
                     self.doc.type_text(&t, auto_close);
                 }
                 Event::Paste(t) => {
+                    let t = self.doc.images.adopt_from_clipboard(&t);
                     self.doc.paste(&t);
                     self.completion = None;
                 }
+                // An image on the clipboard (a screenshot, an image copied from a browser):
+                // paste it into the program, like DrRacket.
+                Event::PasteImage(img) if style.mode == EditorMode::Code => {
+                    let rgba: Vec<u8> = img.pixels.iter().flat_map(|c| c.to_srgba_unmultiplied()).collect();
+                    if let Some(image) = image::RgbaImage::from_raw(img.size[0] as u32, img.size[1] as u32, rgba).and_then(crate::editor::images::EmbeddedImage::from_rgba) {
+                        self.insert_image(image);
+                    }
+                }
                 Event::Copy => {
-                    ui.ctx().copy_text(self.doc.copy_text().0);
+                    let t = self.doc.copy_text().0;
+                    self.doc.images.shelve_for_clipboard(&t);
+                    ui.ctx().copy_text(t);
                 }
                 Event::Cut => {
+                    let t = self.doc.copy_text().0;
+                    self.doc.images.shelve_for_clipboard(&t);
                     let t = self.doc.cut();
                     ui.ctx().copy_text(t);
                 }

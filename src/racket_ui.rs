@@ -301,6 +301,36 @@ fn ensure_backend(app: &mut App) {
     app.racket.install = Some(install);
 }
 
+/// A server request the UI waits for (reading or writing a DrRacket-format file). Other
+/// answers that arrive meanwhile stay queued for the normal polling.
+fn server_call(app: &mut App, req: ServerRequest) -> Result<ServerResponse, String> {
+    ensure_backend(app);
+    if app.racket.missing {
+        return Err("Racket was not found, and it is needed for files saved by DrRacket with images or boxes.".into());
+    }
+    let server = app.racket.server.as_mut().ok_or("The Racket server is not running.")?;
+    let id = server.request(req);
+    server.wait(id, std::time::Duration::from_secs(60)).unwrap_or_else(|| Err("Racket took too long to answer.".into()))
+}
+
+/// Read a file DrRacket saved in its editor format (it has images or boxes in it).
+pub fn read_wxme(app: &mut App, path: &Path) -> Result<proto::WxmeFile, String> {
+    match server_call(app, ServerRequest::WxmeRead { path: path.to_string_lossy().into_owned() })? {
+        ServerResponse::WxmeRead(f) => Ok(f),
+        _ => Err("unexpected answer from Racket".into()),
+    }
+}
+
+/// Write program text with images in DrRacket's editor format.
+pub fn write_wxme(app: &mut App, path: &Path, text: &str, images: proto::SourceImages) -> Result<(), String> {
+    server_call(app, ServerRequest::WxmeWrite { path: path.to_string_lossy().into_owned(), text: text.to_string(), images }).map(|_| ())
+}
+
+/// Does this file start with DrRacket's editor-format (WXME) header?
+pub fn is_wxme(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"#reader(lib\"read.ss\"\"wxme\")WXME")
+}
+
 fn request(app: &mut App, req: ServerRequest, pending: Pending) -> Option<RequestId> {
     ensure_backend(app);
     let server = app.racket.server.as_mut()?;
@@ -465,7 +495,8 @@ fn schedule_check(app: &mut App, i: usize, ctx: &egui::Context) {
 fn start_check(app: &mut App, i: usize, explicit: bool) {
     let tab = &app.tabs[i];
     let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
-    let req = ServerRequest::CheckSyntax { path: path_string(tab), source, offset };
+    let images = tab.editor.doc.images.for_text(&source);
+    let req = ServerRequest::CheckSyntax { path: path_string(tab), source, offset, images };
     let (id, version) = (tab.id, tab.editor.doc.version());
     if let Some(old) = app.tabs[i].rk.check_req.take()
         && let Some(s) = app.racket.server.as_mut()
@@ -562,6 +593,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
     tab.rk.session = None; // kills the previous program (and its windows)
     let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
     let breakpoints = breakpoint_positions(tab);
+    let images = tab.editor.doc.images.for_text(&source);
     let config = RunConfig {
         path: tab.path.clone(),
         source,
@@ -574,6 +606,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             print_width: 80,
             trace: tab.language.is_teaching() && tab.lang_settings.tracing,
             debug_modules,
+            images,
             ..Default::default()
         },
     };
@@ -902,6 +935,7 @@ fn start_stepper(app: &mut App, i: usize) {
     let width = 60;
     let req = StepRequest {
         path: tab.path.clone(),
+        images: tab.editor.doc.images.for_text(&body),
         source: body,
         level: level.to_string(),
         settings: tab.lang_settings.stepper_json(),
@@ -1004,7 +1038,8 @@ pub fn run(app: &mut App, cmd: Command) {
         Command::MacroStepper => {
             let tab = &app.tabs[i];
             let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
-            let req = ServerRequest::MacroSteps { path: path_string(tab), source, offset, width: 70, policy: "standard".into() };
+            let images = tab.editor.doc.images.for_text(&source);
+            let req = ServerRequest::MacroSteps { path: path_string(tab), source, offset, width: 70, policy: "standard".into(), images };
             let id = tab.id;
             app.tabs[i].rk.macros = Some(MacroView { steps: Vec::new(), current: 0, loading: true });
             request(app, req, Pending::MacroSteps { tab: id });

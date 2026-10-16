@@ -74,6 +74,9 @@ pub struct RunOptions {
     /// With [`Instrument::Debug`]: other open files to debug if the program requires them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub debug_modules: Vec<DebugModule>,
+    /// Images embedded in the program text (see [`SourceImages`]).
+    #[serde(skip_serializing_if = "SourceImages::is_empty")]
+    pub images: SourceImages,
 }
 
 /// Another file to debug (its current editor text, which may be unsaved).
@@ -94,6 +97,7 @@ impl Default for RunOptions {
             submodules: vec!["main".into(), "test".into()],
             memory_limit_mb: None,
             breakpoints: Vec::new(),
+            images: SourceImages::new(),
             print_width: 80,
             trace: false,
             debug_modules: Vec::new(),
@@ -320,6 +324,26 @@ pub enum RunEvent {
 }
 
 // ---------------------------------------------------------------------------
+// Images in source code
+
+/// Images pasted into a program (DrRacket's image snips). In the text, each image is one
+/// character from Supplementary Private Use Area-A; this maps its code point (as a decimal
+/// string) to base64 PNG data. The backends read such text as if the images were there.
+pub type SourceImages = std::collections::BTreeMap<String, String>;
+
+/// A DrRacket editor-format (WXME) file as program text.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WxmeFile {
+    pub text: String,
+    pub images: SourceImages,
+    /// Comment boxes, converted to `#| |#` comments.
+    pub comments: usize,
+    /// Kinds of boxes that cannot be edited here (the file opens read-only).
+    pub unsupported: Vec<String>,
+}
+
+// ---------------------------------------------------------------------------
 // Visualizer
 
 /// A value in a visualizer snapshot: a primitive shown inline, or a heap object by id.
@@ -395,6 +419,8 @@ pub(crate) enum StepperCommand<'a> {
         settings: &'a serde_json::Value,
         teachpacks: &'a [String],
         width: usize,
+        #[serde(skip_serializing_if = "SourceImages::is_empty")]
+        images: &'a SourceImages,
     },
     More,
 }
@@ -463,6 +489,8 @@ pub enum ServerRequest {
         path: Option<String>,
         source: String,
         offset: usize,
+        #[serde(skip_serializing_if = "SourceImages::is_empty")]
+        images: SourceImages,
     },
     /// Signature box for the identifier at `pos`, or for `name` in the buffer's language.
     Bluebox {
@@ -487,6 +515,8 @@ pub enum ServerRequest {
         width: usize,
         /// "standard" hides library macros; "all" shows everything.
         policy: String,
+        #[serde(skip_serializing_if = "SourceImages::is_empty")]
+        images: SourceImages,
     },
     ModuleGraph {
         path: String,
@@ -498,6 +528,16 @@ pub enum ServerRequest {
     JumpTarget {
         path: String,
         name: String,
+    },
+    /// Read a DrRacket editor-format file as program text.
+    WxmeRead {
+        path: String,
+    },
+    /// Write program text containing images in DrRacket's editor format.
+    WxmeWrite {
+        path: String,
+        text: String,
+        images: SourceImages,
     },
 }
 
@@ -511,6 +551,8 @@ impl ServerRequest {
             ServerRequest::MacroSteps { .. } => ServerRequestKind::MacroSteps,
             ServerRequest::ModuleGraph { .. } => ServerRequestKind::ModuleGraph,
             ServerRequest::JumpTarget { .. } => ServerRequestKind::JumpTarget,
+            ServerRequest::WxmeRead { .. } => ServerRequestKind::WxmeRead,
+            ServerRequest::WxmeWrite { .. } => ServerRequestKind::WxmeWrite,
         }
     }
 }
@@ -524,6 +566,8 @@ pub enum ServerRequestKind {
     MacroSteps,
     ModuleGraph,
     JumpTarget,
+    WxmeRead,
+    WxmeWrite,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -724,6 +768,8 @@ pub enum ServerResponse {
     MacroSteps(Vec<MacroStep>),
     ModuleGraph(ModuleGraph),
     JumpTarget(Option<JumpTarget>),
+    WxmeRead(WxmeFile),
+    WxmeWrite,
 }
 
 impl ServerResponse {
@@ -737,6 +783,8 @@ impl ServerResponse {
             ServerRequestKind::MacroSteps => from(v).map(ServerResponse::MacroSteps),
             ServerRequestKind::ModuleGraph => from(v).map(ServerResponse::ModuleGraph),
             ServerRequestKind::JumpTarget => from(v).map(ServerResponse::JumpTarget),
+            ServerRequestKind::WxmeRead => from(v).map(ServerResponse::WxmeRead),
+            ServerRequestKind::WxmeWrite => Ok(ServerResponse::WxmeWrite),
         };
         r.map_err(|e| format!("malformed {kind:?} response: {e}"))
     }

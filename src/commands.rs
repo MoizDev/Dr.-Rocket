@@ -61,6 +61,7 @@ pub enum Command {
     ModuleBrowser,
     RunTests,
     InsertLambda,
+    InsertImage,
     ReindentAll,
     // App
     Settings,
@@ -106,6 +107,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::SearchDocs, label: "Search Racket Documentation…", group: "Racket", icon: ic::MENU_BOOK, shortcut: sc(cmd_shift(), Key::H) },
     CommandInfo { cmd: Command::ClearInteractions, label: "Clear Interactions", group: "Racket", icon: ic::CLEANING_SERVICES, shortcut: None },
     CommandInfo { cmd: Command::InsertLambda, label: "Insert λ", group: "Racket", icon: ic::FUNCTION, shortcut: None },
+    CommandInfo { cmd: Command::InsertImage, label: "Insert Image…", group: "Racket", icon: ic::FILE_OPEN, shortcut: None },
     CommandInfo { cmd: Command::ReindentAll, label: "Reindent All", group: "Racket", icon: ic::FORMAT_ALIGN_LEFT, shortcut: None },
     CommandInfo { cmd: Command::ModuleBrowser, label: "Module Browser", group: "Racket", icon: ic::ACCOUNT_TREE, shortcut: None },
     CommandInfo { cmd: Command::CreateExecutable, label: "Create Executable…", group: "Racket", icon: ic::ROCKET_LAUNCH, shortcut: None },
@@ -227,6 +229,7 @@ pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
                 entry(Command::ClearInteractions),
                 entry(Command::ReindentAll),
                 entry(Command::InsertLambda),
+                entry(Command::InsertImage),
                 None,
                 entry(Command::CreateExecutable),
                 entry(Command::InstallPackage),

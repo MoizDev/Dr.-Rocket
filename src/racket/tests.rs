@@ -281,6 +281,7 @@ fn stepper_produces_highlighted_reductions() {
         settings: settings.stepper_json(),
         teachpacks: vec![],
         width: 60,
+        images: Default::default(),
     };
     let s = StepperSession::start(b, &request).unwrap();
     let events = step_until(&s);
@@ -311,6 +312,7 @@ fn stepper_handles_hash_lang_teaching_buffers() {
         settings: Language::Beginner.default_settings().stepper_json(),
         teachpacks: vec![],
         width: 60,
+        images: Default::default(),
     };
     let events = step_until(&StepperSession::start(b, &request).unwrap());
     let texts: Vec<String> = events
@@ -333,6 +335,7 @@ fn stepper_matches_drracket_on_list_construction() {
         settings: Language::Beginner.default_settings().stepper_json(),
         teachpacks: vec![],
         width: 200,
+        images: Default::default(),
     };
     let events = step_until(&StepperSession::start(b, &request).unwrap());
     let after: Vec<String> = events
@@ -367,7 +370,7 @@ fn server_check_syntax_bluebox_docs_and_completions() {
     let src = "#lang racket\n(define (f x) (map add1 x))\n(define unused 3)\n(f (list 1 2))\n";
     let ServerResponse::CheckSyntax(cs) = server_result(
         &mut server,
-        ServerRequest::CheckSyntax { path: Some(path.to_string_lossy().into()), source: src.into(), offset: 0 },
+        ServerRequest::CheckSyntax { path: Some(path.to_string_lossy().into()), source: src.into(), offset: 0, images: Default::default() },
     ) else {
         panic!()
     };
@@ -423,7 +426,7 @@ fn server_reports_syntax_errors_and_macro_steps() {
     let mut server = Server::start(b).unwrap();
     let src = "#lang racket\n(define (f x) (+ x y))\n";
     let ServerResponse::CheckSyntax(cs) =
-        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source: src.into(), offset: 0 })
+        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source: src.into(), offset: 0, images: Default::default() })
     else {
         panic!()
     };
@@ -434,7 +437,7 @@ fn server_reports_syntax_errors_and_macro_steps() {
     let src = "#lang racket\n(define-syntax-rule (swap! a b) (let ([t a]) (set! a b) (set! b t)))\n(define x 1) (define y 2)\n(swap! x y)\n";
     let ServerResponse::MacroSteps(steps) = server_result(
         &mut server,
-        ServerRequest::MacroSteps { path: None, source: src.into(), offset: 0, width: 80, policy: "standard".into() },
+        ServerRequest::MacroSteps { path: None, source: src.into(), offset: 0, width: 80, policy: "standard".into(), images: Default::default() },
     ) else {
         panic!()
     };
@@ -593,6 +596,7 @@ fn newer_check_syntax_cancels_older_for_same_file() {
         path: Some("/tmp/racketeer-supersede.rkt".into()),
         source: format!("#lang racket\n(define x {n})\n"),
         offset: 0,
+        images: Default::default(),
     };
     let first = server.request(req(1));
     let second = server.request(req(2));
@@ -646,7 +650,7 @@ fn latency_report() {
     for i in 0..3 {
         let t = Instant::now();
         let source = format!("#lang racket\n(define x {i})\n");
-        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source, offset: 0 });
+        server_result(&mut server, ServerRequest::CheckSyntax { path: None, source, offset: 0, images: Default::default() });
         eprintln!("check-syntax #{i}: {:?}", t.elapsed());
     }
 }
@@ -762,4 +766,43 @@ fn visualizer_tail_calls_do_not_grow_the_stack() {
     assert_eq!(deepest("sum"), 4, "(sum (rest l)) is not a tail call");
     // The loop's result comes back once, from the frame that computed it.
     assert_eq!(steps.iter().filter(|s| s.kind == "return" && s.name.as_deref() == Some("sum-acc")).count(), 1);
+}
+
+/// Files with pasted images: written in DrRacket's editor format, read back to the same text
+/// and image, and run with the image as a real value.
+#[test]
+fn wxme_files_round_trip_and_run_with_images() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let dir = scratch_dir().join("wxme");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("pic.rkt");
+    // A 3x2 red PNG.
+    let png = {
+        let img = image::RgbaImage::from_pixel(3, 2, image::Rgba([255, 0, 0, 255]));
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap();
+        out
+    };
+    let ch = char::from_u32(0xF0000).unwrap();
+    let text = format!("#lang htdp/bsl\n(require 2htdp/image)\n(define pic {ch})\n(check-expect (image-width pic) 3)\n(image-height pic)\n");
+    let mut images = SourceImages::new();
+    images.insert("983040".into(), base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png));
+    let w = server_result(&mut server, ServerRequest::WxmeWrite { path: path.to_string_lossy().into(), text: text.clone(), images: images.clone() });
+    assert_eq!(w, ServerResponse::WxmeWrite);
+    let bytes = std::fs::read(&path).unwrap();
+    assert!(bytes.starts_with(b"#reader(lib\"read.ss\"\"wxme\")WXME"), "saved in DrRacket's format");
+
+    let ServerResponse::WxmeRead(f) = server_result(&mut server, ServerRequest::WxmeRead { path: path.to_string_lossy().into() }) else { panic!() };
+    assert_eq!(f.text, text);
+    assert_eq!(f.images.len(), 1);
+    assert!(f.unsupported.is_empty());
+
+    let mut config = module_config(Some(path), &f.text, Instrument::None);
+    config.options.images = f.images;
+    let s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, ready(None));
+    assert_eq!(values(&events), vec!["2"], "{events:?}");
+    let tests = events.iter().find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None }).unwrap();
+    assert_eq!((tests.passed, tests.total), (1, 1));
 }

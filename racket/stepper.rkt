@@ -71,7 +71,9 @@
   (define v (hash-ref settings key default))
   (if (eq? v (json-null)) default v))
 
+(define cmd-images (hasheq))
 (define (run-stepper cmd)
+  (set! cmd-images cmd)
   (define raw-source (string-of-source (hash-ref cmd 'source "")))
   (define requested-level (hash-ref cmd 'level "beginner"))
   (define module-source? (equal? requested-level "module"))
@@ -209,7 +211,7 @@
         ['finished-stepping
          (emit (hasheq 'ev "finished" 'count step-count))]
         [_ (void)]))
-    (define port (open-input-string source))
+    (define port (open-source-port source (decode-source-images (hash-ref cmd-images 'images #f))))
     (port-count-lines! port)
     (define next
       (expand-teaching-program port

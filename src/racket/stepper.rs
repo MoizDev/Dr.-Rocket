@@ -20,6 +20,8 @@ pub struct StepRequest {
     pub settings: serde_json::Value,
     /// Teachpack require specs as s-expression text, e.g. `(lib "image.rkt" "teachpack" "2htdp")`.
     pub teachpacks: Vec<String>,
+    /// Images embedded in `source`.
+    pub images: SourceImages,
     /// Pretty-printing width in characters.
     pub width: usize,
 }
@@ -49,6 +51,7 @@ impl StepperSession {
             settings: &request.settings,
             teachpacks: &request.teachpacks,
             width: request.width,
+            images: &request.images,
         })?;
         Ok(StepperSession { process, events })
     }
