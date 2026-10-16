@@ -18,17 +18,21 @@
          htdp/bsl/runtime
          "common.rkt")
 
-;; level id -> (values language-module reader-params abbreviate? use-function-output?
-;;                     output-function-instead-of-lambda? show-lambdas-as-lambdas? sharing?)
+;; Per level: the language module, reader and printing configuration, and how the stepper
+;; shows lambdas. `family` is 'htdp or a DeinProgramm level symbol.
 (struct level-info (module accept-quasiquote? abbreviate? function-output? output-function?
-                     lambdas? sharing?))
+                     lambdas? sharing? [family #:auto])
+  #:auto-value 'htdp)
+(struct sdp-level-info level-info (sdp-level writing-style))
 
 (define levels
   (hash "beginner"            (level-info '(lib "htdp-beginner.ss" "lang") #f #f #f #t #f #f)
         "beginner-abbr"       (level-info '(lib "htdp-beginner-abbr.ss" "lang") #t #t #f #t #f #f)
         "intermediate"        (level-info '(lib "htdp-intermediate.ss" "lang") #t #t #t #t #f #f)
         "intermediate-lambda" (level-info '(lib "htdp-intermediate-lambda.ss" "lang") #t #t #t #f #t #f)
-        "advanced"            (level-info '(lib "htdp-advanced.ss" "lang") #t #t #t #f #t #t)))
+        "advanced"            (level-info '(lib "htdp-advanced.ss" "lang") #t #t #t #f #t #t)
+        "sdp-beginner"        (sdp-level-info '(lib "deinprogramm/sdp/beginner.rkt") #t #t #f #f #f #f 'beginner "explicit")
+        "sdp-vanilla"         (sdp-level-info '(lib "deinprogramm/sdp/vanilla.rkt") #t #t #f #f #f #f 'vanilla "explicit")))
 
 ;; `#lang htdp/bsl` and friends map onto the same levels.
 (define lang-line-levels
@@ -68,10 +72,13 @@
   (if (eq? v (json-null)) default v))
 
 (define (run-stepper cmd)
-  (define source (string-of-source (hash-ref cmd 'source "")))
+  (define raw-source (string-of-source (hash-ref cmd 'source "")))
   (define requested-level (hash-ref cmd 'level "beginner"))
   (define module-source? (equal? requested-level "module"))
-  (define level (if module-source? (or (lang-line-level source) "beginner") requested-level))
+  ;; `#lang htdp/bsl` buffers are stepped as the matching teaching level. The `#lang` line
+  ;; is blanked out (not removed) so source positions stay the same.
+  (define level (if module-source? (lang-line-level raw-source) requested-level))
+  (define source (if (and module-source? level) (blank-lang-line raw-source) raw-source))
   (define info (hash-ref levels level #f))
   (define settings (let ([s (hash-ref cmd 'settings (hasheq))]) (if (hash? s) s (hasheq))))
   (define width (let ([w (hash-ref cmd 'width 72)]) (if (exact-positive-integer? w) w 72)))
@@ -79,7 +86,9 @@
   (define teachpacks (parse-teachpacks (hash-ref cmd 'teachpacks '())))
   (cond
     [(not info)
-     (emit (hasheq 'ev "error" 'message (format "The stepper does not support the language level ~s." level)))
+     (emit (hasheq 'ev "error" 'message (if module-source?
+                                                     "The stepper only works with the teaching languages (How to Design Programs and DeinProgramm)."
+                                                     (format "The stepper does not support the language level ~s." level))))
      (emit (hasheq 'ev "finished" 'count 0))]
     [else
      (define done (make-semaphore 0))
@@ -91,7 +100,7 @@
                            (λ (e)
                              (emit (hasheq 'ev "error" 'message (exn->message e)))
                              (emit (hasheq 'ev "finished" 'count 0)))])
-            (step-program source source-name info settings teachpacks width module-source?))
+            (step-program source source-name info settings teachpacks width))
           (semaphore-post done))))
      (semaphore-wait done)
      (custodian-shutdown-all cust)]))
@@ -103,7 +112,7 @@
       (define v (read (open-input-string tp)))
       (if (eof-object? v) (string->symbol tp) v))))
 
-(define (step-program source source-name info settings teachpacks width module-source?)
+(define (step-program source source-name info settings teachpacks width)
   (define dir (if (path? source-name)
                   (let-values ([(base name dir?) (split-path source-name)]) (if (path? base) base (current-directory)))
                   (current-directory)))
@@ -112,8 +121,10 @@
     (string->symbol (setting settings 'printing_style "constructor")))
   (define fraction-style
     (string->symbol (setting settings 'fraction_style "repeating-decimal")))
+  (define sdp? (sdp-level-info? info))
   (define rt-settings
-    (sl-runtime-settings printing-style
+    (and (not sdp?)
+     (sl-runtime-settings printing-style
                          fraction-style
                          (setting settings 'show_sharing (level-info-sharing? info))
                          (setting settings 'insert_newlines #t)
@@ -121,22 +132,37 @@
                          (setting settings 'true_false_empty_as_ids #f)
                          (level-info-abbreviate? info)
                          (level-info-function-output? info)
-                         (level-info-output-function? info)))
+                         (level-info-output-function? info))))
   (define step-count 0)
   (parameterize ([current-namespace ns]
                  [current-directory dir]
                  [current-load-relative-directory dir]
                  [current-output-port (open-output-nowhere)]
                  [main-source source-name]
-                 [read-case-sensitive (setting settings 'case_sensitive #t)]
+                 [read-case-sensitive (setting settings 'case_sensitive (not sdp?))]
                  [read-accept-quasiquote (level-info-accept-quasiquote? info)]
                  [read-decimal-as-inexact #f])
-    (configure/settings rt-settings)
+    (define render-value/format
+      (cond
+        [sdp?
+         (define runtime 'deinprogramm/sdp/private/runtime)
+         (define make-settings (dynamic-require runtime 'sdp-runtime-settings))
+         ((dynamic-require runtime 'configure/settings)
+          (make-settings (string->symbol (setting settings 'printing_style "write"))
+                         (string->symbol (setting settings 'writing_style (sdp-level-info-writing-style info)))
+                         fraction-style
+                         (setting settings 'show_sharing #f)
+                         (setting settings 'insert_newlines #t)
+                         #f))
+         (dynamic-require runtime 'sdp-render-value/format)]
+        [else
+         (configure/settings rt-settings)
+         sl-render-value/format]))
     (define size-hook (pretty-print-size-hook))
     (define print-hook (pretty-print-print-hook))
     (define (render-to-string v)
       (define o (open-output-string))
-      (sl-render-value/format v o 'infinity)
+      (render-value/format v o 'infinity)
       (get-output-string o))
     (define (render-to-sexp v)
       (or (and (procedure? v) (object-name v))
@@ -181,12 +207,10 @@
     (define port (open-input-string source))
     (port-count-lines! port)
     (define next
-      (if module-source?
-          (module-expander port source-name)
-          (expand-teaching-program port
-                                   (λ (src p) (read-syntax src p))
-                                   (level-info-module info)
-                                   teachpacks)))
+      (expand-teaching-program port
+                               (λ (src p) (read-syntax src p))
+                               (level-info-module info)
+                               teachpacks))
     (go (λ (init iter)
           (init)
           (error-value->string-handler
@@ -197,27 +221,13 @@
         receive-result
         render-settings)))
 
-;; For `#lang htdp/...` buffers: expand the module, then require it, mirroring DrRacket's
-;; module-language program expander.
-(define (module-expander port source-name)
-  (define state 'module)
-  (define modname #f)
-  (λ ()
-    (case state
-      [(module)
-       (set! state 'require)
-       (define stx (parameterize ([read-accept-reader #t] [read-accept-lang #t])
-                     (read-syntax source-name port)))
-       (syntax-case stx ()
-         [(module name . _)
-          (set! modname (syntax-e #'name))])
-       (expand stx)]
-      [(require)
-       (set! state 'done)
-       (stepper-syntax-property
-        (datum->syntax #f `(dynamic-require '',modname #f))
-        'stepper-skip-completely #t)]
-      [else eof])))
+(define (blank-lang-line source)
+  (define m (regexp-match-positions #px"#lang\\s+\\S+" source))
+  (if m
+      (string-append (substring source 0 (caar m))
+                     (make-string (- (cdar m) (caar m)) #\space)
+                     (substring source (cdar m)))
+      source))
 
 ;; strip-to-sexp : syntax hash -> datum
 ;; Like the stepper GUI's strip-to-sexp: highlighted pairs are recorded as-is; highlighted
