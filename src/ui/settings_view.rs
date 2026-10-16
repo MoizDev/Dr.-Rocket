@@ -99,6 +99,7 @@ impl App {
             Modal::Prompt(p) => self.prompt_ui(ctx, p),
             Modal::ConfirmClose { tab, then_quit } => self.confirm_close_ui(ctx, tab, then_quit),
             Modal::ConfirmQuit => self.confirm_quit_ui(ctx),
+            Modal::ConfirmCloseProject => self.confirm_close_project_ui(ctx),
             Modal::About => self.about_ui(ctx),
         }
     }
@@ -163,8 +164,52 @@ impl App {
         }
     }
 
-    fn confirm_quit_ui(&mut self, ctx: &egui::Context) {
+    fn confirm_close_project_ui(&mut self, ctx: &egui::Context) {
         let dirty: Vec<String> = self.tabs.iter().filter(|t| t.dirty()).map(|t| t.title()).collect();
+        let project = self.current_project;
+        if dirty.is_empty() {
+            self.close_project(project, true);
+            return;
+        }
+        let mut choice = None;
+        let title = format!("Close {} with unsaved changes?", self.projects.get(project).map(|p| p.label()).unwrap_or_default());
+        self.dialog(ctx, &title, 420.0, |app, ui| {
+            ui.label(egui::RichText::new(format!("Unsaved: {}", dirty.join(", "))).color(app.theme.text_muted));
+            ui.add_space(14.0);
+            ui.horizontal(|ui| {
+                if ui.button("Discard & Close").clicked() {
+                    choice = Some(0);
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(primary_button(&app.theme, "Save All & Close")).clicked() {
+                        choice = Some(2);
+                    }
+                    if ui.button("Cancel").clicked() {
+                        choice = Some(1);
+                    }
+                });
+            });
+        });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            choice = Some(1);
+        }
+        match choice {
+            Some(0) => self.close_project(project, true),
+            Some(1) => {}
+            Some(2) => {
+                for i in 0..self.tabs.len() {
+                    if self.tabs[i].dirty() && !self.save_tab(i, false) {
+                        return;
+                    }
+                }
+                self.close_project(project, true);
+            }
+            _ => self.modal = Modal::ConfirmCloseProject,
+        }
+    }
+
+    fn confirm_quit_ui(&mut self, ctx: &egui::Context) {
+        let dirty = self.all_dirty_titles();
         if dirty.is_empty() {
             self.quit_confirmed = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -195,10 +240,8 @@ impl App {
             }
             Some(1) => {}
             Some(2) => {
-                for i in 0..self.tabs.len() {
-                    if self.tabs[i].dirty() && !self.save_tab(i, false) {
-                        return;
-                    }
+                if !self.save_all_projects() {
+                    return;
                 }
                 self.quit_confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);

@@ -428,6 +428,17 @@ fn log_error(e: &str) {
 
 // ---------------------------------------------------------------------------------- check syntax
 
+/// After a project tab comes back to the front: answers that arrived while it was parked were
+/// dropped, so re-check anything whose semantic info is out of date.
+pub fn resume_tabs(app: &mut App) {
+    for tab in app.tabs.iter_mut() {
+        tab.rk.check_req = None;
+        if tab.rk.checked_version != tab.editor.doc.version() && app.settings.online_check_syntax {
+            tab.rk.check_due = Some(0.0);
+        }
+    }
+}
+
 fn schedule_check(app: &mut App, i: usize, ctx: &egui::Context) {
     let now = ctx.input(|inp| inp.time);
     let online = app.settings.online_check_syntax;

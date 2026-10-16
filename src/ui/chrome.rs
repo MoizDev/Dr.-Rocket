@@ -29,13 +29,10 @@ impl App {
         let mut bar = ui.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.spacing_mut().item_spacing.x = 4.0;
 
-        // Project selector.
-        let project = self.workspace.as_ref().map(|w| w.name.clone()).unwrap_or_else(|| "No Project".into());
-        let pr = pill_button(&mut bar, &theme, None, &project, true, false);
-        egui::Popup::menu(&pr).width(300.0).show(|ui| self.project_menu(ui));
         // App menu.
         let mr = icon_button(&mut bar, &theme, ic::MENU, "Menu");
         egui::Popup::menu(&mr).width(260.0).show(|ui| self.app_menu(ui));
+        let tabs_left = bar.cursor().min.x + 6.0;
 
         // Right side, laid out right-to-left.
         let mut rb = bar.new_child(UiBuilder::new().max_rect(row).layout(egui::Layout::right_to_left(egui::Align::Center)));
@@ -85,12 +82,119 @@ impl App {
         if lr.on_hover_text("Choose Language (⌘L)").clicked() {
             self.run_command(Command::ChooseLanguage);
         }
+        // Project tabs fill the space between the menu and the controls.
+        let tabs_right = rb.min_rect().left() - 16.0;
+        if tabs_right > tabs_left + 60.0 {
+            self.project_tab_strip(ui, Rect::from_min_max(pos2(tabs_left, row.top()), pos2(tabs_right, row.bottom())));
+        }
+    }
+
+    /// Mac-style project tabs: flat rectangles, the selected one a lighter tint.
+    fn project_tab_strip(&mut self, ui: &mut Ui, area: Rect) {
+        let theme = self.theme.clone();
+        let tk = self.tokens();
+        let infos = self.project_tabs();
+        let n = infos.len().max(1) as f32;
+        let plus_w = 28.0;
+        let avail = (area.width() - plus_w - 6.0).max(0.0);
+        let tab_w = (avail / n).clamp(60.0, 200.0).min(avail / n);
+        let h = 28.0;
+        let top = area.center().y - h / 2.0;
+        let selected_bg = crate::theme::mix(tk.window, theme.text, if theme.dark { 0.085 } else { 0.07 });
+        let hover_bg = crate::theme::mix(tk.window, theme.text, if theme.dark { 0.045 } else { 0.04 });
+        let font = ui::medium(13.0);
+        let mut switch = None;
+        let mut close = None;
+        let mut reveal = None;
+        let hovered_tab = ui.ctx().pointer_hover_pos().and_then(|p| {
+            (0..infos.len()).find(|&k| Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).contains(p))
+        });
+        for (k, info) in infos.iter().enumerate() {
+            let r = Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).shrink2(vec2(1.0, 0.0));
+            let resp = ui.interact(r, Id::unique(("project-tab", k)), Sense::click());
+            let selected = k == self.current_project;
+            let hovered = hovered_tab == Some(k);
+            if selected {
+                ui.painter().rect_filled(r, CornerRadius::same(7), selected_bg);
+            } else if hovered {
+                ui.painter().rect_filled(r, CornerRadius::same(7), hover_bg);
+            }
+            // Hairline separators between plain tabs, like Finder and Safari.
+            let next_plain = k + 1 < infos.len() && k + 1 != self.current_project && hovered_tab != Some(k + 1);
+            if !selected && !hovered && next_plain {
+                ui.painter().vline(r.right() + 1.0, (r.top() + 7.0)..=(r.bottom() - 7.0), Stroke::new(1.0, tk.subtle_border));
+            }
+            // Close button (left, on hover) or the unsaved dot.
+            let close_r = Rect::from_center_size(pos2(r.left() + 15.0, r.center().y), vec2(18.0, 18.0));
+            let close_resp = ui.interact(close_r, Id::unique(("project-tab-close", k)), Sense::click());
+            // The last empty project has nothing to close.
+            let closable = infos.len() > 1 || info.root.is_some() || !self.tabs.is_empty();
+            if hovered && closable {
+                if close_resp.hovered() {
+                    ui.painter().rect_filled(close_r, CornerRadius::same(4), with_alpha(theme.text, 22));
+                }
+                ui.painter().text(close_r.center(), Align2::CENTER_CENTER, ic::CLOSE, ui::icon_font(13.0), theme.text_muted);
+                if close_resp.clicked() {
+                    close = Some(k);
+                }
+            } else if info.dirty {
+                ui.painter().circle_filled(close_r.center(), 3.5, theme.modified);
+            }
+            let color = if selected { theme.text } else { theme.text_muted };
+            let galley = ui.painter().layout_no_wrap(info.label.clone(), font.clone(), color);
+            let max_w = r.width() - 2.0 * 30.0;
+            if galley.size().x <= max_w {
+                ui.painter().galley(pos2(r.center().x - galley.size().x / 2.0, r.center().y - galley.size().y / 2.0), galley, color);
+            } else {
+                widgets::truncated_label(ui, pos2(r.left() + 30.0, r.center().y), &info.label, font.clone(), color, max_w);
+            }
+            let resp = match &info.root {
+                Some(root) => resp.on_hover_text(crate::config::tildify(root)),
+                None => resp,
+            };
+            if resp.clicked() && close.is_none() {
+                switch = Some(k);
+            }
+            if resp.middle_clicked() {
+                close = Some(k);
+            }
+            resp.context_menu(|ui| {
+                if ui.button("Close Project").clicked() {
+                    close = Some(k);
+                    ui.close();
+                }
+                if let Some(root) = &info.root
+                    && ui.button("Reveal in Finder").clicked()
+                {
+                    reveal = Some(root.clone());
+                    ui.close();
+                }
+            });
+        }
+        // New project: recent folders and Open Folder.
+        let plus = Rect::from_min_size(pos2(area.left() + infos.len() as f32 * tab_w + 4.0, area.center().y - 14.0), vec2(plus_w, 28.0));
+        let plus_resp = ui.interact(plus, Id::unique("project-tab-new"), Sense::click()).on_hover_text("Open a project in a new tab");
+        if plus_resp.hovered() {
+            ui.painter().rect_filled(plus, CornerRadius::same(7), hover_bg);
+        }
+        ui.painter().text(plus.center(), Align2::CENTER_CENTER, ic::ADD, ui::icon_font(18.0), theme.text_muted);
+        egui::Popup::menu(&plus_resp).width(300.0).show(|ui| self.project_menu(ui));
+        if let Some(k) = switch {
+            self.switch_project(k);
+        }
+        if let Some(k) = close {
+            self.close_project(k, false);
+        }
+        if let Some(p) = reveal {
+            let _ = std::process::Command::new("open").arg(p).spawn();
+        }
     }
 
     fn project_menu(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
         ui.label(egui::RichText::new("RECENT PROJECTS").size(11.0).color(theme.text_placeholder));
-        let recents: Vec<_> = self.recents.projects.iter().take(10).cloned().collect();
+        let open: Vec<_> = self.project_tabs().into_iter().filter_map(|t| t.root).collect();
+        let recents: Vec<_> = self.recents.projects.iter().filter(|p| !open.contains(&p.path)).take(10).cloned().collect();
         if recents.is_empty() {
             ui.label(egui::RichText::new("No recent projects").color(theme.text_muted));
         }
@@ -107,10 +211,7 @@ impl App {
             ui.close();
             self.run_command(Command::OpenFolder);
         }
-        if self.workspace.is_some() && ui.button("Close Folder").clicked() {
-            ui.close();
-            self.run_command(Command::CloseFolder);
-        }
+
     }
 
     fn app_menu(&mut self, ui: &mut Ui) {

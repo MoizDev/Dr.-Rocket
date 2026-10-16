@@ -195,6 +195,17 @@ pub struct Session {
     pub files: Vec<PathBuf>,
     pub active: usize,
     pub layout: Layout,
+    /// Every open project tab (newer sessions); `current` is the one in front.
+    pub projects: Vec<ProjectSession>,
+    pub current: usize,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct ProjectSession {
+    pub project: Option<PathBuf>,
+    pub files: Vec<PathBuf>,
+    pub active: usize,
 }
 
 impl Session {
@@ -251,6 +262,8 @@ pub enum Modal {
     Palette(crate::ui::palette::Palette),
     ConfirmClose { tab: u64, then_quit: bool },
     ConfirmQuit,
+    /// Close the current project tab, which has unsaved files.
+    ConfirmCloseProject,
     Settings(crate::ui::settings_view::SettingsView),
     Language(crate::ui::language_dialog::LanguageDialog),
     Prompt(crate::ui::language_dialog::Prompt),
@@ -280,6 +293,9 @@ pub struct App {
     pub workspace: Option<Workspace>,
     pub tabs: Vec<Tab>,
     pub active: usize,
+    /// Project tabs in the title bar; the current one's state lives in the three fields above.
+    pub(crate) projects: Vec<crate::projects::ProjectSlot>,
+    pub current_project: usize,
     pub closed: Vec<PathBuf>,
     pub layout: Layout,
     pub modal: Modal,
@@ -383,6 +399,8 @@ impl App {
             recents,
             workspace: None,
             tabs: Vec::new(),
+            projects: vec![crate::projects::ProjectSlot::default()],
+            current_project: 0,
             active: 0,
             closed: Vec::new(),
             layout: Layout::default(),
@@ -409,13 +427,31 @@ impl App {
             app.layout = s.layout.clone();
             // Docs has no permanent tab button; it opens on demand (F1, Search Documentation).
             app.layout.remove(PanelItem::Docs);
-            if let Some(p) = s.project.filter(|p| p.is_dir()) {
-                app.open_folder(&p);
+            let projects = if s.projects.is_empty() {
+                vec![ProjectSession { project: s.project.clone(), files: s.files.clone(), active: s.active }]
+            } else {
+                s.projects.clone()
+            };
+            let mut restored = 0;
+            for p in &projects {
+                let root = p.project.clone().filter(|r| r.is_dir());
+                let files: Vec<&PathBuf> = p.files.iter().filter(|f| f.is_file()).collect();
+                if root.is_none() && files.is_empty() {
+                    continue;
+                }
+                if restored > 0 {
+                    app.new_project();
+                }
+                restored += 1;
+                if let Some(root) = root {
+                    app.open_folder(&root);
+                }
+                for f in files {
+                    app.open_file(f);
+                }
+                app.active = p.active.min(app.tabs.len().saturating_sub(1));
             }
-            for f in s.files.iter().filter(|f| f.is_file()) {
-                app.open_file(f);
-            }
-            app.active = s.active.min(app.tabs.len().saturating_sub(1));
+            app.switch_project(s.current.min(app.projects.len().saturating_sub(1)));
         }
         for p in open {
             if p.is_dir() {
@@ -547,9 +583,9 @@ impl App {
         }
     }
 
+    /// Open a folder as a project tab (or switch to it if it is already open).
     pub fn open_folder(&mut self, path: &Path) {
-        self.workspace = Some(Workspace::open(path, &self.ctx));
-        self.recents.add_project(path);
+        self.open_project(path);
         self.layout.show(PanelItem::Files, Dock::Left);
     }
 
@@ -692,11 +728,14 @@ impl App {
     }
 
     fn session(&self) -> Session {
+        let (projects, current) = self.project_sessions();
         Session {
             project: self.workspace.as_ref().map(|w| w.root.clone()),
             files: self.tabs.iter().filter_map(|t| t.path.clone()).collect(),
             active: self.active,
             layout: self.layout.without_terminals(),
+            projects,
+            current,
         }
     }
 
@@ -766,7 +805,7 @@ impl App {
                     self.open_file(&p);
                 }
             }
-            Command::CloseFolder => self.workspace = None,
+            Command::CloseFolder => self.close_project(self.current_project, false),
             Command::RevealInFinder => {
                 if let Some(p) = self.active_tab().and_then(|t| t.path.clone()) {
                     let _ = std::process::Command::new("open").arg("-R").arg(p).spawn();
@@ -1151,14 +1190,14 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         // Close requests: confirm unsaved changes.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && self.tabs.iter().any(|t| t.dirty()) {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && !self.all_dirty_titles().is_empty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.modal = Modal::ConfirmQuit;
         }
         for action in crate::platform::take_menu_actions() {
             match action {
                 crate::platform::MenuAction::Quit => {
-                    if self.tabs.iter().any(|t| t.dirty()) {
+                    if !self.all_dirty_titles().is_empty() {
                         self.modal = Modal::ConfirmQuit;
                     } else {
                         self.quit_confirmed = true;

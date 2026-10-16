@@ -8,6 +8,7 @@ mod dev;
 mod editor;
 mod fuzzy;
 mod platform;
+mod projects;
 mod racket;
 mod racket_ui;
 mod terminal;
