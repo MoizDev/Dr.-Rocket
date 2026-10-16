@@ -88,8 +88,13 @@ impl EventListener for Listener {
                 self.write(format(size).into_bytes());
             }
             TermEvent::ChildExit(status) => {
-                use std::os::unix::process::ExitStatusExt;
-                let code = status.code().or_else(|| status.signal().map(|s| 128 + s)).unwrap_or(1);
+                #[cfg(unix)]
+                let code = {
+                    use std::os::unix::process::ExitStatusExt;
+                    status.code().or_else(|| status.signal().map(|s| 128 + s)).unwrap_or(1)
+                };
+                #[cfg(not(unix))]
+                let code = status.code().unwrap_or(1);
                 *shared.exit_status.lock() = Some(code);
                 shared.ctx.request_repaint();
             }
@@ -191,8 +196,11 @@ impl TerminalView {
     /// Spawn the user's login shell (`shell` override, else `$SHELL`, else the passwd shell)
     /// in `cwd`.
     pub fn spawn(cwd: &Path, shell: Option<&str>, ctx: &egui::Context) -> anyhow::Result<Self> {
+        // Windows shells take no login flag; PowerShell is the default there.
+        let login = if cfg!(windows) { vec![] } else { vec!["-l".to_string()] };
         let (program, opts_shell) = match shell {
-            Some(s) => (s.to_string(), Some(tty::Shell::new(s.to_string(), vec!["-l".to_string()]))),
+            Some(s) => (s.to_string(), Some(tty::Shell::new(s.to_string(), login))),
+            None if cfg!(windows) => ("powershell.exe".to_string(), Some(tty::Shell::new("powershell.exe".to_string(), vec![]))),
             None => (std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".to_string()), None),
         };
         let name = Path::new(&program).file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or(program);
@@ -221,7 +229,14 @@ impl TerminalView {
         env.insert("TERM".to_string(), "xterm-256color".to_string());
         env.insert("COLORTERM".to_string(), "truecolor".to_string());
         env.insert("TERM_PROGRAM".to_string(), "DrRocket".to_string());
-        let options = tty::Options { shell, working_directory: Some(cwd.to_path_buf()), drain_on_exit: true, env };
+        let options = tty::Options {
+            shell,
+            working_directory: Some(cwd.to_path_buf()),
+            drain_on_exit: true,
+            env,
+            #[cfg(windows)]
+            escape_args: true,
+        };
 
         let size = GridSize { cols: 80, lines: 24 };
         let window_size = WindowSize { num_lines: 24, num_cols: 80, cell_width: 9, cell_height: 18 };
@@ -1011,14 +1026,25 @@ impl Drop for TerminalView {
 
 /// Resolve `program` the way `execvp` would: as a path if it contains a slash, else via `$PATH`.
 fn find_program(program: &str) -> Option<std::path::PathBuf> {
-    use std::os::unix::fs::PermissionsExt;
-    let is_exec = |p: &Path| p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
-    if program.contains('/') {
+    #[cfg(unix)]
+    let is_exec = |p: &Path| {
+        use std::os::unix::fs::PermissionsExt;
+        p.metadata().is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+    };
+    #[cfg(not(unix))]
+    let is_exec = |p: &Path| p.is_file();
+    if program.contains('/') || program.contains('\\') {
         let p = Path::new(program);
         return is_exec(p).then(|| p.to_path_buf());
     }
     let path = std::env::var_os("PATH")?;
-    std::env::split_paths(&path).map(|dir| dir.join(program)).find(|p| is_exec(p))
+    // Windows programs are found with their extension (`raco` is `raco.exe`).
+    let names: Vec<String> = if cfg!(windows) && Path::new(program).extension().is_none() {
+        [".exe", ".cmd", ".bat"].iter().map(|e| format!("{program}{e}")).collect()
+    } else {
+        vec![program.to_string()]
+    };
+    std::env::split_paths(&path).flat_map(|dir| names.iter().map(move |n| dir.join(n))).find(|p| is_exec(p))
 }
 
 /// Scrollback position, for drawing the scrollbar.

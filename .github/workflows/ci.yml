@@ -1,0 +1,39 @@
+# Build, lint and test on macOS, Windows and Linux (with Racket installed, so the backend
+# integration tests run). Manual or per pull request, to save Actions minutes.
+name: CI
+
+on:
+  workflow_dispatch:
+  pull_request:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: Bogdanp/setup-racket@v1.11
+        with:
+          version: "9.3"
+          variant: CS
+          distribution: full
+      - name: Linux GUI libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev xvfb
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        if: runner.os != 'Linux'
+        run: cargo test
+      - name: Test (Linux, virtual display for Racket's GUI library)
+        if: runner.os == 'Linux'
+        run: xvfb-run -a cargo test
+      - name: Release build
+        run: cargo build --release

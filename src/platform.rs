@@ -279,6 +279,8 @@ pub fn install_open_handler() {}
 
 /// What a menu item asks the app to do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// The native menu bar is macOS-only; elsewhere the ☰ menu has every command.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub enum MenuAction {
     /// Index into `commands::COMMANDS`.
     Command(usize),
@@ -294,6 +296,8 @@ pub fn take_menu_actions() -> Vec<MenuAction> {
 }
 
 /// One entry of a menu: label, action, and an optional key equivalent.
+// The native menu bar is macOS-only; elsewhere the ☰ menu has every command.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct MenuEntry {
     pub label: String,
     pub action: MenuAction,
@@ -301,6 +305,8 @@ pub struct MenuEntry {
 }
 
 /// A titled menu; `None` entries are separators.
+// The native menu bar is macOS-only; elsewhere the ☰ menu has every command.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub struct MenuSpec {
     pub title: &'static str,
     pub entries: Vec<Option<MenuEntry>>,

@@ -5,7 +5,7 @@ edition = "2024"
 description = "Dr. Rocket: a fast, beautiful IDE for Racket"
 
 [dependencies]
-eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "system_fonts"] }
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "system_fonts", "x11", "wayland"] }
 egui = "0.37"
 egui_extras = { version = "0.37", features = ["svg", "image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "bmp", "webp"] }
