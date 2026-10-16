@@ -1,6 +1,7 @@
 //! Racketeer: a fast, beautiful IDE for Racket.
 
 mod config;
+mod editor;
 mod racket;
 mod terminal;
 mod theme;
