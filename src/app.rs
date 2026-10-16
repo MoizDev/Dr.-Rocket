@@ -916,6 +916,16 @@ impl App {
                     t.editor.doc.type_text("λ", false);
                 }
             }
+            Command::CommentOutWithBox => {
+                if let Some(t) = self.active_tab_mut() {
+                    t.editor.doc.toggle_block_comment();
+                }
+            }
+            Command::CommentOutWithDatum => {
+                if let Some(t) = self.active_tab_mut() {
+                    t.editor.doc.toggle_datum_comment();
+                }
+            }
             Command::Revert => {
                 let Some(path) = self.active_tab().and_then(|t| t.path.clone()) else { return };
                 match self.read_source(&path) {

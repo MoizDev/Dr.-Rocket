@@ -68,6 +68,8 @@ pub enum Command {
     RunTests,
     InsertLambda,
     InsertImage,
+    CommentOutWithBox,
+    CommentOutWithDatum,
     ReindentAll,
     // App
     Settings,
@@ -114,6 +116,9 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::ClearInteractions, label: "Clear Interactions", group: "Racket", icon: ic::CLEANING_SERVICES, shortcut: None },
     CommandInfo { cmd: Command::InsertLambda, label: "Insert λ", group: "Racket", icon: ic::FUNCTION, shortcut: None },
     CommandInfo { cmd: Command::InsertImage, label: "Insert Image…", group: "Racket", icon: ic::FILE_OPEN, shortcut: None },
+    // The editor handles ⌥⌘/ and ⌥⌘; itself; these make the commands discoverable.
+    CommandInfo { cmd: Command::CommentOutWithBox, label: "Comment Out with a Box  (⌥⌘/)", group: "Racket", icon: ic::COMMENT, shortcut: None },
+    CommandInfo { cmd: Command::CommentOutWithDatum, label: "Comment Out with #;  (⌥⌘;)", group: "Racket", icon: ic::COMMENT, shortcut: None },
     CommandInfo { cmd: Command::ReindentAll, label: "Reindent All", group: "Racket", icon: ic::FORMAT_ALIGN_LEFT, shortcut: None },
     CommandInfo { cmd: Command::ModuleBrowser, label: "Module Browser", group: "Racket", icon: ic::ACCOUNT_TREE, shortcut: None },
     CommandInfo { cmd: Command::CreateExecutable, label: "Create Executable…", group: "Racket", icon: ic::ROCKET_LAUNCH, shortcut: None },
@@ -246,6 +251,8 @@ pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
                 entry(Command::ReindentAll),
                 entry(Command::InsertLambda),
                 entry(Command::InsertImage),
+                entry(Command::CommentOutWithBox),
+                entry(Command::CommentOutWithDatum),
                 None,
                 entry(Command::CreateExecutable),
                 entry(Command::InstallPackage),

@@ -259,6 +259,13 @@ pub fn remember_language(app: &mut App, path: &Path, language: Language) {
     }
 }
 
+/// The language button's icon: a mortarboard for teaching languages, code otherwise.
+pub fn language_icon(tab: &Tab) -> &'static str {
+    let teaching = tab.language.is_teaching()
+        || (tab.language == Language::Module && lang::hash_lang(&tab.editor.doc.head(400)).is_some_and(|l| l.starts_with("htdp/") || l.starts_with("deinprogramm/")));
+    if teaching { ic::SCHOOL } else { ic::CODE }
+}
+
 pub fn language_label(tab: &Tab) -> String {
     if tab.language == Language::Module {
         return match lang::hash_lang(&tab.editor.doc.head(400)) {
@@ -1474,7 +1481,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let chip_g = ui.painter().layout_no_wrap(chip, ui::medium(12.5), theme.text_muted);
     let chip_r = Rect::from_min_size(pos2(row.left(), row.center().y - 12.0), vec2(chip_g.size().x + 30.0, 24.0));
     ui.painter().rect_filled(chip_r, CornerRadius::same(12), tk.hover);
-    ui.painter().text(pos2(chip_r.left() + 13.0, chip_r.center().y), Align2::CENTER_CENTER, ic::SCHOOL, ui::icon_font_filled(14.0), theme.syntax.keyword.color);
+    ui.painter().text(pos2(chip_r.left() + 13.0, chip_r.center().y), Align2::CENTER_CENTER, language_icon(tab), ui::icon_font_filled(14.0), theme.syntax.keyword.color);
     ui.painter().galley(pos2(chip_r.left() + 23.0, chip_r.center().y - chip_g.size().y / 2.0), chip_g, theme.text_muted);
     let chip_resp = ui.interact(chip_r, Id::unique("repl-lang-chip"), Sense::click()).on_hover_text("Choose Language (⌘L)");
     let send_r = Rect::from_center_size(pos2(row.right() - 14.0, row.center().y), vec2(28.0, 28.0));

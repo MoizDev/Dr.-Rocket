@@ -74,6 +74,12 @@ pub fn file_icon(file_name: &str) -> (&'static str, &'static [u8]) {
             None
         })
         .or_else(|| t.file_stems.get(lower.split('.').next().unwrap_or("")).cloned())
+        .or_else(|| {
+            // Other Racket file types (Scribble documents, data and include files) share the
+            // Racket icon; the icon theme only knows `.rkt`.
+            let ext = lower.rsplit('.').next().unwrap_or("");
+            matches!(ext, "scrbl" | "rktl" | "rktd" | "ss" | "scm" | "sls").then(|| t.file_suffixes.get("rkt").cloned()).flatten()
+        })
         .unwrap_or_else(|| "default".to_string());
     key_to_svg(&key).or_else(|| key_to_svg("default")).or_else(|| svg_by_path("file.svg")).unwrap_or(FILE_ICON_SVGS[0])
 }
