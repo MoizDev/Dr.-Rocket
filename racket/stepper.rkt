@@ -16,6 +16,7 @@
          stepper/private/syntax-property
          lang/run-teaching-program
          htdp/bsl/runtime
+         net/base64
          "common.rkt")
 
 ;; Per level: the language module, reader and printing configuration, and how the stepper
@@ -171,8 +172,11 @@
     ;; are installed in another thread). So BSL steps show (cons 'b '()) -> (list 'b).
     (define (render-to-sexp v)
       (parameterize ([abbreviate-cons-as-list #t])
-        (or (and (procedure? v) (object-name v))
-            (print-convert v))))
+        (cond
+          [(procedure? v) (or (object-name v) (print-convert v))]
+          ;; Images stay values; strip-to-sexp turns them into placeholders with their PNGs.
+          [(not (eq? (image->placeholder v) v)) v]
+          [else (print-convert v)])))
     (define render-settings
       (parameterize ([abbreviate-cons-as-list #t])
         (get-render-settings render-to-string render-to-sexp #t #t (level-info-lambdas? info))))
@@ -194,8 +198,12 @@
     (define (receive-result r)
       (match r
         [(Before-After-Result pre post kind pre-src post-src)
+         (reset-step-images!)
+         (define before (render-exps pre))
+         (define after (render-exps post))
          (emit (hasheq 'ev "step" 'index step-count 'kind (format "~a" kind)
-                       'before (render-exps pre) 'after (render-exps post)
+                       'images step-images
+                       'before before 'after after
                        'before_src (posn-info->jsexpr pre-src)
                        'after_src (posn-info->jsexpr post-src)))
          (set! step-count (add1 step-count))
@@ -203,7 +211,9 @@
            (emit (hasheq 'ev "paused" 'count step-count))
            (semaphore-wait more-sema))]
         [(Before-Error-Result pre msg pre-src)
-         (emit (hasheq 'ev "step-error" 'index step-count 'before (render-exps pre)
+         (reset-step-images!)
+         (define before (render-exps pre))
+         (emit (hasheq 'ev "step-error" 'index step-count 'images step-images 'before before
                        'message msg 'before_src (posn-info->jsexpr pre-src)))
          (set! step-count (add1 step-count))]
         [(Error-Result msg)
@@ -239,13 +249,31 @@
 ;; strip-to-sexp : syntax hash -> datum
 ;; Like the stepper GUI's strip-to-sexp: highlighted pairs are recorded as-is; highlighted
 ;; atoms are replaced by unique placeholder symbols mapped to (list atom).
+;; Images in steps: each becomes a placeholder character (as in the IDE's program text),
+;; with its PNG sent alongside the step. Reset per step.
+(define step-images (make-hasheq))  ; code-point symbol -> base64 png
+(define step-image-codes (make-hash)) ; png -> char
+(define (reset-step-images!)
+  (set! step-images (make-hasheq))
+  (set! step-image-codes (make-hash)))
+(define (image->placeholder v)
+  (define png (and (not (or (number? v) (symbol? v) (string? v) (boolean? v) (null? v) (char? v) (keyword? v)))
+                   (image-value->png v)))
+  (cond
+    [png
+     (define c (hash-ref! step-image-codes png (λ () (integer->char (+ #xF0000 (hash-count step-image-codes))))))
+     (hash-set! step-images (string->symbol (number->string (char->integer c)))
+                (bytes->string/latin-1 (base64-encode png #"")))
+     (string->symbol (string c))]
+    [else v]))
+
 (define (strip-to-sexp stx table)
   (let strip ([stx stx])
     (define inner
       (cond
         [(pair? stx) (cons (strip (car stx)) (strip (cdr stx)))]
         [(syntax? stx) (strip (syntax-e stx))]
-        [else stx]))
+        [else (image->placeholder stx)]))
     (cond
       [(and (syntax? stx) (stepper-syntax-property stx 'stepper-highlight))
        (cond

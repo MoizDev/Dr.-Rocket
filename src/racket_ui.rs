@@ -108,6 +108,8 @@ pub struct StepperView {
     pub finished: bool,
     pub paused: bool,
     pub error: Option<String>,
+    /// Each step's images, by placeholder character.
+    pub images: Vec<std::sync::Arc<crate::editor::highlight::ImageMap>>,
 }
 
 impl StepperView {
@@ -945,7 +947,7 @@ fn start_stepper(app: &mut App, i: usize) {
     match StepperSession::start(backend, &req) {
         Ok(s) => {
             let tab = &mut app.tabs[i];
-            tab.rk.stepper = Some(StepperView { session: Some(s), steps: Vec::new(), current: 0, finished: false, paused: false, error: None });
+            tab.rk.stepper = Some(StepperView { session: Some(s), steps: Vec::new(), current: 0, finished: false, paused: false, error: None, images: Vec::new() });
             tab.editor.deco.marks.retain(|m| m.kind != MarkKind::StepBefore);
             app.layout.show(PanelItem::Stepper, Dock::Right);
         }
@@ -960,8 +962,14 @@ fn poll_stepper(app: &mut App, i: usize) {
     let first = st.steps.is_empty();
     for ev in sess.drain() {
         match ev {
-            StepperEvent::Step(s) => st.steps.push(StepItem::Step(s)),
-            StepperEvent::StepError { before, message, before_src, .. } => st.steps.push(StepItem::Error { before, message, before_src }),
+            StepperEvent::Step(s) => {
+                st.images.push(std::sync::Arc::new(crate::editor::highlight::decode_images(&s.images)));
+                st.steps.push(StepItem::Step(s));
+            }
+            StepperEvent::StepError { before, message, before_src, images, .. } => {
+                st.images.push(std::sync::Arc::new(crate::editor::highlight::decode_images(&images)));
+                st.steps.push(StepItem::Error { before, message, before_src });
+            }
             StepperEvent::Error { message } => st.error = Some(message),
             StepperEvent::Paused { .. } => st.paused = true,
             StepperEvent::Finished { .. } => st.finished = true,
@@ -1775,6 +1783,8 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     egui::ScrollArea::vertical().id_salt("stepper-scroll").auto_shrink([false, false]).show(&mut child, |ui| {
         let w = ui.available_width();
         let col_w = if side_by_side { (w - 36.0) / 2.0 } else { w };
+        let step_images = st.images.get(st.current).cloned().unwrap_or_default();
+        let thumb_h = (mono.size * 1.6).round();
         let expr_block = |ui: &mut Ui, exprs: &[proto::StepExpr], bg: Color32, width: f32| {
             ui.vertical(|ui| {
                 ui.set_width(width);
@@ -1783,10 +1793,15 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                     let marks: Vec<(usize, usize)> = e.highlights.clone();
                     let mut job = racket_job(&e.text, &theme, &mono, &marks, bg);
                     job.wrap.max_width = width - 20.0;
+                    crate::editor::highlight::widen_image_chars(&mut job, &step_images, thumb_h);
                     let frame_bg = if is_current { mix(tk.island, theme.text, 0.035) } else { Color32::TRANSPARENT };
                     egui::Frame::NONE.fill(frame_bg).corner_radius(CornerRadius::same(6)).inner_margin(egui::Margin::symmetric(8, 5)).show(ui, |ui| {
                         ui.set_width(width - 16.0);
-                        let resp = ui.label(job);
+                        let galley = ui.painter().layout_job(job);
+                        let (rect, resp) = ui.allocate_exact_size(galley.size(), Sense::hover());
+                        let origin = rect.min;
+                        ui.painter().galley(origin, galley.clone(), theme.text);
+                        crate::editor::highlight::paint_galley_images(ui, &galley, origin, &e.text, &step_images, thumb_h);
                         if !is_current {
                             ui.painter().rect_filled(resp.rect.expand(2.0), CornerRadius::same(4), with_alpha(tk.island, 110));
                         }

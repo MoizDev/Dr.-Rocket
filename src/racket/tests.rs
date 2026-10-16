@@ -806,3 +806,27 @@ fn wxme_files_round_trip_and_run_with_images() {
     let tests = events.iter().find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None }).unwrap();
     assert_eq!((tests.passed, tests.total), (1, 1));
 }
+
+/// Image values in steps arrive as placeholder characters with their PNGs.
+#[test]
+fn stepper_shows_images() {
+    let b = need_racket!();
+    let source = "(require 2htdp/image)\n(define c (circle 10 \"solid\" \"red\"))\n(beside c c)\n".to_string();
+    let request = StepRequest {
+        path: None,
+        source: source.clone(),
+        level: Language::Beginner.stepper_level(&source).unwrap().into(),
+        settings: Language::Beginner.default_settings().stepper_json(),
+        teachpacks: vec![],
+        width: 60,
+        images: Default::default(),
+    };
+    let events = step_until(&StepperSession::start(b, &request).unwrap());
+    let last = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).last().unwrap();
+    let result = last.after.last().unwrap().text.clone();
+    let c = result.chars().next().unwrap();
+    assert!(crate::editor::images::is_image_char(c), "{result:?}");
+    let png = last.images.get(&(c as u32).to_string()).expect("the image's PNG");
+    let img = crate::editor::images::EmbeddedImage::from_b64(png).unwrap();
+    assert_eq!((img.width, img.height), (40, 20), "two 20px circles side by side");
+}

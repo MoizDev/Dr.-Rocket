@@ -448,6 +448,9 @@ pub struct Step {
     pub after: Vec<StepExpr>,
     pub before_src: Option<SrcSpan>,
     pub after_src: Option<SrcSpan>,
+    /// Images in the step's text (see [`SourceImages`]).
+    #[serde(default)]
+    pub images: SourceImages,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -460,6 +463,8 @@ pub enum StepperEvent {
         before: Vec<StepExpr>,
         message: String,
         before_src: Option<SrcSpan>,
+        #[serde(default)]
+        images: SourceImages,
     },
     Error {
         message: String,
