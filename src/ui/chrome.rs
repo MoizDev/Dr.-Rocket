@@ -334,6 +334,19 @@ impl App {
         let theme = self.theme.clone();
         let mut bar = ui.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(10.0, 0.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
         bar.spacing_mut().item_spacing.x = 2.0;
+        // Vim's mode, at the start of the bar as in Neovim's statusline.
+        if let Some((label, color, extra)) = self.active_tab().and_then(|t| t.editor.vim_status(&theme)) {
+            let fg = if theme.dark { theme.editor_bg } else { egui::Color32::WHITE };
+            let g = bar.painter().layout_no_wrap(label.to_string(), ui::semibold(11.0), fg);
+            let (r, _) = bar.allocate_exact_size(vec2(g.size().x + 16.0, 18.0), Sense::hover());
+            bar.painter().rect_filled(r, CornerRadius::same(5), color);
+            bar.painter().galley(pos2(r.center().x - g.size().x / 2.0, r.center().y - g.size().y / 2.0), g, fg);
+            for (text, c) in extra {
+                bar.add_space(8.0);
+                bar.label(egui::RichText::new(text).font(ui::mono(12.5)).color(c));
+            }
+            bar.add_space(10.0);
+        }
         let has_terminal = !self.terminals.is_empty();
         if icon_button_sized(&mut bar, &theme, ic::TERMINAL, &crate::platform::keys("Terminal (⌃`)"), 26.0, 17.0, None, self.layout.bottom.open && has_terminal).clicked() {
             match self.terminals.first().map(|t| t.id) {

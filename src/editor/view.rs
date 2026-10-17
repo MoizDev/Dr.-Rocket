@@ -168,6 +168,9 @@ impl Decorations {
 }
 
 /// Things the editor asks its host to do.
+/// Vim's mode name and colour, then extra notes with their colours (see `vim_status`).
+pub type VimStatus = (&'static str, Color32, Vec<(String, Color32)>);
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum EditorAction {
     GotoDefinition(usize),
@@ -946,7 +949,7 @@ impl EditorView {
 
         // Vim: the mode, the which-key list after the leader, and the `:` menu.
         if self.vim.is_some() {
-            self.paint_vim(ui, rect, style, gutter_w, focused);
+            self.paint_vim(ui, rect, style);
         }
 
         // IME position.
@@ -1173,24 +1176,16 @@ impl EditorView {
                 }
             }
         }
-        // Vim's relative numbers: distances from the cursor, and its own line's number set left.
+        // Vim's relative numbers: distances from the cursor (its own line keeps its number).
         let relative = self.vim.is_some() && style.settings.relative_line_numbers;
-        let digits_w = {
-            let digits = self.doc.buffer.line_count().max(1).ilog10() as usize + 1;
-            p.layout_no_wrap("0".repeat(digits), font.clone(), theme.line_number).size().x
-        };
         for line in first..=last {
             let y = self.line_y(line);
             let row = Rect::from_min_max(pos2(gr.left(), y), pos2(gr.right(), y + self.geom.line_h));
             let is_cur = line == cursor_line;
             if style.settings.show_line_numbers {
                 let color = if is_cur { theme.active_line_number } else { theme.line_number };
-                if relative && is_cur {
-                    p.text(pos2(gr.right() - 14.0 - digits_w, row.center().y), Align2::LEFT_CENTER, format!("{}", line + 1), font.clone(), color);
-                } else {
-                    let n = if relative { line.abs_diff(cursor_line) } else { line + 1 };
-                    p.text(pos2(gr.right() - 14.0, row.center().y), Align2::RIGHT_CENTER, format!("{n}"), font.clone(), color);
-                }
+                let n = if relative && !is_cur { line.abs_diff(cursor_line) } else { line + 1 };
+                p.text(pos2(gr.right() - 14.0, row.center().y), Align2::RIGHT_CENTER, format!("{n}"), font.clone(), color);
             }
             let bp_center = pos2(gr.left() + 12.0, row.center().y);
             if self.deco.breakpoints.contains(&line) {
@@ -1735,15 +1730,11 @@ impl EditorView {
 
     /// Vim mode's overlays: a mode pill (with pending keys, macro recording and messages) at the
     /// bottom left, the which-key list above it after the leader, and the command menu.
-    fn paint_vim(&self, ui: &Ui, rect: Rect, style: &EditorStyle, gutter_w: f32, focused: bool) {
+    /// Vim's mode for the status bar: its name and colour, then what's pending (keys typed so
+    /// far, a macro being recorded) and the last message, each with its colour.
+    pub fn vim_status(&self, theme: &Theme) -> Option<VimStatus> {
         use crate::editor::vim::Mode;
-        let Some(v) = self.vim.as_ref() else { return };
-        let theme = style.theme;
-        let tk = Tokens::of(theme);
-        let p = ui.painter_at(rect);
-        let shadow = egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: with_alpha(Color32::BLACK, if theme.dark { 110 } else { 40 }) };
-
-        // Mode pill.
+        let v = self.vim.as_ref()?;
         let (label, color) = match v.mode {
             Mode::Normal if v.one_shot() => ("(INSERT)", theme.success),
             Mode::Normal => ("NORMAL", theme.text_accent),
@@ -1752,33 +1743,26 @@ impl EditorView {
             Mode::Visual => ("VISUAL", theme.syntax.keyword.color),
             Mode::VisualLine => ("V-LINE", theme.syntax.keyword.color),
         };
-        let pill_font = ui::semibold(11.0);
-        let g = p.layout_no_wrap(label.to_string(), pill_font, if theme.dark { theme.editor_bg } else { Color32::WHITE });
-        let base = pos2(rect.left() + gutter_w.max(10.0) + 6.0, rect.bottom() - 12.0);
-        let pill = Rect::from_min_size(pos2(base.x, base.y - 20.0), vec2(g.size().x + 16.0, 20.0));
-        let alpha = if focused { 255 } else { 150 };
-        p.rect_filled(pill, CornerRadius::same(10), with_alpha(color, alpha));
-        p.galley(pos2(pill.left() + 8.0, pill.center().y - g.size().y / 2.0), g, theme.editor_bg);
-        let mut x = pill.right() + 8.0;
-        let extra = |p: &egui::Painter, x: &mut f32, text: &str, c: Color32, mono: bool| {
-            if text.is_empty() {
-                return;
-            }
-            let font = if mono { ui::mono(12.5) } else { ui::ui_font(12.5) };
-            let g = p.layout_no_wrap(text.to_string(), font, c);
-            let bg = Rect::from_min_size(pos2(*x, pill.top()), vec2(g.size().x + 14.0, pill.height()));
-            p.rect_filled(bg, CornerRadius::same(10), with_alpha(tk.popup, 235));
-            p.galley(pos2(bg.left() + 7.0, bg.center().y - g.size().y / 2.0), g, c);
-            *x = bg.right() + 6.0;
-        };
+        let mut extra = Vec::new();
         if let Some(r) = v.recording_into() {
-            extra(&p, &mut x, &format!("recording @{r}"), theme.error, false);
+            extra.push((format!("recording @{r}"), theme.error));
         }
-        extra(&p, &mut x, &v.pending(), theme.text, true);
+        let pending = v.pending();
+        if !pending.is_empty() {
+            extra.push((pending, theme.text));
+        }
         if let Some(m) = &v.message {
-            let c = if m.starts_with('E') { theme.error } else { theme.text_muted };
-            extra(&p, &mut x, m, c, false);
+            extra.push((m.clone(), if m.starts_with('E') { theme.error } else { theme.text_muted }));
         }
+        Some((label, color, extra))
+    }
+
+    fn paint_vim(&self, ui: &Ui, rect: Rect, style: &EditorStyle) {
+        let Some(v) = self.vim.as_ref() else { return };
+        let theme = style.theme;
+        let tk = Tokens::of(theme);
+        let p = ui.painter_at(rect);
+        let shadow = egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: with_alpha(Color32::BLACK, if theme.dark { 110 } else { 40 }) };
 
         // Which-key: what can follow the leader.
         if let Some((typed, items)) = v.which_key().filter(|(_, i)| !i.is_empty()) {
@@ -1787,7 +1771,7 @@ impl EditorView {
             let cols = ((w - 24.0) / col_w).floor().max(1.0) as usize;
             let rows = items.len().div_ceil(cols);
             let h = 40.0 + rows as f32 * 24.0 + 10.0;
-            let panel = Rect::from_min_size(pos2(rect.center().x - w / 2.0, pill.top() - 10.0 - h), vec2(w, h));
+            let panel = Rect::from_min_size(pos2(rect.center().x - w / 2.0, rect.bottom() - 12.0 - h), vec2(w, h));
             p.add(shadow.as_shape(panel, CornerRadius::same(12)));
             p.rect(panel, CornerRadius::same(12), tk.popup, Stroke::new(1.0, tk.subtle_border), StrokeKind::Inside);
             let title = if typed.is_empty() { "Space".to_string() } else { format!("Space {}", typed.chars().map(String::from).collect::<Vec<_>>().join(" ")) };
