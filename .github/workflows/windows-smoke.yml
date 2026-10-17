@@ -1,31 +1,56 @@
-# Launch the release build on Windows and report whether it stays up: exit code, crash
-# reports and Windows' own crash log. Manual only.
+# Launch Dr. Rocket on Windows the way a user does (Racket installed, the released zip) and
+# report whether it stays up: exit code, crash reports and Windows' own crash log. Manual only.
 name: Windows smoke test
 
 on:
   workflow_dispatch:
+    inputs:
+      source:
+        description: "release (the zip on the release tag below) or build (this commit)"
+        default: release
+      tag:
+        description: "Release tag, when source is release"
+        default: v1.0.0-beta.1
 
 jobs:
   launch:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Install Racket
+        run: choco install racket -y --no-progress
       - uses: dtolnay/rust-toolchain@stable
+        if: inputs.source == 'build'
       - uses: Swatinem/rust-cache@v2
+        if: inputs.source == 'build'
       - name: Build
-        run: cargo build --release
+        if: inputs.source == 'build'
+        shell: pwsh
+        run: |
+          cargo build --release
+          New-Item -ItemType Directory -Force "Dr. Rocket" | Out-Null
+          Copy-Item target/release/drrocket.exe "Dr. Rocket/Dr. Rocket.exe"
+      - name: Download the release
+        if: inputs.source == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: pwsh
+        run: |
+          gh release download "${{ inputs.tag }}" -p "*windows-x64.zip" -O app.zip
+          Expand-Archive app.zip -DestinationPath .
       - name: Launch
         shell: pwsh
         run: |
+          $env:Path = "C:\Program Files\Racket;" + $env:Path
           $env:RUST_BACKTRACE = "1"
-          $p = Start-Process target/release/drrocket.exe -PassThru -RedirectStandardError err.txt -RedirectStandardOutput out.txt
-          Start-Sleep -Seconds 25
-          if ($p.HasExited) { "EXITED with code $($p.ExitCode)" } else { "STILL RUNNING after 25 s"; Stop-Process $p -Force }
+          $p = Start-Process "Dr. Rocket/Dr. Rocket.exe" -PassThru -RedirectStandardError err.txt -RedirectStandardOutput out.txt
+          Start-Sleep -Seconds 40
+          if ($p.HasExited) { "EXITED with code $($p.ExitCode) (0x{0:X8})" -f $p.ExitCode } else { "STILL RUNNING after 40 s"; Stop-Process $p -Force }
           "--- stderr"; Get-Content err.txt -ErrorAction SilentlyContinue
           "--- stdout"; Get-Content out.txt -ErrorAction SilentlyContinue
           "--- crash reports"
           Get-ChildItem "$env:APPDATA\dr-rocket\crash-reports" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName }
           "--- Windows Application log"
           Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
-            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting', '.NET Runtime' } |
+            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting' } |
             ForEach-Object { $_.Message }
