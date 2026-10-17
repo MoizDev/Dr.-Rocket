@@ -77,6 +77,9 @@ impl Automation {
     /// Advance the script. Called from `raw_input_hook`, so injected events enter egui exactly
     /// like real OS input (pointer state, hover and clicks all update normally).
     pub fn step(&mut self, app: &mut App, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // The window never takes OS focus (see main.rs), so tell egui it has it: widgets only
+        // accept keyboard input in a focused viewport.
+        raw.focused = true;
         let now = ctx.input(|i| i.time);
         self.started.get_or_insert(now);
         // Advance an in-progress drag one frame at a time, like a real mouse.
