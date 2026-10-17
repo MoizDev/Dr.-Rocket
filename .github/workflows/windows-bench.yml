@@ -18,8 +18,11 @@ jobs:
       - name: Matrix
         shell: pwsh
         run: |
+          New-Item -ItemType Directory -Force target/bench | Out-Null
+          Copy-Item racket/visualize.rkt target/bench/
           function Bench($label, $script, $vars) {
             $env:DRROCKET_FRAME_STATS = "continuous"
+            $env:DRROCKET_CONFIG_DIR = (New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/cfg-$label".Replace(' ','-')).FullName
             $env:DRROCKET_AUTOMATION = "tools/bench/$script.json"
             foreach ($k in $vars.Keys) { Set-Item "env:$k" $vars[$k] }
             Start-Process target/release/drrocket.exe -Wait -RedirectStandardError err.txt -RedirectStandardOutput out.txt

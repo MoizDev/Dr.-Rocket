@@ -1,1 +1,1 @@
-{"window": [1480, 940], "steps": [{"open_folder": "racket"}, {"open": "racket/visualize.rkt"}, {"wait_ms": 4000}, {"log": "phase: measure"}, {"wait_ms": 9000}, {"log": "phase: end"}, {"quit": true}]}
+{"window": [1480, 940], "steps": [{"open_folder": "target/bench"}, {"open": "target/bench/visualize.rkt"}, {"wait_ms": 4000}, {"log": "phase: measure"}, {"wait_ms": 9000}, {"log": "phase: end"}, {"quit": true}]}
