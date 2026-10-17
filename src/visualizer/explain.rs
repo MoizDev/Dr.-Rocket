@@ -54,8 +54,36 @@ impl Explanation {
     }
 }
 
+/// A one-line note for the code a step is about, written beside it in the editor:
+/// `k is 12 and t's key is 34  → Yes`, `k = 12, t = node 18`, `→ returns node 34`.
+pub fn inline_note(step: &VizStep, ex: &Explanation) -> Option<String> {
+    match step.kind.as_str() {
+        "question" => {
+            let answer = ex.headline.iter().find_map(|p| if let Piece::Answer(a) = p { Some(*a) } else { None })?;
+            let values = ex.lines.first().map(|l| plain(l)).filter(|s| s.starts_with("Here ")).map(|s| s["Here ".len()..].to_string());
+            let a = if answer { "Yes" } else { "No" };
+            Some(match values {
+                Some(v) => format!("{v}  → {a}"),
+                None => format!("→ {a}"),
+            })
+        }
+        "call" => {
+            let args: Vec<String> = ex
+                .lines
+                .iter()
+                .filter_map(|l| match l.as_slice() {
+                    [Piece::Name(n), Piece::Text(is), v, ..] if is == " is " => Some(format!("{n} = {}", plain(std::slice::from_ref(v)))),
+                    _ => None,
+                })
+                .collect();
+            (!args.is_empty()).then(|| args.join(", "))
+        }
+        "return" => Some(format!("→ {}", plain(ex.headline.get(1..)?).trim_start())),
+        _ => None,
+    }
+}
+
 /// Pieces as plain text.
-#[cfg(test)]
 pub fn plain(pieces: &[Piece]) -> String {
     pieces
         .iter()

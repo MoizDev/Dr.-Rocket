@@ -648,6 +648,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             // Clear run decorations.
             tab.editor.deco.marks.retain(|m| m.kind == MarkKind::StepBefore);
             tab.editor.deco.inlays.clear();
+            tab.editor.deco.viz_note = None;
             tab.editor.deco.diagnostics.retain(|d| d.message.starts_with('\u{200b}'));
             app.layout.show(PanelItem::Interactions, Dock::Right);
             if instrument == Instrument::Debug {
@@ -2252,15 +2253,19 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     if toggle_work {
         v.show_work = !v.show_work;
     }
-    // Highlight the step's code in the editor.
+    // Highlight the step's code in the editor, with a note of its values beside it.
     let step_range = v.step().and_then(|s| s.pos.map(|p| p..p + s.span.max(1)));
     if v.highlighted != Some(v.current) {
         v.highlighted = Some(v.current);
         tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Viz);
+        tab.editor.deco.viz_note = None;
         let n = tab.editor.doc.buffer.len();
         if let Some(r) = step_range {
             let r = r.start.min(n)..r.end.min(n);
             tab.editor.deco.marks.push(Mark { range: r.clone(), kind: MarkKind::Viz });
+            if let (Some(s), Some(e)) = (v.step(), &explanation) {
+                tab.editor.deco.viz_note = crate::visualizer::inline_note(s, e).map(|note| (r.start, note));
+            }
             tab.editor.reveal_soft(r.start);
         }
     }

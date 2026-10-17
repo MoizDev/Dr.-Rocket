@@ -10,7 +10,7 @@
 mod explain;
 mod sexp;
 
-pub use explain::{Piece, explain, output_until, show_in};
+pub use explain::{Piece, explain, inline_note, output_until, show_in};
 
 use crate::racket::protocol::{VizObject, VizRef, VizStep};
 use crate::theme::{Theme, mix, with_alpha};

@@ -133,6 +133,9 @@ pub struct Decorations {
     pub semantic: Option<Semantic>,
     /// Documentation lines for the identifier under the mouse (blue box), keyed by range.
     pub hover_doc: Option<(Range<usize>, Vec<String>)>,
+    /// The visualizer's note for the code it is showing (`k is 12 → Yes`), written faintly
+    /// after the end of that line.
+    pub viz_note: Option<(usize, String)>,
 }
 
 impl Decorations {
@@ -161,6 +164,9 @@ impl Decorations {
         }
         if let Some((r, _)) = &mut self.hover_doc {
             map(r);
+        }
+        if let Some((p, _)) = &mut self.viz_note {
+            *p = super::buffer::map_pos(*p, edit, inserted, false);
         }
     }
 }
@@ -838,6 +844,28 @@ impl EditorView {
                 Severity::Warning => theme.warning,
             };
             self.paint_squiggle(&tp, d.range.start, d.range.end.max(d.range.start + 1), first, last, c);
+        }
+
+        // The visualizer's note, after the line it is about.
+        if let Some((pos, note)) = &self.deco.viz_note {
+            let line = self.doc.buffer.line_of(*pos);
+            if (first..=last).contains(&line) {
+                let after = self.x_of(line, self.doc.buffer.line_len(line)) + self.geom.char_w * 2.0;
+                let y = self.line_y(line) + self.geom.line_h / 2.0;
+                let right = self.geom.rect.right() - SCROLLBAR_W - 10.0;
+                let mut job = LayoutJob::simple_singleline(note.clone(), ui::mono((style.font_size * 0.86).round()), with_alpha(theme.text_accent, 225));
+                job.wrap = egui::text::TextWrapping::truncate_at_width((self.geom.rect.width() * 0.6).max(80.0));
+                let g = tp.layout_job(job);
+                if after + g.size().x <= right {
+                    tp.galley(pos2(after, y - g.size().y / 2.0), g, theme.text_accent);
+                } else {
+                    // The line runs past the edge: pin the note to the right edge, on a chip so
+                    // it reads over the code beneath.
+                    let r = Rect::from_min_max(pos2(right - g.size().x - 16.0, y - g.size().y / 2.0 - 3.0), pos2(right, y + g.size().y / 2.0 + 3.0));
+                    tp.rect(r, CornerRadius::same(6), style.theme.editor_bg, Stroke::new(1.0, with_alpha(theme.text_accent, 120)), egui::StrokeKind::Inside);
+                    tp.galley(pos2(r.left() + 8.0, y - g.size().y / 2.0), g, theme.text_accent);
+                }
+            }
         }
 
         // Failed tests: a chip after the line (passes only get a gutter tick).
