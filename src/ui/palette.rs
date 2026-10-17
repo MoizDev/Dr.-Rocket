@@ -87,6 +87,13 @@ impl App {
                     for r in self.recents.files.iter().take(12) {
                         out.push(Item::File(r.path.clone(), Vec::new()));
                     }
+                } else if root.is_none() {
+                    // No folder open: search the recent files (as their rows show them).
+                    let recent: Vec<std::path::PathBuf> = self.recents.files.iter().map(|r| r.path.clone()).collect();
+                    let strs: Vec<String> = recent.iter().map(|f| crate::config::tildify(f)).collect();
+                    for (i, _, idx) in p.matcher.rank(&q, strs.iter().map(|s| s.as_str())).into_iter().take(80) {
+                        out.push(Item::File(recent[i].clone(), idx));
+                    }
                 } else {
                     let strs: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
                     for (i, _, idx) in p.matcher.rank(&q, strs.iter().map(|s| s.as_str())).into_iter().take(80) {
@@ -200,7 +207,7 @@ impl App {
                 ui.add_space(6.0);
                 if items.is_empty() {
                     let msg = match mode {
-                        Mode::Files if self.workspace.is_none() && !p.query.is_empty() => "Open a folder to search its files",
+                        Mode::Files if self.workspace.is_none() && !p.query.is_empty() => "No recent file matches. Open a folder to search all its files.",
                         Mode::Line => "Type a line number",
                         _ => "No matches",
                     };
@@ -277,14 +284,51 @@ impl App {
                     Some(ws) => ws.relative(path).display().to_string(),
                     None => crate::config::tildify(path),
                 };
-                // Highlight matched characters in the relative path.
-                let mut job = egui::text::LayoutJob::default();
-                for (ci, ch) in rel.chars().enumerate() {
-                    let hit = idx.binary_search(&(ci as u32)).is_ok();
-                    job.append(&ch.to_string(), 0.0, egui::TextFormat { font_id: if hit { ui::semibold(14.0) } else { ui::ui_font(14.0) }, color: if hit { theme.text_accent } else { text_color }, ..Default::default() });
-                }
+                // Zed's layout: the file name, then its folder dimmed, cut to one line with an
+                // ellipsis. `idx` holds matched character positions in `rel`.
+                let chars: Vec<char> = rel.chars().collect();
+                let name_start = chars.len().saturating_sub(name.chars().count());
+                let dir_end = chars[..name_start].iter().rposition(|c| *c == '/' || *c == '\\').unwrap_or(0);
+                let push = |job: &mut egui::text::LayoutJob, range: std::ops::Range<usize>, size: f32, base: egui::Color32| {
+                    for ci in range {
+                        let hit = idx.binary_search(&(ci as u32)).is_ok();
+                        let font = if hit { ui::semibold(size) } else { ui::ui_font(size) };
+                        job.append(&chars[ci].to_string(), 0.0, egui::TextFormat { font_id: font, color: if hit { theme.text_accent } else { base }, valign: egui::Align::Center, ..Default::default() });
+                    }
+                };
+                // The folder part from character `from`, with "…" in front when shortened.
+                let build = |from: usize| {
+                    let mut job = egui::text::LayoutJob::default();
+                    push(&mut job, name_start..chars.len(), 14.0, text_color);
+                    if dir_end > 0 {
+                        let dim = egui::TextFormat { font_id: ui::ui_font(12.5), color: theme.text_placeholder, valign: egui::Align::Center, ..Default::default() };
+                        job.append("  ", 0.0, dim.clone());
+                        if from > 0 {
+                            job.append("…", 0.0, dim);
+                        }
+                        push(&mut job, from..dir_end, 12.5, theme.text_placeholder);
+                    }
+                    job
+                };
+                let left = r.left() + 36.0;
+                let max_w = (r.right() - 12.0 - left).max(40.0);
+                // Long folders lose their start, so the folders nearest the file stay visible.
+                let fits = |from: usize| p.layout_job(build(from)).size().x <= max_w;
+                let from = if fits(0) {
+                    0
+                } else {
+                    let (mut lo, mut hi) = (1, dir_end);
+                    while lo < hi {
+                        let mid = (lo + hi) / 2;
+                        if fits(mid) { hi = mid } else { lo = mid + 1 }
+                    }
+                    lo
+                };
+                let mut job = build(from);
+                // A file name too long on its own still ends in an ellipsis.
+                job.wrap = egui::text::TextWrapping { max_width: max_w, max_rows: 1, break_anywhere: true, overflow_character: Some('…') };
                 let g = p.layout_job(job);
-                p.galley(pos2(r.left() + 36.0, r.center().y - g.size().y / 2.0), g, text_color);
+                p.galley(pos2(left, r.center().y - g.size().y / 2.0), g, text_color);
             }
             Item::Symbol(name, _, kind) => {
                 use crate::editor::document::OutlineKind as K;
