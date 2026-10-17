@@ -1,0 +1,196 @@
+/* Dr. Rocket: brand tokens and the few global rules every section shares. */
+
+:root {
+  /* Rocket blue, and tints built from it. */
+  --blue: #2b5cff;
+  --blue-hover: #1d47e6;
+  --blue-press: #1739c2;
+  --blue-500: #4d78ff;
+  --blue-300: #9fb8ff;
+  --blue-200: #c4d4ff;
+  --blue-100: #e3eaff;
+  --blue-50: #f2f5ff;
+  /* The flame in the logo. */
+  --sky: #61afef;
+
+  --navy: #0a1433;
+  --navy-800: #16224a;
+  --ink: #2a3557;
+  --muted: #5a6687;
+  --line: #e4e9f4;
+  --line-strong: #d3dbec;
+  --paper: #ffffff;
+  --paper-2: #f7f9fd;
+
+  --font-body: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: var(--font-display), var(--font-body);
+  --font-ui: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
+  --font-src: var(--font-code), ui-monospace, Menlo, monospace;
+
+  --gutter: 24px;
+  --max: 1200px;
+  --radius-lg: 32px;
+  --radius-md: 24px;
+  --radius-sm: 14px;
+
+  --shadow-shot: 0 1px 2px rgb(10 20 51 / 0.1), 0 12px 32px -8px rgb(10 20 51 / 0.32), 0 40px 80px -24px rgb(10 20 51 / 0.38);
+  --shadow-soft: 0 1px 2px rgb(10 20 51 / 0.06), 0 8px 24px -12px rgb(10 20 51 / 0.18);
+
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+}
+
+@media (max-width: 640px) {
+  :root {
+    --gutter: 16px;
+    --radius-lg: 24px;
+    --radius-md: 20px;
+  }
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  scroll-behavior: smooth;
+  scroll-padding-top: 96px;
+}
+
+body {
+  margin: 0;
+  background: var(--paper);
+  color: var(--navy);
+  font-family: var(--font-body);
+  font-size: 17px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow-x: clip;
+}
+
+img,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+a {
+  color: inherit;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+h1,
+h2,
+h3 {
+  font-family: var(--font-head);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+code,
+kbd {
+  font-family: var(--font-src);
+  font-size: 0.88em;
+}
+
+kbd {
+  display: inline-block;
+  padding: 1px 7px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: 7px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.78em;
+  line-height: 1.5;
+  vertical-align: 0.1em;
+}
+
+::selection {
+  background: var(--blue-200);
+  color: var(--navy);
+}
+
+:focus-visible {
+  outline: 2.5px solid var(--blue);
+  outline-offset: 3px;
+  border-radius: 8px;
+}
+
+.container {
+  width: 100%;
+  max-width: calc(var(--max) + 2 * var(--gutter));
+  margin-inline: auto;
+  padding-inline: var(--gutter);
+}
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* OS-aware downloads: every platform's button is rendered, and the boot script in layout.tsx
+   sets html[data-os] so only the visitor's shows. "other" (phones, unknown) links to the
+   install guide. */
+html:not([data-os="mac"]) [data-for="mac"],
+html:not([data-os="windows"]) [data-for="windows"],
+html:not([data-os="linux"]) [data-for="linux"],
+html:not([data-os="other"]) [data-for="other"] {
+  display: none !important;
+}
+
+/* Scroll reveals (components/Reveal.tsx). Content only starts hidden when scripts run. */
+html.js [data-reveal] {
+  opacity: 0;
+  transform: translateY(22px);
+  transition:
+    opacity 0.8s var(--ease-out),
+    transform 0.9s var(--ease-out);
+  transition-delay: calc(var(--reveal-delay, 0) * 1ms);
+}
+
+html.js [data-reveal].is-in {
+  opacity: 1;
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+
+  html.js [data-reveal] {
+    opacity: 1;
+    transform: none;
+    transition: none;
+  }
+
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
