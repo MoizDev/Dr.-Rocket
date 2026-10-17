@@ -44,6 +44,7 @@ jobs:
       - name: Launch
         shell: pwsh
         run: |
+          $env:DRROCKET_FRAME_STATS = "1"
           if ("${{ inputs.simulate_gpu_crash }}" -eq "true") {
             # As if the previous launch died in the GPU driver before painting.
             New-Item -ItemType Directory -Force "$env:APPDATA\dr-rocket" | Out-Null
@@ -58,7 +59,7 @@ jobs:
           "--- stdout"; Get-Content out.txt -ErrorAction SilentlyContinue
           "--- crash reports"
           "--- renderer"
-          if (Test-Path "$env:APPDATA\dr-rocket\software-rendering") { "software (fallback)" } else { "GPU" }
+          if (Test-Path "$env:APPDATA\dr-rocket\renderer") { "fallback: " + (Get-Content "$env:APPDATA\dr-rocket\renderer" -First 1) } else { "default" }
           if (Test-Path "$env:APPDATA\dr-rocket\starting") { "launch never finished painting" } else { "launch painted" }
           Get-ChildItem "$env:APPDATA\dr-rocket\crash-reports" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName }
           "--- Windows Application log"
