@@ -70,6 +70,8 @@ fn main() -> eframe::Result {
             ..Default::default()
         },
         event_loop_builder: platform::event_loop_hook(),
+        // DRROCKET_DITHER=0: skip egui's dithering pass, for measuring software rendering.
+        dithering: std::env::var("DRROCKET_DITHER").map_or(true, |v| v != "0"),
         ..Default::default()
     };
     let result = eframe::run_native(ui::welcome::APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, open)))));

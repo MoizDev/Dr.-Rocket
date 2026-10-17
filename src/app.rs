@@ -379,6 +379,37 @@ impl FrameStats {
     }
 }
 
+/// Draw calls, vertices and indices for the frame so far, per layer (diagnostics: software
+/// renderers pay for each of these).
+fn paint_summary(ctx: &egui::Context) -> String {
+    let layers: Vec<egui::LayerId> = ctx.memory(|m| m.layer_ids().collect());
+    let mut all = Vec::new();
+    let mut per_layer = Vec::new();
+    ctx.graphics_mut(|g| {
+        for layer in &layers {
+            let Some(list) = g.get_mut(*layer) else { continue };
+            let n = list.next_idx().0;
+            let mut shapes = Vec::with_capacity(n);
+            for i in 0..n {
+                list.mutate_shape(egui::layers::ShapeIdx(i), |s| shapes.push(s.clone()));
+            }
+            per_layer.push((format!("{:?}", layer.id), shapes.len()));
+            all.extend(shapes);
+        }
+    });
+    let prims = ctx.tessellate(all, ctx.pixels_per_point());
+    let (mut verts, mut idx) = (0, 0);
+    for p in &prims {
+        if let egui::epaint::Primitive::Mesh(m) = &p.primitive {
+            verts += m.vertices.len();
+            idx += m.indices.len();
+        }
+    }
+    per_layer.sort_by_key(|(_, n)| std::cmp::Reverse(*n));
+    per_layer.truncate(4);
+    format!("{} draw calls, {verts} vertices, {} triangles | most shapes: {per_layer:?}", prims.len(), idx / 3)
+}
+
 pub struct TerminalTab {
     pub id: u64,
     pub view: crate::terminal::TerminalView,
@@ -1385,6 +1416,10 @@ impl eframe::App for App {
             let scrolls = ctx.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::MouseWheel { .. })).count() as u32);
             let fill = ctx.fonts(|f| f.font_atlas_fill_ratio());
             stats.record(started.elapsed(), frame.info().cpu_usage, scrolls, fill);
+            // `DRROCKET_FRAME_STATS=paint`: what this frame hands the renderer, every 60 frames.
+            if self.frame_count % 60 == 0 && std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "paint") {
+                eprintln!("paint: {}", paint_summary(&ctx));
+            }
             if std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "causes") {
                 for cause in ctx.repaint_causes() {
                     eprintln!("repaint cause: {cause}");

@@ -33,3 +33,6 @@ jobs:
           Bench "frame latency 1" "idle-big" @{ DRROCKET_FRAME_LATENCY = "1" }
           Bench "no vsync + latency 1" "idle-big" @{ DRROCKET_NO_VSYNC = "1"; DRROCKET_FRAME_LATENCY = "1" }
           Bench "small window 800x500" "idle-small" @{}
+          Bench "welcome screen (almost nothing drawn)" "welcome" @{}
+          Bench "no dithering" "idle-big" @{ DRROCKET_DITHER = "0" }
+          Bench "minimized-size 400x300" "idle-tiny" @{}
