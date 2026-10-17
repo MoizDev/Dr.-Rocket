@@ -110,3 +110,73 @@ export function GitHubIcon({ className, size = 18 }: P) {
     </svg>
   );
 }
+
+/** Line icons for section headers (24px grid, Lucide-style strokes). */
+const GLYPHS = {
+  zap: <path d="M13 2 3 14h9l-1 8 10-12h-9l1-8z" />,
+  tree: (
+    <>
+      <circle cx="12" cy="5" r="2.5" />
+      <circle cx="5" cy="19" r="2.5" />
+      <circle cx="19" cy="19" r="2.5" />
+      <path d="M12 7.5V11m0 0-5.5 5.8M12 11l5.5 5.8" />
+    </>
+  ),
+  step: (
+    <>
+      <path d="M5 4.5v15l11-7.5z" />
+      <path d="M19.5 5v14" />
+    </>
+  ),
+  arrows: (
+    <>
+      <path d="M4 4v7a4 4 0 0 0 4 4h12" />
+      <path d="m15 10 5 5-5 5" />
+    </>
+  ),
+  image: (
+    <>
+      <rect x="3" y="3" width="18" height="18" rx="3" />
+      <circle cx="9" cy="9" r="2" />
+      <path d="m21 15-4-4L5 21" />
+    </>
+  ),
+  terminal: (
+    <>
+      <path d="m4 17 6-5-6-5" />
+      <path d="M12 19h8" />
+    </>
+  ),
+  palette: (
+    <>
+      <path d="M12 22a10 10 0 1 1 10-10c0 2.2-1.8 3-3.5 3H16a2 2 0 0 0-1.5 3.3A2 2 0 0 1 12 22z" />
+      <circle cx="13.5" cy="6.5" r="1" fill="currentColor" />
+      <circle cx="17.5" cy="10.5" r="1" fill="currentColor" />
+      <circle cx="8.5" cy="7.5" r="1" fill="currentColor" />
+      <circle cx="6.5" cy="12.5" r="1" fill="currentColor" />
+    </>
+  ),
+  cap: (
+    <>
+      <path d="M22 10 12 5 2 10l10 5 10-5z" />
+      <path d="M6 12v5c3 3 9 3 12 0v-5" />
+    </>
+  ),
+  download: (
+    <>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <path d="m7 10 5 5 5-5" />
+      <path d="M12 15V3" />
+    </>
+  ),
+} as const;
+
+export type GlyphName = keyof typeof GLYPHS;
+
+export function Glyph({ name, className, size = 22 }: P & { name: GlyphName }) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {GLYPHS[name]}
+    </svg>
+  );
+}

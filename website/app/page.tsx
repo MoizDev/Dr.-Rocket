@@ -2,7 +2,7 @@ import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import Reveal from "@/components/Reveal";
 import VizVideo from "@/components/VizVideo";
-import { ArrowRight, GitHubIcon, OsIcon, RocketMark } from "@/components/icons";
+import { ArrowRight, GitHubIcon, Glyph, type GlyphName, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, REPO, VERSION } from "@/lib/release";
 import s from "./page.module.css";
 
@@ -110,7 +110,7 @@ export default function Home() {
         <section className={s.why} aria-labelledby="why-title">
           <div className={`container ${s.whyGrid}`}>
             <div data-reveal>
-              <p className={s.eyebrow}>Why not DrRacket?</p>
+              <span className={s.iconTile}><Glyph name="zap" /></span>
               <h2 id="why-title" className={s.h2}>
                 Same Racket underneath. A modern editor on top.
               </h2>
@@ -143,9 +143,9 @@ export default function Home() {
           <div className="container">
             <div className={s.vizPanel}>
               <div className={s.vizHead} data-reveal>
-                <p className={`${s.eyebrow} ${s.eyebrowOnBlue}`}>
-                  The Visualizer <kbd>⇧⌘V</kbd>
-                </p>
+                <span className={`${s.iconTile} ${s.iconTileOnBlue}`}>
+                  <Glyph name="tree" />
+                </span>
                 <h2 id="viz-title" className={s.vizTitle}>
                   Watch your program think.
                 </h2>
@@ -177,8 +177,7 @@ export default function Home() {
         <section className={s.features} id="features" aria-label="Features">
           <div className="container">
             <Feature
-              eyebrow="Stepper"
-              kbd="⇧⌘E"
+              icon="step"
               title="A stepper that matches DrRacket, step for step."
               body={
                 <>
@@ -194,8 +193,7 @@ export default function Home() {
             </Feature>
 
             <Feature
-              eyebrow="Check syntax and debugger"
-              kbd="F2"
+              icon="arrows"
               title="Binding arrows, rename and a real debugger."
               body={
                 <>
@@ -213,7 +211,7 @@ export default function Home() {
 
             <Feature
               id="drracket"
-              eyebrow="DrRacket files"
+              icon="image"
               title="Your DrRacket files, pasted images and all."
               body={
                 <>
@@ -229,8 +227,7 @@ export default function Home() {
             </Feature>
 
             <Feature
-              eyebrow="Terminals and projects"
-              kbd="⌃`"
+              icon="terminal"
               title="Every course in a tab, a terminal one keystroke away."
               body={
                 <>
@@ -246,7 +243,7 @@ export default function Home() {
             </Feature>
 
             <Feature
-              eyebrow="Themes"
+              icon="palette"
               title="Zed-grade themes, set in Fira Code."
               body={
                 <>
@@ -270,9 +267,9 @@ export default function Home() {
           <div className={`container ${s.langGrid}`}>
             <div className={s.langCopy}>
               <div data-reveal>
-                <p className={s.eyebrow}>
-                  Language levels <kbd>⌘L</kbd>
-                </p>
+                <span className={s.iconTile}>
+                  <Glyph name="cap" />
+                </span>
                 <h2 id="langs-title" className={s.h2}>
                   Every language level your course uses.
                 </h2>
@@ -354,7 +351,7 @@ export default function Home() {
         <section className={s.install} id="install" aria-labelledby="install-title">
           <div className="container">
             <div className={s.installHead} data-reveal>
-              <p className={s.eyebrow}>Install guide</p>
+              <span className={s.iconTile}><Glyph name="download" /></span>
               <h2 id="install-title" className={s.h2}>
                 Racket first, then Dr. Rocket.
               </h2>
@@ -537,16 +534,14 @@ export default function Home() {
 
 function Feature({
   id,
-  eyebrow,
-  kbd,
+  icon,
   title,
   body,
   children,
   code,
 }: {
   id?: string;
-  eyebrow: string;
-  kbd?: string;
+  icon: GlyphName;
   title: string;
   body: React.ReactNode;
   children: React.ReactNode;
@@ -555,9 +550,9 @@ function Feature({
   return (
     <article className={s.feature} id={id}>
       <div className={s.featureCopy} data-reveal>
-        <p className={s.eyebrow}>
-          {eyebrow} {kbd && <kbd>{kbd}</kbd>}
-        </p>
+        <span className={s.iconTile}>
+          <Glyph name={icon} />
+        </span>
         <h3 className={s.featureTitle}>{title}</h3>
         <p className={s.featureBody}>{body}</p>
         {code && (
