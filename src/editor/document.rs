@@ -739,6 +739,13 @@ impl Document {
         self.buffer.apply(vec![Replace { range: e..e, text: format!("\n{block}") }], Some(after), EditKind::Other);
     }
 
+    /// Whether `r` is exactly one name token (an identifier, number, ...): occurrences of a
+    /// selected name are then whole names, so `k` doesn't match inside `make-node`.
+    fn is_whole_token(&self, r: &Range<usize>) -> bool {
+        let i = lexer::token_index_at(&self.tokens, r.start);
+        self.tokens.get(i).is_some_and(|t| t.start == r.start && t.end == r.end && matches!(t.kind, Kind::Symbol | Kind::Number | Kind::Boolean | Kind::HashKeyword | Kind::Char | Kind::LangName))
+    }
+
     /// Cmd+D: add a selection at the next occurrence of the primary selection's text.
     pub fn select_next_occurrence(&mut self) {
         let p = self.buffer.selections.primary();
@@ -748,11 +755,14 @@ impl Document {
             }
             return;
         }
+        self.sync();
         let needle: Vec<char> = self.buffer.slice(p.range()).chars().collect();
+        let whole = self.is_whole_token(&p.range());
         let hay = &self.chars;
         let occupied = |s: usize| self.buffer.selections.list.iter().any(|x| x.start() == s);
         let n = hay.len();
-        let find_from = |from: usize| (from..n.saturating_sub(needle.len() - 1)).find(|&i| hay[i..i + needle.len()] == needle[..] && !occupied(i));
+        let fits = |i: usize| hay[i..i + needle.len()] == needle[..] && !occupied(i) && (!whole || self.is_whole_token(&(i..i + needle.len())));
+        let find_from = |from: usize| (from..n.saturating_sub(needle.len() - 1)).find(|&i| fits(i));
         let start = self.buffer.selections.list.iter().map(|s| s.end()).max().unwrap_or(0);
         if let Some(i) = find_from(start).or_else(|| find_from(0)) {
             self.buffer.selections.add(Selection::new(i, i + needle.len()));
@@ -764,6 +774,8 @@ impl Document {
         let p = self.buffer.selections.primary();
         let r = if p.is_empty() { self.word_at(p.head) } else { Some(p.range()) };
         let Some(r) = r else { return };
+        self.sync();
+        let whole = self.is_whole_token(&r);
         let needle: Vec<char> = self.buffer.slice(r).chars().collect();
         if needle.is_empty() {
             return;
@@ -771,7 +783,7 @@ impl Document {
         let mut list = Vec::new();
         let mut i = 0;
         while i + needle.len() <= self.chars.len() {
-            if self.chars[i..i + needle.len()] == needle[..] {
+            if self.chars[i..i + needle.len()] == needle[..] && (!whole || self.is_whole_token(&(i..i + needle.len()))) {
                 list.push(Selection::new(i, i + needle.len()));
                 i += needle.len();
             } else {
@@ -1068,6 +1080,22 @@ mod tests {
         let o = d.outline();
         let names: Vec<_> = o.iter().map(|i| (i.name.as_str(), i.kind)).collect();
         assert_eq!(names, vec![("f", OutlineKind::Function), ("y", OutlineKind::Value), ("p", OutlineKind::Struct), ("test", OutlineKind::Module), ("z", OutlineKind::Value)]);
+    }
+
+    /// A selected name matches whole names only; other text matches anywhere.
+    #[test]
+    fn occurrences_of_a_name_are_whole_names() {
+        let mut d = Document::new("(define (f k t) (make-node k (node-key t)))");
+        let k = d.buffer.text().find(" k ").unwrap() + 1;
+        d.buffer.selections = Selections::single(Selection::new(k, k + 1));
+        d.select_all_occurrences();
+        let text = d.buffer.text();
+        let picked: Vec<&str> = d.buffer.selections.list.iter().map(|s| &text[s.start()..s.end()]).collect();
+        assert_eq!(picked, vec!["k", "k"], "not the k in make-node or node-key");
+        let ke = text.find("ke").unwrap();
+        d.buffer.selections = Selections::single(Selection::new(ke, ke + 2));
+        d.select_all_occurrences();
+        assert_eq!(d.buffer.selections.list.len(), 2, "a partial selection still matches inside names");
     }
 
     #[test]

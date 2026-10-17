@@ -1116,14 +1116,20 @@ impl App {
         if !matches!(self.modal, Modal::None) {
             return;
         }
-        // egui matches shortcuts ignoring extra Shift/Alt, so check the most specific first:
-        // ⇧⌘S must not be taken by ⌘S, nor ⌃⇧Tab by ⌃Tab.
+        // egui matches shortcuts ignoring extra Shift/Alt (so ⌘+ works whether "+" needs Shift),
+        // so check the most specific first: ⇧⌘S must not be taken by ⌘S, nor ⌃⇧Tab by ⌃Tab.
         let mut shortcuts: Vec<(egui::KeyboardShortcut, Command)> = COMMANDS.iter().filter_map(|c| c.shortcut.map(|s| (s, c.cmd))).collect();
         let weight = |m: egui::Modifiers| [m.alt, m.ctrl, m.shift, m.mac_cmd || m.command].iter().filter(|b| **b).count();
         shortcuts.sort_by_key(|(s, _)| std::cmp::Reverse(weight(s.modifiers)));
         let mut fired = Vec::new();
         ctx.input_mut(|i| {
             for (s, cmd) in &shortcuts {
+                // Except on symbol keys, Shift and Alt must match exactly: ⇧⌘L is the editor's
+                // select-all-occurrences, not ⌘L.
+                let symbol = s.logical_key.name().chars().count() == 1 && !s.logical_key.name().chars().all(char::is_alphanumeric);
+                if !symbol && (i.modifiers.shift != s.modifiers.shift || i.modifiers.alt != s.modifiers.alt) {
+                    continue;
+                }
                 if i.consume_shortcut(s) {
                     fired.push(*cmd);
                 }
