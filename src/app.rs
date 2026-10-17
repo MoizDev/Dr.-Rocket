@@ -392,7 +392,7 @@ impl App {
             && let Some(rs) = &cc.wgpu_render_state
         {
             let info = rs.adapter.get_info();
-            eprintln!("renderer: {} ({:?}, {:?}, driver {} {})", info.name, info.backend, info.device_type, info.driver, info.driver_info);
+            eprintln!("renderer: {} ({:?}, {:?}, driver {} {}), surface {:?}", info.name, info.backend, info.device_type, info.driver, info.driver_info, rs.target_format);
         }
         crate::platform::set_repaint_context(&cc.egui_ctx);
         crate::platform::install_menu(crate::ui::brand::APP_NAME, &crate::commands::menu_specs());

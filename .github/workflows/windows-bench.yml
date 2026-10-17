@@ -1,5 +1,6 @@
-# Frame-rate benchmark on Windows (GitHub's runners have no GPU, so this measures the
-# software renderer): tools/bench/editor.json with DRROCKET_FRAME_STATS. Manual only.
+# Frame-rate benchmarks on Windows. GitHub's runners have no GPU, so these measure the
+# software renderer (WARP). `matrix` compares render settings with continuous redraws;
+# `editor` is the scroll-and-type script. Manual only.
 name: Windows bench
 
 on:
@@ -14,11 +15,21 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --release
-      - name: Bench
+      - name: Matrix
         shell: pwsh
         run: |
-          $env:DRROCKET_FRAME_STATS = "1"
-          $env:DRROCKET_AUTOMATION = "tools/bench/editor.json"
-          $p = Start-Process target/release/drrocket.exe -PassThru -Wait -RedirectStandardError err.txt -RedirectStandardOutput out.txt
-          "exit $($p.ExitCode)"
-          Get-Content err.txt
+          function Bench($label, $script, $vars) {
+            $env:DRROCKET_FRAME_STATS = "continuous"
+            $env:DRROCKET_AUTOMATION = "tools/bench/$script.json"
+            foreach ($k in $vars.Keys) { Set-Item "env:$k" $vars[$k] }
+            Start-Process target/release/drrocket.exe -Wait -RedirectStandardError err.txt -RedirectStandardOutput out.txt
+            foreach ($k in $vars.Keys) { Remove-Item "env:$k" }
+            "=== $label"
+            Get-Content err.txt | Select-String "renderer:|frame stats" | Select-Object -Skip 3 -First 4 | ForEach-Object { $_.Line }
+            Get-Content err.txt | Select-String "renderer:" | ForEach-Object { $_.Line }
+          }
+          Bench "baseline 1480x940" "idle-big" @{}
+          Bench "no vsync" "idle-big" @{ DRROCKET_NO_VSYNC = "1" }
+          Bench "frame latency 1" "idle-big" @{ DRROCKET_FRAME_LATENCY = "1" }
+          Bench "no vsync + latency 1" "idle-big" @{ DRROCKET_NO_VSYNC = "1"; DRROCKET_FRAME_LATENCY = "1" }
+          Bench "small window 800x500" "idle-small" @{}

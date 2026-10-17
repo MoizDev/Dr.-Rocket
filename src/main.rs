@@ -58,7 +58,12 @@ fn main() -> eframe::Result {
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             surface: eframe::egui_wgpu::SurfaceConfig {
                 present_mode: if std::env::var_os("DRROCKET_NO_VSYNC").is_some() { eframe::wgpu::PresentMode::AutoNoVsync } else { eframe::wgpu::PresentMode::AutoVsync },
-                ..eframe::egui_wgpu::SurfaceConfig::HIGH_THROUGHPUT
+                // DRROCKET_FRAME_LATENCY=1: one queued frame (eframe's default), for measuring.
+                ..if std::env::var("DRROCKET_FRAME_LATENCY").is_ok_and(|v| v == "1") {
+                    eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY
+                } else {
+                    eframe::egui_wgpu::SurfaceConfig::HIGH_THROUGHPUT
+                }
             },
             // On machines where the default renderer failed, a fallback (see startup.rs).
             wgpu_setup: renderer.wgpu_setup().unwrap_or_else(|| eframe::egui_wgpu::WgpuConfiguration::default().wgpu_setup),
