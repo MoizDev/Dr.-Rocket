@@ -1308,6 +1308,7 @@ impl eframe::App for App {
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        crate::startup::frame_painted(ctx.cumulative_frame_nr());
         if self.dev_themes.as_ref().is_some_and(|w| w.changed()) {
             self.themes = ThemeRegistry::load();
             self.apply_theme_overrides();

@@ -11,6 +11,9 @@ on:
       tag:
         description: "Release tag, when source is release"
         default: v1.0.0-beta.1
+      simulate_gpu_crash:
+        description: "Pretend the previous launch died before painting (tests the software fallback)"
+        default: "false"
 
 jobs:
   launch:
@@ -41,6 +44,11 @@ jobs:
       - name: Launch
         shell: pwsh
         run: |
+          if ("${{ inputs.simulate_gpu_crash }}" -eq "true") {
+            # As if the previous launch died in the GPU driver before painting.
+            New-Item -ItemType Directory -Force "$env:APPDATA\dr-rocket" | Out-Null
+            New-Item -ItemType File -Force "$env:APPDATA\dr-rocket\starting" | Out-Null
+          }
           $env:Path = "C:\Program Files\Racket;" + $env:Path
           $env:RUST_BACKTRACE = "1"
           $p = Start-Process "Dr. Rocket/Dr. Rocket.exe" -PassThru -RedirectStandardError err.txt -RedirectStandardOutput out.txt
@@ -49,6 +57,9 @@ jobs:
           "--- stderr"; Get-Content err.txt -ErrorAction SilentlyContinue
           "--- stdout"; Get-Content out.txt -ErrorAction SilentlyContinue
           "--- crash reports"
+          "--- renderer"
+          if (Test-Path "$env:APPDATA\dr-rocket\software-rendering") { "software (fallback)" } else { "GPU" }
+          if (Test-Path "$env:APPDATA\dr-rocket\starting") { "launch never finished painting" } else { "launch painted" }
           Get-ChildItem "$env:APPDATA\dr-rocket\crash-reports" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName }
           "--- Windows Application log"
           Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |

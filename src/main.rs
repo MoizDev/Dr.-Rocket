@@ -15,6 +15,7 @@ mod fuzzy;
 mod platform;
 mod print;
 mod projects;
+mod startup;
 mod racket;
 mod racket_ui;
 mod terminal;
@@ -27,6 +28,7 @@ use std::path::PathBuf;
 
 fn main() -> eframe::Result {
     crash::install();
+    let software = startup::begin();
     platform::install_open_handler();
     let open: Vec<PathBuf> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).map(PathBuf::from).collect();
     let size = automation::Automation::window_size().unwrap_or([1480.0, 940.0]);
@@ -58,6 +60,14 @@ fn main() -> eframe::Result {
                 present_mode: if std::env::var_os("DRROCKET_NO_VSYNC").is_some() { eframe::wgpu::PresentMode::AutoNoVsync } else { eframe::wgpu::PresentMode::AutoVsync },
                 ..eframe::egui_wgpu::SurfaceConfig::HIGH_THROUGHPUT
             },
+            wgpu_setup: if software {
+                eframe::egui_wgpu::WgpuSetup::CreateNew(eframe::egui_wgpu::WgpuSetupCreateNew {
+                    native_adapter_selector: Some(std::sync::Arc::new(|adapters, _surface| startup::software_adapter(adapters))),
+                    ..eframe::egui_wgpu::WgpuSetupCreateNew::without_display_handle()
+                })
+            } else {
+                eframe::egui_wgpu::WgpuConfiguration::default().wgpu_setup
+            },
             ..Default::default()
         },
         event_loop_builder: platform::event_loop_hook(),
@@ -65,6 +75,10 @@ fn main() -> eframe::Result {
     };
     let result = eframe::run_native(ui::welcome::APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, open)))));
     if let Err(e) = &result {
+        // A GPU that can't create the window: try once more with the software renderer.
+        if startup::relaunch_in_software() {
+            return Ok(());
+        }
         crash::startup_failed(&e.to_string());
     }
     result
