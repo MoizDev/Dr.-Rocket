@@ -322,24 +322,24 @@ export default function Home() {
                     Read the guide <ArrowRight />
                   </span>
                 </a>
-                <a className={s.card} href="#beta" data-reveal style={{ "--reveal-delay": 80 } as React.CSSProperties}>
+                <a className={s.card} href="#visualizer" data-reveal style={{ "--reveal-delay": 80 } as React.CSSProperties}>
                   <span className={s.cardTag}>
-                    <span>{"{"}</span> Beta <span>{"}"}</span>
+                    <span>{"{"}</span> Feature <span>{"}"}</span>
                   </span>
-                  <span className={s.cardTitle}>What to try this week</span>
-                  <span className={s.cardBody}>Your assignments, the stepper, the Visualizer, and files with pasted images.</span>
+                  <span className={s.cardTitle}>Watch recursion unfold</span>
+                  <span className={s.cardBody}>The Visualizer draws every call, tree and list as your program runs.</span>
                   <span className={s.cardIcon} aria-hidden="true">
-                    β
+                    <Glyph name="tree" size={40} />
                   </span>
                 </a>
-                <a className={s.card} href="#report" data-reveal style={{ "--reveal-delay": 140 } as React.CSSProperties}>
+                <a className={s.card} href="#faq" data-reveal style={{ "--reveal-delay": 140 } as React.CSSProperties}>
                   <span className={s.cardTag}>
-                    <span>{"{"}</span> Help <span>{"}"}</span>
+                    <span>{"{"}</span> FAQ <span>{"}"}</span>
                   </span>
-                  <span className={s.cardTitle}>Report a problem</span>
-                  <span className={s.cardBody}>One menu item copies your version, system and the latest crash report.</span>
+                  <span className={s.cardTitle}>Common questions</span>
+                  <span className={s.cardBody}>Do you need Racket? Does it open your DrRacket files? Answers below.</span>
                   <span className={s.cardIcon} aria-hidden="true">
-                    !
+                    ?
                   </span>
                 </a>
               </div>
@@ -407,52 +407,6 @@ export default function Home() {
               Dr. Rocket finds Racket on its own. If it says &ldquo;Racket not found&rdquo;, set the path in Settings, then
               Racket.
             </p>
-
-            <div className={s.betaGrid} id="beta">
-              <div className={s.betaCol} data-reveal>
-                <h3>What to try</h3>
-                <p>Use it for your real work for a week, the way you&rsquo;d use DrRacket. In particular:</p>
-                <ul>
-                  <li>
-                    Assignments in Beginning or Intermediate Student, with <kbd>⌘R</kbd> and check-expect
-                  </li>
-                  <li>
-                    The stepper (<kbd>⇧⌘E</kbd>): does it match DrRacket?
-                  </li>
-                  <li>
-                    The Visualizer (<kbd>⇧⌘V</kbd>) on a recursive function, a list or a tree
-                  </li>
-                  <li>DrRacket files with pasted images: open, run, edit, save, reopen in DrRacket</li>
-                  <li>The debugger, check syntax (hover, rename with F2) and the docs (F1)</li>
-                </ul>
-                <p className={s.betaSmall}>On Windows and Linux, read Ctrl for ⌘.</p>
-              </div>
-              <div className={s.betaCol} data-reveal style={{ "--reveal-delay": 80 } as React.CSSProperties}>
-                <h3>Known limitations</h3>
-                <ul>
-                  <li>
-                    XML boxes, Racket boxes, test-case boxes and large letters from DrRacket open read-only, so those files
-                    are never damaged.
-                  </li>
-                  <li>
-                    Non-Racket <code>#lang</code>s, like Scribble, are coloured as Racket code.
-                  </li>
-                  <li>No custom key bindings or spell checking yet.</li>
-                  <li>DrRacket plugins, such as a course&rsquo;s handin Submit button, don&rsquo;t run.</li>
-                </ul>
-              </div>
-              <div className={s.betaCol} id="report" data-reveal style={{ "--reveal-delay": 160 } as React.CSSProperties}>
-                <h3>Reporting a problem</h3>
-                <ol>
-                  <li>
-                    Choose <b>Report a Problem…</b> from the ☰ menu or the command palette (<kbd>⇧⌘P</kbd>). It copies
-                    your version, system and the latest crash report, if any.
-                  </li>
-                  <li>Paste it into a message to us, and add what you were doing and, if you can, the file.</li>
-                </ol>
-                <p className={s.betaSmall}>If Dr. Rocket crashes, it saves a report and reminds you on the next launch.</p>
-              </div>
-            </div>
           </div>
         </section>
 
