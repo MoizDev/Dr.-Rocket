@@ -97,6 +97,41 @@
     transform 0.25s var(--ease-out);
 }
 
+/* Kiro's filled button, beside the download button. */
+.solid {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  height: 56px;
+  padding: 0 24px;
+  border-radius: 16px;
+  background: var(--blue);
+  color: #fff;
+  font-family: var(--font-ui);
+  font-size: 15.5px;
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  box-shadow:
+    0 1px 0 rgb(255 255 255 / 0.18) inset,
+    0 1px 2px rgb(10 20 51 / 0.12),
+    0 10px 24px -10px rgb(43 92 255 / 0.65);
+  transition:
+    background-color 0.2s ease,
+    transform 0.25s var(--ease-out),
+    box-shadow 0.25s var(--ease-out);
+}
+
+.solid:hover {
+  background: var(--blue-hover);
+  transform: translateY(-2px);
+}
+
+.solid:active {
+  background: var(--blue-press);
+  transform: none;
+}
+
 .ghost:hover {
   background: var(--navy);
   color: #fff;
@@ -242,10 +277,13 @@
   padding-top: clamp(140px, 17vw, 210px);
 }
 
+/* Kiro's hero: a narrower block than the page, copy on the left, "What's new" on the right. */
 .heroGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 250px;
+  gap: 64px;
   align-items: start;
+  max-width: calc(1280px + 2 * var(--gutter));
 }
 
 .badges {
@@ -273,11 +311,10 @@
 }
 
 .heroTitle {
-  max-width: 13ch;
-  font-size: clamp(46px, 7vw, 92px);
+  font-size: clamp(42px, 5.4vw, 80px);
   font-weight: 600;
-  line-height: 0.98;
-  letter-spacing: -0.045em;
+  line-height: 1.04;
+  letter-spacing: -0.04em;
 }
 
 .heroLede {
@@ -314,6 +351,71 @@
 
 
 
+
+.news {
+  margin-top: 8px;
+  font-family: var(--font-ui);
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+.newsLabel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.newsSquare {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--blue);
+}
+
+.news ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.news li {
+  padding: 20px 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink);
+}
+
+.news li:last-child {
+  border-bottom: 0;
+}
+
+.news strong {
+  color: var(--navy);
+  font-weight: 600;
+}
+
+.news a {
+  text-decoration: none;
+  transition: color 0.18s ease;
+}
+
+.news a svg {
+  display: inline;
+  vertical-align: -1px;
+  transition: transform 0.3s var(--ease-spring);
+}
+
+.news a:hover {
+  color: var(--blue);
+}
+
+.news a:hover svg {
+  transform: translate(2px, -2px);
+}
 
 .heroPanel {
   position: relative;
@@ -356,6 +458,10 @@
   .heroGrid {
     grid-template-columns: 1fr;
     gap: 0;
+  }
+
+  .news {
+    display: none;
   }
 
 }

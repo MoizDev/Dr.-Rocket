@@ -1,0 +1,127 @@
+/* The typed headline (components/HeroTitle.tsx). */
+
+.line {
+  position: relative;
+  display: block;
+  white-space: pre-line;
+}
+
+/* Untyped text keeps its space, so nothing below the headline moves while it types. */
+.rest {
+  visibility: hidden;
+}
+
+/* Before hydration the whole headline is in .rest: show it unless the intro will play. */
+.line[data-phase="static"] .rest {
+  visibility: visible;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  :global(html.js) .line[data-phase="static"] .rest {
+    visibility: hidden;
+  }
+}
+
+.caret {
+  display: inline-block;
+  width: 0.09em;
+  height: 0.82em;
+  /* Net width zero, so the caret never re-wraps the line. */
+  margin-left: 0.04em;
+  margin-right: -0.13em;
+  border-radius: 2px;
+  background: var(--blue);
+  vertical-align: -0.06em;
+  animation: blink 1s steps(1) infinite;
+  transition:
+    margin-left 0.5s var(--ease-out),
+    margin-right 0.5s var(--ease-out);
+}
+
+/* While the rocket sits at the start of the line, the caret waits beside it. */
+.line[data-phase="fly"] .caret {
+  margin-left: 0.86em;
+  margin-right: -0.95em;
+}
+
+.line[data-phase="type"] .caret {
+  animation: none;
+}
+
+.line[data-phase="done"] .caret {
+  animation: blink 1s steps(1) infinite, fade 0.6s ease 2.4s forwards;
+}
+
+@keyframes blink {
+  50% {
+    opacity: 0;
+  }
+}
+
+@keyframes fade {
+  to {
+    opacity: 0;
+    visibility: hidden;
+  }
+}
+
+.rocket {
+  position: absolute;
+  top: 0.08em;
+  left: 0.06em;
+  pointer-events: none;
+}
+
+.rocket svg {
+  width: auto;
+  height: 0.84em;
+}
+
+.line[data-phase="fly"] .rocket {
+  animation: fly-in 1s var(--ease-out) both;
+}
+
+.line[data-phase="type"] .rocket,
+.line[data-phase="done"] .rocket {
+  animation: launch 0.7s cubic-bezier(0.55, 0, 0.9, 0.4) both;
+}
+
+.rocket svg path:last-child {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+  animation: flame 0.16s ease-in-out infinite alternate;
+}
+
+@keyframes fly-in {
+  from {
+    opacity: 0;
+    transform: translate(-1.6em, 1.4em) rotate(38deg) scale(0.7);
+  }
+  60% {
+    opacity: 1;
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes launch {
+  from {
+    transform: none;
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-2.4em) scale(0.85);
+    opacity: 0;
+  }
+}
+
+@keyframes flame {
+  from {
+    transform: scaleY(0.85);
+  }
+  to {
+    transform: scaleY(1.15);
+  }
+}

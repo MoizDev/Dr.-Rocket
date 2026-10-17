@@ -2,7 +2,8 @@ import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import Reveal from "@/components/Reveal";
 import VizVideo from "@/components/VizVideo";
-import { ArrowRight, GitHubIcon, Glyph, type GlyphName, OsIcon, RocketMark } from "@/components/icons";
+import HeroTitle from "@/components/HeroTitle";
+import { ArrowRight, ArrowUpRight, GitHubIcon, Glyph, type GlyphName, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, REPO, VERSION } from "@/lib/release";
 import s from "./page.module.css";
 
@@ -61,16 +62,14 @@ export default function Home() {
                 <span className={s.pill}>V{VERSION.replace(/-beta\.\d+$/, "")} beta</span>
                 <span className={`${s.pill} ${s.pillSoft}`}>OSS</span>
               </p>
-              <h1 className={s.heroTitle} data-reveal style={{ "--reveal-delay": 60 } as React.CSSProperties}>
-                Everything DrRacket does, at native speed.
-              </h1>
+              <HeroTitle className={s.heroTitle} text={"Everything DrRacket does,\nat native speed."} />
               <p className={s.heroLede} data-reveal style={{ "--reveal-delay": 120 } as React.CSSProperties}>
                 Dr. Rocket is a Racket IDE written in Rust. It runs every DrRacket language level, steps through code
                 exactly like DrRacket&rsquo;s stepper, and adds a Visualizer that draws your program as it runs.
               </p>
               <div className={s.heroActions} data-reveal style={{ "--reveal-delay": 180 } as React.CSSProperties}>
                 <Download />
-                <a className={s.ghost} href={`https://github.com/${REPO}`} target="_blank" rel="noopener">
+                <a className={s.solid} href={`https://github.com/${REPO}`} target="_blank" rel="noopener">
                   <GitHubIcon /> View on GitHub
                 </a>
               </div>
@@ -82,6 +81,28 @@ export default function Home() {
                 . Free for macOS, Windows and Linux.
               </p>
             </div>
+
+            <aside className={s.news} aria-label="What's new" data-reveal style={{ "--reveal-delay": 300 } as React.CSSProperties}>
+              <p className={s.newsLabel}>
+                <span className={s.newsSquare} aria-hidden="true" />
+                What&rsquo;s new
+              </p>
+              <ul>
+                <li>
+                  🚀 <strong>Public beta</strong> for macOS, Windows and Linux. Free.
+                </li>
+                <li>
+                  <a href="#visualizer">
+                    🌳 Meet the <strong>Visualizer</strong>: recursion you can watch <ArrowUpRight />
+                  </a>
+                </li>
+                <li>
+                  <a href="#drracket">
+                    🖼️ Your <strong>DrRacket files</strong> open as they are, images included <ArrowUpRight />
+                  </a>
+                </li>
+              </ul>
+            </aside>
           </div>
 
           <div className="container">
