@@ -32,6 +32,10 @@ pub enum Step {
     DoubleClick([f32; 2]),
     RightClick([f32; 2]),
     Hover([f32; 2]),
+    /// Press or release the primary button at a point, each in its own frame (`click` does
+    /// both in one).
+    MouseDown([f32; 2]),
+    MouseUp([f32; 2]),
     /// Press at the first point, move to the second over several frames, release.
     Drag([[f32; 2]; 2]),
     Scroll([f32; 2]),
@@ -260,6 +264,11 @@ impl Automation {
                 }
             }
             Step::Hover(p) => raw.events.push(Event::PointerMoved(pos2(p[0], p[1]))),
+            Step::MouseDown(p) | Step::MouseUp(p) => {
+                let pos = pos2(p[0], p[1]);
+                raw.events.push(Event::PointerMoved(pos));
+                raw.events.push(Event::PointerButton { pos, button: PointerButton::Primary, pressed: matches!(step, Step::MouseDown(_)), modifiers: Modifiers::NONE });
+            }
             Step::Drag([a, b]) => {
                 let from = pos2(a[0], a[1]);
                 raw.events.push(Event::PointerMoved(from));

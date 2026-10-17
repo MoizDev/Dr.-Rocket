@@ -278,6 +278,8 @@ pub struct EditorView {
     goal_col: Option<usize>,
     last_activity: f64,
     caret_anim: Option<Pos2>,
+    /// The current mouse press already placed the caret (so its click on release doesn't).
+    press_placed: bool,
     geom: Geometry,
     galleys: HashMap<usize, Arc<Galley>>,
     drag_anchor: Option<(usize, usize)>,
@@ -311,6 +313,7 @@ impl EditorView {
             goal_col: None,
             last_activity: 0.0,
             caret_anim: None,
+            press_placed: false,
             geom: Geometry::default(),
             galleys: HashMap::new(),
             drag_anchor: None,
@@ -1448,14 +1451,25 @@ impl EditorView {
             }
             return;
         }
-        if (resp.drag_started_by(egui::PointerButton::Primary) || (resp.clicked() && !resp.dragged()))
+        // Place the caret the moment the button goes down (a click only completes on release),
+        // and snap it there: the smooth-caret glide is for typing, not for clicking.
+        let pressed = resp.is_pointer_button_down_on() && ui.input(|i| i.pointer.primary_pressed());
+        // A press and release within one frame (a quick click on a slow frame) only shows up
+        // as a click.
+        let quick_click = resp.clicked() && !self.press_placed;
+        if !pressed && !ui.input(|i| i.pointer.primary_down()) {
+            self.press_placed = false;
+        }
+        if (pressed || quick_click)
             && let Some(p) = resp.interact_pointer_pos() {
+                self.press_placed = pressed;
                 if gutter_hit(p) {
                     return;
                 }
                 let pos = self.pos_at(p);
                 self.completion = None;
-                if mods.command && resp.clicked() {
+                self.caret_anim = None;
+                if mods.command {
                     self.doc.buffer.selections = Selections::single(Selection::caret(pos));
                     self.actions.push(EditorAction::GotoDefinition(pos));
                 } else if mods.alt {
@@ -1485,6 +1499,7 @@ impl EditorView {
             sels.list[sels.primary] = Selection::new(anchor, head);
             sels.normalize();
             self.doc.buffer.selections = sels;
+            self.caret_anim = None;
             // Auto-scroll when dragging outside.
             let r = self.geom.rect;
             if p.y < r.top() {
