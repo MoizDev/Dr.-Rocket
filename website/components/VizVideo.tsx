@@ -27,7 +27,7 @@ export default function VizVideo({ className }: { className?: string }) {
       src="/media/visualizer.mp4"
       poster="/media/visualizer-poster.jpg"
       width={1920}
-      height={1204}
+      height={1362}
       muted
       loop
       playsInline

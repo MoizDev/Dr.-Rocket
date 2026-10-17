@@ -182,7 +182,7 @@ export default function Home() {
                 {[
                   ["Frames for every call", "Arguments and locals for each call. Tail calls replace their caller’s frame, as Racket runs them."],
                   ["Trees and lists, drawn", "Structs that point to their own type become trees, cons cells become chains, and both glide as they change."],
-                  ["Explained in plain words", "“Is (empty? t) true? Yes.” Each step says what happened and why, so recursion stops being magic."],
+                  ["Explained in plain words", "“Is k less than t’s key? Yes.” Each step says what happened and why, in words, so recursion stops being magic."],
                 ].map(([title, body], i) => (
                   <li key={title} data-reveal style={{ "--reveal-delay": i * 80 } as React.CSSProperties}>
                     <h3>{title}</h3>
