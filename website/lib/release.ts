@@ -13,7 +13,7 @@ export type Download = {
   name: string;
   /** What the file is: "Universal DMG (Apple Silicon + Intel)". */
   kind: string;
-  /** Stable URL on this site, e.g. /downloads/DrRocket-mac.dmg. */
+  /** Stable URL on this site, e.g. /download/mac (counts, then redirects to the file). */
   href: string;
   /** The release asset's own name, used as the saved file name. */
   filename: string;
@@ -47,7 +47,8 @@ export const DOWNLOADS: Record<Os, Download> = Object.fromEntries(
       {
         os,
         ...NAMES[os],
-        href: `/downloads/${d.file}`,
+        // Through app/download/[os], which counts the download and redirects to the file.
+        href: `/download/${os}`,
         filename: d.asset.replaceAll("{version}", release.version),
         size: sizeOf(d.file),
       },

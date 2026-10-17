@@ -24,3 +24,13 @@ For a new app release, first attach the files to the GitHub release (macOS DMG v
 After deploying, check that https://doctorocket.com loads and that each
 `/downloads/DrRocket-{mac.dmg,windows-x64.zip,linux-x64.tar.gz}` returns 200 with the
 versioned file name in `Content-Disposition`.
+
+## Download counts
+
+Download links go to `website/app/download/[os]/route.ts`, which records the download in
+Supabase (project `dr-rocket`, `zfacelxxebqfxwhkwrrd`; schema in `website/supabase/downloads.sql`)
+after responding, then redirects to `/downloads/<file>`. Bots and link previews aren't counted.
+The Vercel project has `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (production) for it.
+
+To read the numbers: `select * from public.download_totals;` (or the Table Editor in the
+Supabase dashboard).
