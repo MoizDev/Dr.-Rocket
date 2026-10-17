@@ -114,6 +114,15 @@ pub fn begin() -> Renderer {
         return Renderer::Default;
     }
     let _ = std::fs::create_dir_all(crate::config::config_dir());
+    // 1.0.0-beta.2 went straight to software after a failed launch: start that machine one
+    // step down from the default instead, so it gets its GPU back.
+    let old = crate::config::config_dir().join("software-rendering");
+    if old.exists() {
+        let _ = std::fs::remove_file(old);
+        if !renderer_file().exists() {
+            remember(Renderer::Default.next().unwrap_or(Renderer::Software));
+        }
+    }
     let r = forced.unwrap_or_else(|| {
         let r = stored();
         // The previous launch never painted: its renderer is what killed it.

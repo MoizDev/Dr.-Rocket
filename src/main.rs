@@ -58,8 +58,10 @@ fn main() -> eframe::Result {
         wgpu_options: eframe::egui_wgpu::WgpuConfiguration {
             surface: eframe::egui_wgpu::SurfaceConfig {
                 present_mode: if std::env::var_os("DRROCKET_NO_VSYNC").is_some() { eframe::wgpu::PresentMode::AutoNoVsync } else { eframe::wgpu::PresentMode::AutoVsync },
-                // DRROCKET_FRAME_LATENCY=1: one queued frame (eframe's default), for measuring.
-                ..if std::env::var("DRROCKET_FRAME_LATENCY").is_ok_and(|v| v == "1") {
+                // DRROCKET_FRAME_LATENCY=1: one queued frame, for measuring.
+                // The software renderer is slow per frame: queue one, not two, so input isn't
+                // a frame further behind.
+                ..if renderer == startup::Renderer::Software || std::env::var("DRROCKET_FRAME_LATENCY").is_ok_and(|v| v == "1") {
                     eframe::egui_wgpu::SurfaceConfig::LOW_LATENCY
                 } else {
                     eframe::egui_wgpu::SurfaceConfig::HIGH_THROUGHPUT
