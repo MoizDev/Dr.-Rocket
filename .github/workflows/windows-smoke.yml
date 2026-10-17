@@ -66,3 +66,16 @@ jobs:
           Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
             Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting' } |
             ForEach-Object { $_.Message }
+      - name: Settings screenshots
+        if: inputs.source == 'build'
+        shell: pwsh
+        run: |
+          $env:DRROCKET_CONFIG_DIR = (New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/cfg-shot").FullName
+          $env:DRROCKET_AUTOMATION = "tools/bench/settings-shot.json"
+          Start-Process "Dr. Rocket/Dr. Rocket.exe" -Wait
+          Get-ChildItem shots
+      - uses: actions/upload-artifact@v4
+        if: inputs.source == 'build'
+        with:
+          name: screenshots
+          path: shots/

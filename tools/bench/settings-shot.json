@@ -1,0 +1,1 @@
+{"window":[1280,860],"steps":[{"wait_ms":3000},{"command":"Settings"},{"wait_ms":1500},{"screenshot":"shots/settings.png"},{"scroll":[0,-400]},{"wait_ms":800},{"screenshot":"shots/settings-graphics.png"},{"quit":true}]}
