@@ -1,6 +1,7 @@
 import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import Reveal from "@/components/Reveal";
+import VizVideo from "@/components/VizVideo";
 import { ArrowRight, GitHubIcon, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, REPO, VERSION } from "@/lib/release";
 import s from "./page.module.css";
@@ -14,7 +15,6 @@ import light from "./shots/light.png";
 import stepper from "./shots/stepper.png";
 import terminal from "./shots/terminal.png";
 import terminalPanel from "./shots/terminal-panel.png";
-import visualizer from "./shots/visualizer.png";
 
 const NAV = [
   ["Features", "#features"],
@@ -155,13 +155,7 @@ export default function Home() {
                 </p>
               </div>
               <div className={s.vizStage} data-reveal>
-                <Image
-                  className={`${s.shot} ${s.vizShot}`}
-                  src={visualizer}
-                  alt="The Visualizer replaying a binary search tree program: a column of tree-sum call frames on the left, the tree of nodes drawn on the right, and the explanation “tree-sum calls itself (recursion). A new frame goes on the stack.”"
-                  sizes="(max-width: 1248px) 90vw, 1100px"
-                  quality={85}
-                />
+                <VizVideo className={`${s.shot} ${s.vizShot}`} />
               </div>
               <ul className={s.vizPoints}>
                 {[
