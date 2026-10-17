@@ -34,6 +34,8 @@ pub enum Step {
     Hover([f32; 2]),
     /// Press or release the primary button at a point, each in its own frame (`click` does
     /// both in one).
+    /// Show this step of the visualizer in the active tab.
+    ShowVizStep(usize),
     MouseDown([f32; 2]),
     MouseUp([f32; 2]),
     /// Press at the first point, move to the second over several frames, release.
@@ -318,6 +320,12 @@ impl Automation {
                 let path = path.clone();
                 let encoder = std::thread::spawn(move || encode(path, rx));
                 self.recording = Some(Recording { start: now, until: now + seconds, frames: Some(frames), encoder });
+            }
+            Step::ShowVizStep(n) => {
+                if let Some(v) = app.active_tab_mut().and_then(|t| t.rk.viz.as_mut()) {
+                    v.playing = false;
+                    v.current = (*n).min(v.trace.steps.len().saturating_sub(1));
+                }
             }
             Step::Theme(name) => app.set_theme(name, false),
             Step::Log(msg) => eprintln!("automation: {msg}"),

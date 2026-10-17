@@ -2,16 +2,21 @@
 //!
 //! Each step shows the global definitions and the call stack as frames on the left, and every
 //! value reachable from them on the right: structs that point to structs of the same type are
-//! laid out as trees, cons cells as chains, everything else as boxes. Objects keep their
-//! identity across steps, so when the program builds or rebuilds a structure the boxes glide
-//! to their new places; new objects fade in and changed ones flash.
+//! drawn as trees (a compact node per struct, children in field order), cons cells as chains,
+//! everything else as boxes. Objects keep their identity across steps, so when the program
+//! builds or rebuilds a structure the boxes glide to their new places; new objects pop in and
+//! changed ones flash. What the running call can't reach is faded.
+
+mod explain;
+
+pub use explain::{Piece, explain, output_until, show_in};
 
 use crate::racket::protocol::{VizObject, VizRef, VizStep};
 use crate::theme::{Theme, mix, with_alpha};
 use crate::ui::{self, Tokens, ic};
 use egui::epaint::{CubicBezierShape, PathShape};
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Shape, Stroke, StrokeKind, Ui, Vec2, pos2, vec2};
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 // ------------------------------------------------------------------------------- trace
@@ -25,15 +30,82 @@ pub struct Trace {
     pub finished: bool,
     pub truncated: bool,
     pub max_steps: usize,
+    /// Struct type -> fields that have pointed at a struct of the same type (tree links).
+    links: HashMap<String, BTreeSet<usize>>,
+    /// Struct type -> fields that have held an empty value ('() or #false).
+    empties: HashMap<String, BTreeSet<usize>>,
+    /// Struct type -> fields that have held other plain data (a number, a string...).
+    data: HashMap<String, BTreeSet<usize>>,
+    /// The program's top-level results so far: (step, value).
+    results: Vec<(usize, VizRef)>,
 }
 
 impl Trace {
     pub fn push(&mut self, mut step: VizStep) {
+        // Consecutive definitions of functions read as one step ("Defining f and g").
+        let fn_define = |s: &VizStep| s.kind == "define" && s.name.as_deref().is_some_and(|names| names.split(", ").all(|n| s.globals.iter().any(|(g, v)| g == n && matches!(v, VizRef::Prim { k, .. } if k == "fn"))));
+        if fn_define(&step) && self.steps.last().is_some_and(fn_define) {
+            let prev = self.steps.pop().unwrap_or_default();
+            step.name = Some(format!("{}, {}", prev.name.unwrap_or_default(), step.name.clone().unwrap_or_default()));
+            step.evals = [prev.evals, step.evals].concat();
+            step.output = prev.output + &step.output;
+        }
         let idx = self.steps.len();
+        step.index = idx;
         for o in step.objects.drain(..) {
-            self.versions.entry(o.id).or_default().push((idx, o));
+            self.versions.entry(o.id).or_default().push((idx, o.clone()));
+            self.learn_shape(&o, idx);
+        }
+        if step.kind == "result"
+            && let Some(v) = &step.value
+        {
+            self.results.push((idx, v.clone()));
         }
         self.steps.push(step);
+    }
+
+    /// Note which fields of a struct type are tree links, empties or data (children are sent
+    /// before the structs that hold them, so a linked child is already known).
+    fn learn_shape(&mut self, o: &VizObject, idx: usize) {
+        let Some(name) = o.name.clone().filter(|_| o.k == "struct") else { return };
+        for (k, (_, r)) in o.fields.iter().enumerate() {
+            match r {
+                VizRef::Object { id } => {
+                    if self.object(*id, idx).is_some_and(|c| c.k == "struct" && c.name.as_deref() == Some(name.as_str())) {
+                        self.links.entry(name.clone()).or_default().insert(k);
+                    }
+                }
+                VizRef::Prim { k: kind, v } => {
+                    let empty = kind == "empty" || (kind == "bool" && v == "#false");
+                    let set = if empty { &mut self.empties } else { &mut self.data };
+                    set.entry(name.clone()).or_default().insert(k);
+                }
+            }
+        }
+    }
+
+    /// The child fields of a tree node, in field order: fields that link to the same struct
+    /// type, plus fields of a linking type that have only ever been empty (a `right` that is
+    /// always '() is still a child slot). `None` for anything that isn't part of a tree.
+    pub fn tree_children(&self, o: &VizObject) -> Option<Vec<usize>> {
+        if o.k != "struct" {
+            return None;
+        }
+        let name = o.name.as_deref()?;
+        let links = self.links.get(name).filter(|l| !l.is_empty())?;
+        let data = self.data.get(name);
+        let mut kids: BTreeSet<usize> = links.clone();
+        for k in self.empties.get(name).into_iter().flatten() {
+            if !data.is_some_and(|d| d.contains(k)) {
+                kids.insert(*k);
+            }
+        }
+        Some(kids.into_iter().collect())
+    }
+
+    /// The latest top-level result at or before `step`.
+    pub fn result_at(&self, step: usize) -> Option<&VizRef> {
+        self.results.iter().rev().find(|(s, _)| *s <= step).map(|(_, v)| v)
     }
 
     /// An object's contents as of `step`.
@@ -139,9 +211,12 @@ const HEADER_H: f32 = 32.0;
 const FONT: f32 = 13.5;
 /// Vertical gap between frames, room for the connector and its label.
 const FRAME_GAP: f32 = 52.0;
-const LEVEL_GAP: f32 = 46.0;
-const SIBLING_GAP: f32 = 22.0;
-const STUB_W: f32 = 30.0;
+/// Tree nodes: height, gap between levels (room for the edge labels) and between siblings.
+const NODE_H: f32 = 34.0;
+const LEVEL_GAP: f32 = 52.0;
+const SIBLING_GAP: f32 = 18.0;
+/// Room reserved under a node for an empty child.
+const STUB_W: f32 = 26.0;
 const CELL_H: f32 = 32.0;
 const MAX_OBJECTS: usize = 300;
 
@@ -149,24 +224,18 @@ const MAX_OBJECTS: usize = 300;
 struct FrameBox {
     /// Animation identity: 0 for the top level, else 1 + index into the step's frames.
     key: usize,
-    /// For calls: the function name and the argument values, shown as `(name 3 4 1)`.
+    /// For calls: the function name and the argument values, shown as `(name 3 node 4)`.
     name: String,
     args: Vec<String>,
     rows: Vec<(String, VizRef)>,
     returns: Option<VizRef>,
     current: bool,
-    kind: FrameKind,
+    top: bool,
+    /// This call replaced its caller (a tail call): Racket doesn't keep the caller around.
+    tail: bool,
     /// Where the call that made this frame is in the program (for the connector label).
     site: Option<(usize, usize)>,
     rect: Rect,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum FrameKind {
-    Top,
-    Live,
-    /// Replaced by this many tail calls (gone in Racket; shown faded for context).
-    Replaced(usize),
 }
 
 #[derive(Clone)]
@@ -191,6 +260,9 @@ struct Layout {
     objects: HashMap<u64, ObjBox>,
     /// Draw order.
     order: Vec<u64>,
+    /// What the running call can reach (its variables, what it returns, the value just
+    /// computed); everything else is drawn faded. `None`: nothing is faded.
+    focus: Option<HashSet<u64>>,
 }
 
 /// Width of `n` characters of the box font at zoom 1.
@@ -261,119 +333,117 @@ fn cell_w(cw: f32, r: &VizRef) -> f32 {
     }
 }
 
-fn tree_node_size(o: &VizObject, children: &[usize], cw: f32) -> Vec2 {
-    let shown: Vec<&(String, VizRef)> = o.fields.iter().enumerate().filter(|(k, _)| !children.contains(k)).map(|(_, f)| f).collect();
-    let mut w = text_w(cw, o.name.as_deref().unwrap_or("")) + 24.0;
-    for (n, r) in &shown {
-        w = w.max(text_w(cw, n) + text_w(cw, prim_text(r).unwrap_or("")).max(14.0) + 36.0);
-    }
-    w = w.max(children.len() as f32 * 46.0);
-    let ports = if children.is_empty() { 0.0 } else { 20.0 };
-    vec2(w.clamp(80.0, 220.0), HEADER_H + shown.len() as f32 * ROW_H + ports + 4.0)
+/// What a tree node shows: its data fields (the non-child ones), `34` or `"ann" 34`.
+fn node_label(o: &VizObject, children: &[usize]) -> String {
+    let data: Vec<&str> = o.fields.iter().enumerate().filter(|(k, _)| !children.contains(k)).map(|(_, (_, r))| prim_text(r).unwrap_or("•")).collect();
+    if data.is_empty() { o.name.clone().unwrap_or_default() } else { data.join(" ") }
 }
 
+fn tree_node_size(o: &VizObject, children: &[usize], cw: f32) -> Vec2 {
+    let w = (text_w(cw, &node_label(o, children)) + 28.0).max(NODE_H + 10.0).max(children.len() as f32 * 22.0);
+    vec2(w.min(220.0), NODE_H)
+}
+
+/// A short name for a value, used for frames, explanations and chips: `12`, `node 34`,
+/// `(list 3 4)`. Objects are named after their type and data, as a student would say them.
+pub fn label(trace: &Trace, r: &VizRef, step: usize) -> String {
+    let id = match r {
+        VizRef::Prim { v, .. } => return v.clone(),
+        VizRef::Object { id } => *id,
+    };
+    let Some(o) = trace.object(id, step) else { return "…".into() };
+    match o.k.as_str() {
+        "struct" => {
+            let name = o.name.clone().unwrap_or_else(|| "struct".into());
+            let kids = trace.tree_children(o).unwrap_or_default();
+            let data: Vec<&str> = o.fields.iter().enumerate().filter(|(k, _)| !kids.contains(k)).filter_map(|(_, (_, r))| prim_text(r)).take(2).collect();
+            if data.is_empty() { name } else { format!("{name} {}", data.join(" ")) }
+        }
+        "cons" => show_in(trace, r, step, 22),
+        "vector" => format!("a vector of {}", o.items.len()),
+        "box" => "a box".into(),
+        "hash" => "a hash table".into(),
+        "image" => "an image".into(),
+        _ => o.text.clone().unwrap_or_else(|| "…".into()),
+    }
+}
 
 fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
     let mut out = Layout::default();
     let Some(step) = trace.steps.get(step_idx) else { return out };
 
-    // Frames: the top level, then the call stack, oldest first. Frames replaced by tail
-    // calls collapse into one faded box ("replaced by N tail calls") for context.
+    // Frames: the top level, then the calls on the stack, oldest first. Calls replaced by a
+    // tail call are gone in Racket, so they aren't drawn; the call that replaced them says so.
     let mut y = 0.0;
-    let mut roots: Vec<&VizRef> = Vec::new();
     let mut push = |out: &mut Layout, mut f: FrameBox| {
         let title_w = text_w(cw, &format!("({} {})", f.name, f.args.join(" "))) + 28.0;
-        let row_w = f.rows.iter().map(|(n, v)| text_w(cw, n) + text_w(cw, prim_text(v).unwrap_or("•")) + 44.0).fold(0.0, f32::max);
+        let row_w = f.rows.iter().map(|(n, v)| text_w(cw, n) + text_w(cw, &label(trace, v, step_idx)).min(text_w(cw, &"x".repeat(18))) + 56.0).fold(0.0, f32::max);
         let w = title_w.max(row_w).clamp(FRAME_W, 420.0);
-        let h = match f.kind {
-            FrameKind::Replaced(_) => HEADER_H + 22.0,
-            FrameKind::Top if f.rows.is_empty() => HEADER_H,
-            _ => HEADER_H + (f.rows.len() + f.returns.is_some() as usize).max(1) as f32 * ROW_H + 8.0,
-        };
+        let h = if f.top && f.rows.is_empty() { HEADER_H } else { HEADER_H + (f.rows.len() + f.returns.is_some() as usize).max(1) as f32 * ROW_H + 8.0 };
         f.rect = Rect::from_min_size(pos2(0.0, y), vec2(w, h));
         y += h + FRAME_GAP;
         out.frames.push(f);
     };
-    // Functions are visible in the code; the top level shows the data the program defines.
-    let top_rows: Vec<(String, VizRef)> = step.globals.iter().filter(|(_, v)| !matches!(v, VizRef::Prim { k, .. } if k == "fn")).cloned().collect();
+    // Functions are visible in the code; the top level shows the data the program defines,
+    // and the program's result once there is one.
+    let mut top_rows: Vec<(String, VizRef)> = step.globals.iter().filter(|(_, v)| !matches!(v, VizRef::Prim { k, .. } if k == "fn")).cloned().collect();
+    if let Some(r) = trace.result_at(step_idx) {
+        top_rows.push(("result".into(), r.clone()));
+    }
     let live_count = step.live_frames().count();
-    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, kind: FrameKind::Top, site: None, rect: Rect::NOTHING });
+    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, site: None, rect: Rect::NOTHING });
     let args_of = |f: &crate::racket::protocol::VizFrame| -> Vec<String> {
         let n = f.nargs.min(f.vars.len());
-        f.vars[..n].iter().map(|(_, v)| show_in(trace, v, step_idx, 16)).collect()
+        f.vars[..n].iter().map(|(_, v)| label(trace, v, step_idx)).collect()
     };
-    let frames = &step.frames;
-    let mut k = 0;
     let mut seen_live = 0;
-    while k < frames.len() {
-        let f = &frames[k];
-        let site = f.pos.map(|p| (p, f.span));
+    let mut tail = false;
+    for (k, f) in step.frames.iter().enumerate() {
         if f.replaced {
-            let start = k;
-            while k < frames.len() && frames[k].replaced {
-                k += 1;
-            }
-            push(&mut out, FrameBox { key: start + 1, name: f.name.clone(), args: args_of(f), rows: Vec::new(), returns: None, current: false, kind: FrameKind::Replaced(k - start), site, rect: Rect::NOTHING });
+            tail = true;
             continue;
         }
         seen_live += 1;
         let newest = seen_live == live_count;
         let returns = if newest && step.kind == "return" { step.value.clone() } else { None };
-        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, kind: FrameKind::Live, site, rect: Rect::NOTHING });
-        k += 1;
+        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, top: false, tail, site: f.pos.map(|p| (p, f.span)), rect: Rect::NOTHING });
+        tail = false;
     }
     let heap_x = out.frames.iter().map(|f| f.rect.width()).fold(FRAME_W, f32::max) + 80.0;
+    let mut roots: Vec<&VizRef> = Vec::new();
     for f in &out.frames {
         roots.extend(f.rows.iter().map(|r| &r.1));
         roots.extend(f.returns.iter());
     }
-    if step.kind == "question" || step.kind == "set" {
+    if matches!(step.kind.as_str(), "question" | "set" | "result") {
         roots.extend(step.value.iter());
     }
 
     // Reachable objects in breadth-first order (stable placement across steps).
-    let mut order: Vec<u64> = Vec::new();
-    let mut seen: HashSet<u64> = HashSet::new();
-    let mut queue: VecDeque<u64> = roots.iter().filter_map(|r| obj_id(r)).collect();
-    while let Some(id) = queue.pop_front() {
-        if order.len() >= MAX_OBJECTS || !seen.insert(id) {
-            continue;
+    let reach = |from: &[&VizRef]| -> Vec<u64> {
+        let mut order: Vec<u64> = Vec::new();
+        let mut seen: HashSet<u64> = HashSet::new();
+        let mut queue: VecDeque<u64> = from.iter().filter_map(|r| obj_id(r)).collect();
+        while let Some(id) = queue.pop_front() {
+            if order.len() >= MAX_OBJECTS || !seen.insert(id) {
+                continue;
+            }
+            let Some(o) = trace.object(id, step_idx) else { continue };
+            order.push(id);
+            queue.extend(refs_of(o).into_iter().filter_map(obj_id));
         }
-        let Some(o) = trace.object(id, step_idx) else { continue };
-        order.push(id);
-        queue.extend(refs_of(o).into_iter().filter_map(obj_id));
+        order
+    };
+    let order = reach(&roots);
+    // Focus: with calls on the stack, what the running one can reach stays bright.
+    if let Some(cur) = out.frames.iter().find(|f| f.current && !f.top) {
+        let mut from: Vec<&VizRef> = cur.rows.iter().map(|r| &r.1).chain(cur.returns.iter()).collect();
+        if matches!(step.kind.as_str(), "question" | "set") {
+            from.extend(step.value.iter());
+        }
+        out.focus = Some(reach(&from).into_iter().collect());
     }
     let obj = |id: u64| trace.object(id, step_idx);
-
-    // Tree types: struct fields that point at structs of the same type are child fields.
-    let mut child_fields: HashMap<String, Vec<usize>> = HashMap::new();
-    for &id in &order {
-        let Some(o) = obj(id) else { continue };
-        if o.k != "struct" {
-            continue;
-        }
-        let name = o.name.clone().unwrap_or_default();
-        for (k, (_, r)) in o.fields.iter().enumerate() {
-            if let Some(c) = obj_id(r).and_then(obj)
-                && c.k == "struct"
-                && c.name.as_deref() == Some(name.as_str())
-            {
-                let e = child_fields.entry(name.clone()).or_default();
-                if !e.contains(&k) {
-                    e.push(k);
-                }
-            }
-        }
-    }
-    for v in child_fields.values_mut() {
-        v.sort();
-    }
-    let tree_children = |o: &VizObject| -> Option<Vec<usize>> {
-        if o.k != "struct" {
-            return None;
-        }
-        child_fields.get(o.name.as_deref().unwrap_or("")).cloned()
-    };
 
     let mut placed: HashSet<u64> = HashSet::new();
     let mut cursor_y = 0.0f32;
@@ -392,10 +462,10 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
             continue;
         }
         let Some(o) = obj(id) else { continue };
-        if tree_children(o).is_some() {
+        if trace.tree_children(o).is_some() {
             flush_plain(&mut cursor_y, &mut plain_x, &mut plain_row_h);
-            // Claim this subtree (nodes not already drawn elsewhere), then lay it out:
-            // leaves left to right, parents centered over their children.
+            // Claim this subtree (nodes not already drawn elsewhere), then lay it out: leaves
+            // left to right, parents centered over their children, empty children as stubs.
             struct TNode {
                 id: u64,
                 size: Vec2,
@@ -405,46 +475,34 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
                 depth: usize,
             }
             let mut nodes: Vec<TNode> = Vec::new();
-            fn claim(
-                id: u64,
-                depth: usize,
-                obj: &dyn Fn(u64) -> Option<VizObject>,
-                tree_children: &dyn Fn(&VizObject) -> Option<Vec<usize>>,
-                placed: &mut HashSet<u64>,
-                nodes: &mut Vec<TNode>,
-                cw: f32,
-            ) -> usize {
+            fn claim(id: u64, depth: usize, trace: &Trace, step: usize, placed: &mut HashSet<u64>, nodes: &mut Vec<TNode>, cw: f32) -> usize {
                 placed.insert(id);
-                let o = obj(id).unwrap_or_default();
-                let children = tree_children(&o).unwrap_or_default();
+                let o = trace.object(id, step).cloned().unwrap_or_default();
+                let children = trace.tree_children(&o).unwrap_or_default();
                 let me = nodes.len();
                 nodes.push(TNode { id, size: tree_node_size(&o, &children, cw), kids: Vec::new(), width: 0.0, x: 0.0, depth });
                 let mut kids = Vec::new();
                 for &k in &children {
                     let child = o.fields.get(k).and_then(|f| obj_id(&f.1));
-                    let same_type = child.and_then(obj).is_some_and(|c| c.k == "struct" && c.name == o.name);
+                    let same_type = child.and_then(|c| trace.object(c, step)).is_some_and(|c| c.k == "struct" && c.name == o.name);
                     match child {
-                        Some(c) if same_type && !placed.contains(&c) && depth < 40 => kids.push(Some(claim(c, depth + 1, obj, tree_children, placed, nodes, cw))),
+                        Some(c) if same_type && !placed.contains(&c) && depth < 40 => kids.push(Some(claim(c, depth + 1, trace, step, placed, nodes, cw))),
                         _ => kids.push(None),
                     }
                 }
                 nodes[me].kids = kids;
                 me
             }
-            let obj_owned = |id: u64| trace.object(id, step_idx).cloned();
-            let tc = |o: &VizObject| tree_children(o);
-            claim(id, 0, &obj_owned, &tc, &mut placed, &mut nodes, cw);
+            claim(id, 0, trace, step_idx, &mut placed, &mut nodes, cw);
             // Subtree widths (children are always after their parent: walk backwards).
             for i in (0..nodes.len()).rev() {
-                let kids_w: f32 = nodes[i].kids.iter().map(|k| k.map(|c| nodes[c].width).unwrap_or(STUB_W)).sum::<f32>()
-                    + SIBLING_GAP * nodes[i].kids.len().saturating_sub(1) as f32;
+                let kids_w: f32 = nodes[i].kids.iter().map(|k| k.map(|c| nodes[c].width).unwrap_or(STUB_W)).sum::<f32>() + SIBLING_GAP * nodes[i].kids.len().saturating_sub(1) as f32;
                 nodes[i].width = nodes[i].size.x.max(kids_w);
             }
             // Positions, top-down.
             let mut stack = vec![(0usize, 0.0f32)];
             while let Some((i, left)) = stack.pop() {
-                let kids_w: f32 = nodes[i].kids.iter().map(|k| k.map(|c| nodes[c].width).unwrap_or(STUB_W)).sum::<f32>()
-                    + SIBLING_GAP * nodes[i].kids.len().saturating_sub(1) as f32;
+                let kids_w: f32 = nodes[i].kids.iter().map(|k| k.map(|c| nodes[c].width).unwrap_or(STUB_W)).sum::<f32>() + SIBLING_GAP * nodes[i].kids.len().saturating_sub(1) as f32;
                 let mut x = left + (nodes[i].width - kids_w) / 2.0;
                 nodes[i].x = left + nodes[i].width / 2.0;
                 let kids = nodes[i].kids.clone();
@@ -456,16 +514,17 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
                     x += w + SIBLING_GAP;
                 }
             }
-            let level_h = nodes.iter().map(|n| n.size.y).fold(0.0, f32::max) + LEVEL_GAP;
+            let level_h = NODE_H + LEVEL_GAP;
             let max_depth = nodes.iter().map(|n| n.depth).max().unwrap_or(0);
             for n in &nodes {
                 let o = trace.object(n.id, step_idx).cloned().unwrap_or_default();
-                let children = tree_children(&o).unwrap_or_default();
+                let children = trace.tree_children(&o).unwrap_or_default();
                 let min = pos2(heap_x + n.x - n.size.x / 2.0, cursor_y + n.depth as f32 * level_h);
                 out.objects.insert(n.id, ObjBox { obj: o, role: Role::TreeNode { children }, rect: Rect::from_min_size(min, n.size) });
                 out.order.push(n.id);
             }
-            cursor_y += (max_depth + 1) as f32 * level_h + 10.0;
+            // Room for the empty-child stubs under the deepest level.
+            cursor_y += max_depth as f32 * level_h + NODE_H + 40.0;
         } else if o.k == "cons" {
             flush_plain(&mut cursor_y, &mut plain_x, &mut plain_row_h);
             // A chain of cells, left to right, until the list ends or meets a drawn cell.
@@ -556,8 +615,18 @@ impl Pen<'_> {
             VizRef::Object { id } => {
                 let dot = if align == Align2::CENTER_CENTER { at } else { at + vec2(-4.0 * self.zoom, 0.0) };
                 self.ui.painter().circle_filled(dot, 3.5 * self.zoom, self.fade(self.theme.text_accent));
-                arrows.push(Arrow { from: dot, to: *id, strong: from_current, tree: false });
+                arrows.push(Arrow { from: dot, to: *id, strong: from_current, tree: false, label: None, alpha: self.alpha });
             }
+        }
+    }
+    /// A frame row's value, right-aligned at `at`: primitives as text; objects as their name
+    /// (`node 34`, muted) and a dot the arrow leaves from.
+    fn slot(&self, r: &VizRef, trace: &Trace, step: usize, at: Pos2, arrows: &mut Vec<Arrow>, from_current: bool) {
+        self.value(r, at, Align2::RIGHT_CENTER, arrows, from_current);
+        if let VizRef::Object { .. } = r {
+            let name = label(trace, r, step);
+            let name = if name.chars().count() > 18 { format!("{}…", name.chars().take(17).collect::<String>()) } else { name };
+            self.ui.painter().text(at - vec2(14.0 * self.zoom, 0.0), Align2::RIGHT_CENTER, name, self.mono(), self.fade(self.theme.text_muted));
         }
     }
 }
@@ -567,6 +636,10 @@ struct Arrow {
     to: u64,
     strong: bool,
     tree: bool,
+    /// A tree edge's field name (`left`, `right`).
+    label: Option<String>,
+    /// The source's fade (focus, fade-in).
+    alpha: f32,
 }
 
 fn ease(t: f32) -> f32 {
@@ -576,8 +649,21 @@ fn ease(t: f32) -> f32 {
 
 const ANIM_SECS: f64 = 0.35;
 
-/// The diagram for the current step. Returns whether an animation is still running.
-pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, code: &dyn Fn(usize, usize) -> String) -> bool {
+/// What the panel tells the diagram, and what the diagram reports back.
+#[derive(Default)]
+pub struct DrawIo {
+    /// Objects the explanation mentions, with the colour of their chips: they get a ring.
+    pub marks: HashMap<u64, Color32>,
+    /// An object being hovered in the explanation: highlighted here.
+    pub hovered_in_text: Option<u64>,
+    /// Out: the object under the pointer in the diagram.
+    pub hovered: Option<u64>,
+    /// Out: an animation is still running.
+    pub animating: bool,
+}
+
+/// The diagram for the current step.
+pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, code: &dyn Fn(usize, usize) -> String, io: &mut DrawIo) {
     let tk = Tokens::of(theme);
     let now = ui.input(|i| i.time);
     let cw = ui.ctx().fonts_mut(|f| f.glyph_width(&ui::mono(FONT), 'M'));
@@ -605,7 +691,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
         view.anim = anim;
         view.layout = Some((step_idx, new));
     }
-    let Some((laid_step, lay)) = view.layout.take() else { return false };
+    let Some((laid_step, lay)) = view.layout.take() else { return };
 
     // Pan (drag, trackpad) and zoom (pinch / ⌘-scroll). Clicking the diagram takes keyboard
     // focus from the editor so ← → and Space drive the visualizer.
@@ -692,22 +778,23 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
     let arrows_slot = child_ui.painter().add(Shape::Noop);
     let mut arrows: Vec<Arrow> = Vec::new();
     let mut boxes: HashMap<u64, Rect> = HashMap::new();
+    let pointer = ui.input(|i| i.pointer.hover_pos()).filter(|p| rect.contains(*p) && resp.hovered());
 
     // Frames, with connectors from each caller to its callee labelled with the call.
     let z = view.zoom;
     let mut prev: Option<Rect> = None;
     for f in &lay.frames {
         let (min, alpha) = pos_of(Key::Frame(f.key), f.rect.min);
+        // Callers waiting on the running call recede a little.
+        let alpha = if f.current || f.top { alpha } else { alpha * 0.75 };
         let pp = Pen { ui: &child_ui, cw, theme, tk, origin, zoom: z, alpha };
         let r = pp.r(Rect::from_min_size(min, f.rect.size()));
         let painter = child_ui.painter();
-        let ghost = matches!(f.kind, FrameKind::Replaced(_));
         if let Some(p) = prev {
             let (a, b) = (pos2(p.center().x, p.bottom()), pos2(p.center().x, r.top()));
             let returning = f.returns.is_some();
             let color = pp.fade(if returning { theme.success } else { mix(tk.subtle_border, theme.text_accent, 0.6) });
-            let tail_in = lay.frames.iter().take_while(|g| g.key != f.key).last().is_some_and(|g| matches!(g.kind, FrameKind::Replaced(_)));
-            if tail_in {
+            if f.tail {
                 painter.add(Shape::dashed_line(&[a, b - vec2(0.0, 6.0 * z)], Stroke::new(1.3, color), 5.0 * z, 4.0 * z));
             } else {
                 painter.line_segment([a, b - vec2(0.0, 6.0 * z)], Stroke::new(1.3, color));
@@ -716,12 +803,12 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
             painter.add(Shape::convex_polygon(vec![b, b + vec2(-head * 0.6, -head), b + vec2(head * 0.6, -head)], color, Stroke::NONE));
             // The label: the call that made this frame (or what it returns).
             let label = if let Some(v) = &f.returns {
-                format!("returns {}", match v { VizRef::Prim { v, .. } => v.clone(), VizRef::Object { .. } => "…".into() })
+                format!("returns {}", self::label(&view.trace, v, step_idx))
             } else {
                 let call = f.site.map(|(p, n)| code(p, n)).unwrap_or_default();
                 let call: String = call.split_whitespace().collect::<Vec<_>>().join(" ");
                 let call = if call.chars().count() > 40 { format!("{}…", call.chars().take(39).collect::<String>()) } else { call };
-                if tail_in { format!("tail call {call}") } else { call }
+                if f.tail { format!("{call}  (tail call: replaces its caller)") } else { call }
             };
             if !label.is_empty() {
                 // Truncated to the room left in the panel.
@@ -734,27 +821,16 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
         }
         prev = Some(r);
         let radius = CornerRadius::same((8.0 * z) as u8);
-        match f.kind {
-            FrameKind::Replaced(_) => {
-                let c = with_alpha(theme.text_muted, 140);
-                for (a, b) in [(r.left_top(), r.right_top()), (r.right_top(), r.right_bottom()), (r.right_bottom(), r.left_bottom()), (r.left_bottom(), r.left_top())] {
-                    painter.add(Shape::dashed_line(&[a, b], Stroke::new(1.0, c), 5.0 * z, 4.0 * z));
-                }
-            }
-            _ => {
-                let border = if f.current { theme.text_accent } else { tk.subtle_border };
-                let bg = if f.kind == FrameKind::Top { with_alpha(pp.box_bg(), 170) } else { pp.box_bg() };
-                painter.rect(r, radius, pp.fade(bg), Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
-            }
-        }
+        let border = if f.current { theme.text_accent } else { tk.subtle_border };
+        let bg = if f.top { with_alpha(pp.box_bg(), 170) } else { pp.box_bg() };
+        painter.rect(r, radius, pp.fade(bg), Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
         // Title: `(name arg …)` for calls.
         let title_y = r.top() + HEADER_H / 2.0 * z;
-        let dim = if ghost { 0.5 } else { 1.0 };
-        if f.kind == FrameKind::Top {
+        if f.top {
             painter.text(pos2(r.left() + 12.0 * z, title_y), Align2::LEFT_CENTER, &f.name, pp.label(12.5), pp.fade(theme.text_muted));
         } else {
             let mut job = egui::text::LayoutJob::default();
-            let fmt = |c: Color32| egui::TextFormat { font_id: ui::mono(FONT * z), color: pp.fade(c.gamma_multiply(dim)), ..Default::default() };
+            let fmt = |c: Color32| egui::TextFormat { font_id: ui::mono(FONT * z), color: pp.fade(c), ..Default::default() };
             job.append("(", 0.0, fmt(theme.text_muted));
             job.append(&f.name, 0.0, fmt(theme.syntax.function.color));
             for a in &f.args {
@@ -762,37 +838,43 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
                 job.append(a, 0.0, fmt(theme.text));
             }
             job.append(")", 0.0, fmt(theme.text_muted));
+            job.wrap = egui::text::TextWrapping::truncate_at_width(r.width() - 20.0 * z);
             let g = painter.layout_job(job);
             painter.galley(pos2(r.left() + 12.0 * z, title_y - g.size().y / 2.0), g, theme.text);
         }
-        if let FrameKind::Replaced(n) = f.kind {
-            let note = if n == 1 { "replaced by a tail call".to_string() } else { format!("replaced by {n} tail calls") };
-            painter.text(pos2(r.left() + 12.0 * z, r.bottom() - 13.0 * z), Align2::LEFT_CENTER, note, ui::ui_font(11.0 * z), pp.fade(theme.text_placeholder));
-            continue;
-        }
-        if f.kind == FrameKind::Top && f.rows.is_empty() {
+        if f.top && f.rows.is_empty() {
             continue;
         }
         painter.hline(r.x_range(), r.top() + HEADER_H * z, Stroke::new(1.0, pp.fade(tk.subtle_border)));
         let mut y = HEADER_H + ROW_H / 2.0 + 4.0;
         for (name, v) in &f.rows {
-            painter.text(r.min + vec2(12.0, y) * z, Align2::LEFT_CENTER, name, pp.mono(), pp.fade(theme.syntax.variable.color));
-            pp.value(v, pos2(r.right() - 12.0 * z, r.top() + y * z), Align2::RIGHT_CENTER, &mut arrows, f.current);
+            let result = f.top && name == "result" && Some(v) == view.trace.result_at(step_idx);
+            let color = if result { theme.success } else { theme.syntax.variable.color };
+            painter.text(r.min + vec2(12.0, y) * z, Align2::LEFT_CENTER, name, if result { pp.label(12.5) } else { pp.mono() }, pp.fade(color));
+            pp.slot(v, &view.trace, step_idx, pos2(r.right() - 12.0 * z, r.top() + y * z), &mut arrows, f.current || result);
             y += ROW_H;
         }
         if let Some(v) = &f.returns {
             painter.text(r.min + vec2(12.0, y) * z, Align2::LEFT_CENTER, "returns", pp.label(12.5), pp.fade(theme.success));
-            pp.value(v, pos2(r.right() - 12.0 * z, r.top() + y * z), Align2::RIGHT_CENTER, &mut arrows, true);
+            pp.slot(v, &view.trace, step_idx, pos2(r.right() - 12.0 * z, r.top() + y * z), &mut arrows, true);
         }
     }
 
     // Objects.
+    let mut hovered: Option<u64> = None;
     for id in &lay.order {
         let Some(ob) = lay.objects.get(id) else { continue };
-        let (min, alpha) = pos_of(Key::Object(*id), ob.rect.min);
+        let (min, born) = pos_of(Key::Object(*id), ob.rect.min);
+        let dim = lay.focus.as_ref().is_some_and(|f| !f.contains(id));
+        let alpha = born * if dim { 0.45 } else { 1.0 };
         let pp = Pen { ui: &child_ui, cw, theme, tk, origin, zoom: view.zoom, alpha };
+        // New objects pop in: they grow from slightly smaller as they fade in.
         let r = pp.r(Rect::from_min_size(min, ob.rect.size()));
+        let r = Rect::from_center_size(r.center(), r.size() * (0.82 + 0.18 * ease(born)));
         boxes.insert(*id, r);
+        if pointer.is_some_and(|p| r.contains(p)) {
+            hovered = Some(*id);
+        }
         let flash = match view.trace.change_at(*id, step_idx) {
             Some(true) => Some(theme.success),
             Some(false) => Some(theme.warning),
@@ -804,34 +886,35 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
         let radius = CornerRadius::same((6.0 * z) as u8);
         match &ob.role {
             Role::TreeNode { children } => {
-                child_ui.painter().rect(r, radius, pp.fade(pp.box_bg()), Stroke::new(if flash.is_some() { 1.5 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
-                child_ui.painter().text(pos2(r.center().x, r.top() + HEADER_H / 2.0 * z), Align2::CENTER_CENTER, o.name.as_deref().unwrap_or(""), pp.label(12.0), pp.fade(theme.syntax.keyword.color));
-                let mut y = HEADER_H + ROW_H / 2.0;
-                for (k, (name, v)) in o.fields.iter().enumerate() {
-                    if children.contains(&k) {
-                        continue;
-                    }
-                    child_ui.painter().text(r.min + vec2(10.0, y) * z, Align2::LEFT_CENTER, name, pp.mono(), pp.fade(theme.text_muted));
-                    pp.value(v, pos2(r.right() - 10.0 * z, r.top() + y * z), Align2::RIGHT_CENTER, &mut arrows, false);
-                    y += ROW_H;
-                }
-                // Child ports along the bottom edge.
+                let pill = CornerRadius::same(((r.height() / 2.0).min(14.0 * z)) as u8);
+                let fill = if flash == Some(theme.success) { mix(pp.box_bg(), theme.success, 0.16) } else { pp.box_bg() };
+                child_ui.painter().rect(r, pill, pp.fade(fill), Stroke::new(if flash.is_some() { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
+                let text = node_label(o, children);
+                let color = if o.fields.iter().enumerate().any(|(k, (_, v))| !children.contains(&k) && matches!(v, VizRef::Prim { k, .. } if k == "num")) { theme.syntax.number.color } else { theme.text };
+                child_ui.painter().text(r.center(), Align2::CENTER_CENTER, text, pp.mono(), pp.fade(color));
+                // Children along the bottom edge, in field order; edges are labelled with the
+                // field name so left and right read as left and right.
                 let n = children.len() as f32;
                 for (j, &k) in children.iter().enumerate() {
                     let px = r.left() + r.width() * (j as f32 + 0.5) / n;
-                    let py = r.bottom() - 10.0 * z;
                     let (name, v) = &o.fields[k];
-                    child_ui.painter().text(pos2(px, py), Align2::CENTER_CENTER, name, ui::ui_font(10.0 * z), pp.fade(theme.text_placeholder));
                     match v {
-                        VizRef::Object { id: c } => arrows.push(Arrow { from: pos2(px, r.bottom()), to: *c, strong: false, tree: true }),
-                        VizRef::Prim { v, k } => {
-                            // An empty child: a small stub under the port.
-                            let stub = Rect::from_center_size(pos2(px, r.bottom() + 18.0 * z), vec2(STUB_W - 6.0, 16.0) * z);
-                            child_ui.painter().line_segment([pos2(px, r.bottom()), stub.center_top()], Stroke::new(1.0, pp.fade(tk.subtle_border)));
-                            child_ui.painter().rect_stroke(stub, CornerRadius::same((4.0 * z) as u8), Stroke::new(1.0, pp.fade(tk.subtle_border)), StrokeKind::Inside);
-                            let short = if k == "empty" { "∅" } else { v.as_str() };
-                            child_ui.painter().text(stub.center(), Align2::CENTER_CENTER, short, ui::mono(10.0 * z), pp.fade(theme.text_placeholder));
+                        VizRef::Object { id: c } => arrows.push(Arrow { from: pos2(px, r.bottom()), to: *c, strong: false, tree: true, label: Some(name.clone()), alpha }),
+                        VizRef::Prim { .. } => {
+                            // An empty child: a faint ∅ under its side.
+                            let spread = (j as f32 - (n - 1.0) / 2.0) * 16.0 * z;
+                            let c = pos2(px + spread, r.bottom() + 26.0 * z);
+                            child_ui.painter().line_segment([pos2(px, r.bottom()), c - vec2(0.0, 7.0 * z)], Stroke::new(1.0, pp.fade(with_alpha(tk.subtle_border, 200))));
+                            child_ui.painter().text(c, Align2::CENTER_CENTER, "∅", ui::mono(11.0 * z), pp.fade(theme.text_placeholder));
                         }
+                    }
+                }
+                // Data fields that are objects (a node holding a list, say) point to the right.
+                for (k, (_, v)) in o.fields.iter().enumerate() {
+                    if !children.contains(&k)
+                        && let VizRef::Object { id: c } = v
+                    {
+                        arrows.push(Arrow { from: r.right_center(), to: *c, strong: false, tree: false, label: None, alpha });
                     }
                 }
             }
@@ -847,7 +930,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
                 match &o.rest {
                     Some(VizRef::Object { id: next }) => {
                         child_ui.painter().circle_filled(rest_c, 3.5 * z, pp.fade(theme.text_accent));
-                        arrows.push(Arrow { from: rest_c, to: *next, strong: false, tree: false });
+                        arrows.push(Arrow { from: rest_c, to: *next, strong: false, tree: false, label: None, alpha });
                     }
                     Some(VizRef::Prim { .. }) | None => {
                         // The end of the list: a slash, as in box-and-pointer diagrams.
@@ -858,6 +941,13 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
             }
             Role::Plain => draw_plain(&pp, &child_ui, o, r, radius, border, flash.is_some(), &mut arrows, &mut view.images),
         }
+        // Mentioned in the explanation: a ring in the chip's colour (stronger when hovered).
+        if let Some(c) = io.marks.get(id) {
+            let strong = io.hovered_in_text == Some(*id) || hovered == Some(*id);
+            let ring = r.expand(if strong { 4.0 } else { 3.0 } * z);
+            let rr = CornerRadius::same(((ring.height() / 2.0).min(17.0 * z)) as u8);
+            child_ui.painter().rect_stroke(ring, rr, Stroke::new(if strong { 2.5 } else { 1.6 }, *c), StrokeKind::Inside);
+        }
     }
 
     // Arrows, under the boxes.
@@ -865,12 +955,13 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
     for a in &arrows {
         let Some(target) = boxes.get(&a.to) else { continue };
         let color = if a.tree {
-            mix(tk.subtle_border, theme.text, 0.25)
+            mix(tk.subtle_border, theme.text, 0.3)
         } else if a.strong {
             theme.text_accent
         } else {
             with_alpha(theme.text_accent, 150)
         };
+        let color = if a.alpha < 1.0 { color.gamma_multiply(a.alpha) } else { color };
         let stroke = Stroke::new(if a.strong { 1.6 } else { 1.2 }, color);
         let (end, dir) = if a.tree || target.top() > a.from.y + 8.0 && (target.center().x - a.from.x).abs() < target.width() {
             (target.center_top(), vec2(0.0, 1.0))
@@ -885,14 +976,43 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
         let pull = (d * 0.4).clamp(12.0, 120.0);
         let c1 = if a.tree { a.from + vec2(0.0, pull) } else { a.from + vec2(pull, 0.0) };
         let c2 = end - dir * pull;
-        shapes.push(Shape::CubicBezier(CubicBezierShape::from_points_stroke([a.from, c1, c2, end], false, Color32::TRANSPARENT, stroke)));
+        let curve = CubicBezierShape::from_points_stroke([a.from, c1, c2, end], false, Color32::TRANSPARENT, stroke);
+        if let Some(text) = &a.label {
+            // The field name, beside the edge just below where it leaves the node.
+            let at = curve.sample(0.4);
+            let g = child_ui.painter().layout_no_wrap(text.clone(), ui::ui_font(10.0 * view.zoom), color.gamma_multiply(0.9));
+            let x = if end.x < a.from.x - 1.0 { at.x - 9.0 * view.zoom - g.size().x } else { at.x + 9.0 * view.zoom };
+            shapes.push(Shape::galley(pos2(x, at.y - g.size().y / 2.0), g, color));
+        }
+        shapes.push(Shape::CubicBezier(curve));
         let head = 6.0 * view.zoom;
         let side = vec2(-dir.y, dir.x) * head * 0.55;
         shapes.push(Shape::Path(PathShape::convex_polygon(vec![end, end - dir * head + side, end - dir * head - side], color, Stroke::NONE)));
     }
     child_ui.painter().set(arrows_slot, Shape::Vec(shapes));
+
+    // Hover card: a tree node's full contents.
+    if let Some(id) = hovered
+        && let Some(ob) = lay.objects.get(&id)
+        && matches!(ob.role, Role::TreeNode { .. })
+    {
+        resp.clone().on_hover_ui_at_pointer(|ui| {
+            ui.label(egui::RichText::new(ob.obj.name.as_deref().unwrap_or("struct")).font(ui::semibold(12.5)).color(theme.syntax.keyword.color));
+            for (name, v) in &ob.obj.fields {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(name).font(ui::mono(12.5)).color(theme.text_muted));
+                    let shown = match v {
+                        VizRef::Prim { k, .. } if k == "empty" => "empty".to_string(),
+                        _ => label(&view.trace, v, step_idx),
+                    };
+                    ui.label(egui::RichText::new(shown).font(ui::mono(12.5)).color(theme.text));
+                });
+            }
+        });
+    }
+    io.hovered = hovered;
+    io.animating = animating || fitting;
     view.layout = Some((laid_step, lay));
-    animating || fitting
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -955,314 +1075,12 @@ fn draw_plain(pp: &Pen, ui: &Ui, o: &VizObject, r: Rect, radius: CornerRadius, b
     }
 }
 
-// ------------------------------------------------------------------------------- explanation
-
-/// A piece of an explanation line.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Piece {
-    Text(String),
-    /// Program text, shown in a code chip.
-    Code(String),
-    /// A value, shown in a value chip.
-    Value(String),
-}
-
-/// A step in plain language: the code it's about, a headline, and lines with the values.
-#[derive(Clone, Debug, Default)]
-pub struct Explanation {
-    pub code: String,
-    pub headline: String,
-    pub lines: Vec<Vec<Piece>>,
-}
-
-/// A value written the way the language would show it, shortened to about `max` characters:
-/// `(list 3 2 1)`, `(make-node '() 5 (make-node …))`, `"hi"`.
-pub fn show_value(view: &VisualizerView, r: &VizRef, step: usize, max: usize) -> String {
-    show_in(&view.trace, r, step, max)
-}
-
-/// [`show_value`] against a trace.
-pub fn show_in(trace: &Trace, r: &VizRef, step: usize, max: usize) -> String {
-    fn go(trace: &Trace, r: &VizRef, step: usize, depth: usize, out: &mut String, max: usize) {
-        if out.chars().count() > max {
-            return;
-        }
-        let id = match r {
-            VizRef::Prim { v, .. } => {
-                out.push_str(v);
-                return;
-            }
-            VizRef::Object { id } => *id,
-        };
-        let Some(o) = trace.object(id, step) else {
-            out.push('…');
-            return;
-        };
-        if depth > 3 {
-            out.push('…');
-            return;
-        }
-        match o.k.as_str() {
-            "cons" => {
-                // A proper list prints as (list …); anything else as nested cons.
-                let mut items = Vec::new();
-                let mut cur = Some(o);
-                let mut proper = false;
-                while let Some(c) = cur {
-                    if c.k != "cons" || items.len() > 50 {
-                        break;
-                    }
-                    items.push(c.first.clone());
-                    match &c.rest {
-                        Some(VizRef::Object { id }) => cur = trace.object(*id, step),
-                        Some(VizRef::Prim { k, .. }) if k == "empty" => {
-                            proper = true;
-                            cur = None;
-                        }
-                        _ => cur = None,
-                    }
-                }
-                if !proper {
-                    out.push_str("(cons ");
-                    if let Some(f) = &o.first {
-                        go(trace, f, step, depth + 1, out, max);
-                    }
-                    out.push(' ');
-                    if let Some(rest) = &o.rest {
-                        go(trace, rest, step, depth + 1, out, max);
-                    }
-                    out.push(')');
-                    return;
-                }
-                out.push_str("(list");
-                for item in items.iter().flatten() {
-                    if out.chars().count() > max {
-                        out.push_str(" …");
-                        break;
-                    }
-                    out.push(' ');
-                    go(trace, item, step, depth + 1, out, max);
-                }
-                out.push(')');
-            }
-            "struct" => {
-                out.push_str(&format!("(make-{}", o.name.as_deref().unwrap_or("struct")));
-                for (_, f) in &o.fields {
-                    if out.chars().count() > max {
-                        out.push_str(" …");
-                        break;
-                    }
-                    out.push(' ');
-                    go(trace, f, step, depth + 1, out, max);
-                }
-                out.push(')');
-            }
-            "vector" => {
-                out.push_str("(vector");
-                for f in &o.items {
-                    out.push(' ');
-                    go(trace, f, step, depth + 1, out, max);
-                }
-                out.push(')');
-            }
-            "box" => {
-                out.push_str("(box ");
-                if let Some(f) = o.items.first() {
-                    go(trace, f, step, depth + 1, out, max);
-                }
-                out.push(')');
-            }
-            "image" => out.push_str("an image"),
-            "hash" => out.push_str(&format!("a hash table of {} entries", o.pairs.len())),
-            _ => out.push_str(o.text.as_deref().unwrap_or("…")),
-        }
-    }
-    let mut out = String::new();
-    go(trace, r, step, 0, &mut out, max);
-    if out.chars().count() > max + 12 {
-        let cut: String = out.chars().take(max).collect();
-        format!("{cut}…")
-    } else {
-        out
-    }
-}
-
-/// One-line program text (whitespace collapsed).
-fn one_line(s: &str) -> String {
-    s.split_whitespace().collect::<Vec<_>>().join(" ")
-}
-
-/// `(name arg …)` for a frame, with its argument values.
-fn call_text(trace: &Trace, f: &crate::racket::protocol::VizFrame, step: usize) -> String {
-    let n = f.nargs.min(f.vars.len());
-    let args: Vec<String> = f.vars[..n].iter().map(|(_, v)| show_in(trace, v, step, 16)).collect();
-    if args.is_empty() { format!("({})", f.name) } else { format!("({} {})", f.name, args.join(" ")) }
-}
-
-/// The operator of a call's source text: `(sub1 n)` -> `sub1`.
-fn head_of(text: &str) -> Option<String> {
-    let t = text.trim_start().strip_prefix(['(', '['])?;
-    let end = t.find(|c: char| c.is_whitespace() || c == ')' || c == ']').unwrap_or(t.len());
-    (end > 0).then(|| t[..end].to_string())
-}
-
-/// Explain a step for a student. `code` reads source text by range.
-pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize) -> String) -> Explanation {
-    use Piece::{Code, Text, Value};
-    let trace = &view.trace;
-    let show = |r: &VizRef| show_value(view, r, step.index, 60);
-    let src = |pos: Option<usize>, span: usize| pos.map(|p| one_line(&code(p, span))).unwrap_or_default();
-    let name = step.name.clone().unwrap_or_else(|| "λ".into());
-    let prev = step.index.checked_sub(1).and_then(|k| trace.steps.get(k));
-    let live: Vec<&crate::racket::protocol::VizFrame> = step.live_frames().collect();
-    // Primitive operations since the previous step: `(sub1 n)` → `(sub1 4)` → `3`.
-    let eval_lines = |skip: Option<usize>| -> Vec<Vec<Piece>> {
-        step.evals
-            .iter()
-            .filter(|e| e.pos.is_some() && e.pos != skip)
-            .filter_map(|e| {
-                let text = src(e.pos, e.span);
-                let value = e.value.as_ref().map(show)?;
-                let head = head_of(&text)?;
-                let with_values = format!("({head}{})", e.args.iter().map(|a| format!(" {}", show(a))).collect::<String>());
-                let mut line = vec![Code(text.clone())];
-                if with_values != text {
-                    line.push(Text(" with values ".into()));
-                    line.push(Code(with_values));
-                }
-                line.push(Text(" gives ".into()));
-                line.push(Value(value));
-                Some(line)
-            })
-            .collect()
-    };
-    let mut ex = Explanation { code: src(step.pos, step.span), ..Default::default() };
-    match step.kind.as_str() {
-        "call" => {
-            let callee = live.last().copied();
-            let caller = live.len().checked_sub(2).and_then(|k| live.get(k)).copied();
-            let prev_live = prev.map(|p| p.live_frames().count()).unwrap_or(0);
-            let tail = !live.is_empty() && live.len() <= prev_live && prev.is_some_and(|p| p.kind != "return");
-            let recursive = prev.and_then(|p| p.live_frames().last()).is_some_and(|f| f.name == name);
-            ex.headline = match (recursive, tail) {
-                (true, true) => format!("{name} calls itself again. It's a tail call, so the new call replaces the current one"),
-                (true, false) => format!("{name} calls itself (recursion). A new frame goes on the stack"),
-                (false, true) => format!("Calling {name} as a tail call: it replaces the current frame"),
-                (false, false) => match caller {
-                    Some(c) => format!("{} calls {name}", c.name),
-                    None => format!("Calling {name}"),
-                },
-            };
-            ex.lines = eval_lines(None);
-            if let Some(f) = callee {
-                let n = f.nargs.min(f.vars.len());
-                if n > 0 {
-                    let mut line = vec![Text("so ".into()), Code(call_text(trace, f, step.index)), Text(" runs, with ".into())];
-                    for (k, (p, v)) in f.vars[..n].iter().enumerate() {
-                        if k > 0 {
-                            line.push(Text(if k + 1 == n { " and ".into() } else { ", ".into() }));
-                        }
-                        line.push(Code(p.clone()));
-                        line.push(Text(" = ".into()));
-                        line.push(Value(show(v)));
-                    }
-                    ex.lines.push(line);
-                }
-            }
-        }
-        "return" => {
-            let value = step.value.as_ref().map(show).unwrap_or_else(|| "nothing".into());
-            let me = live.last().map(|f| call_text(trace, f, step.index)).unwrap_or_else(|| format!("({name} …)"));
-            let back_to = live.len().checked_sub(2).and_then(|k| live.get(k)).map(|f| call_text(trace, f, step.index));
-            ex.headline = format!("{name} is done");
-            ex.lines = eval_lines(None);
-            let mut line = vec![Code(me), Text(" returns ".into()), Value(value)];
-            match back_to {
-                Some(b) => {
-                    line.push(Text(" to ".into()));
-                    line.push(Code(b));
-                }
-                None => line.push(Text(" to the top level".into())),
-            }
-            ex.lines.push(line);
-        }
-        "question" => {
-            let answer = step.value.as_ref().map(show).unwrap_or_default();
-            let question = ex.code.clone();
-            // What asked the question, from the code just before it.
-            let before = step.pos.map(|p| code(p.saturating_sub(12), p.min(12))).unwrap_or_default();
-            let before = before.trim_end();
-            let form = if before.ends_with("(if") {
-                "if"
-            } else if before.ends_with("(and") || before.ends_with("(or") {
-                "and/or"
-            } else if before.ends_with('[') || before.ends_with('(') {
-                "cond"
-            } else {
-                ""
-            };
-            let (yes, no) = match form {
-                "cond" => ("so the answer of this cond clause is what we evaluate next", "so cond skips this clause and tries the next one"),
-                "if" => ("so if evaluates its then-branch", "so if evaluates its else-branch"),
-                _ => ("", ""),
-            };
-            ex.lines = eval_lines(step.pos);
-            let mut line = vec![Code(question.clone()), Text(" is ".into()), Value(answer.clone())];
-            let then = match answer.as_str() {
-                "#true" => yes,
-                "#false" => no,
-                _ => "",
-            };
-            if !then.is_empty() {
-                line.push(Text(format!(", {then}")));
-            }
-            ex.lines.push(line);
-            ex.headline = match answer.as_str() {
-                "#true" => format!("Is {question} true? Yes"),
-                "#false" => format!("Is {question} true? No"),
-                _ => format!("Checking {question}"),
-            };
-        }
-        "define" => {
-            ex.headline = format!("Defining {name}");
-            ex.lines = eval_lines(None);
-            for (n, v) in step.globals.iter().filter(|(n, _)| step.name.as_deref().is_some_and(|names| names.split(", ").any(|x| x == n))) {
-                ex.lines.push(match v {
-                    VizRef::Prim { k, .. } if k == "fn" => vec![Code(n.clone()), Text(" is a function: it runs when it is called".into())],
-                    _ => vec![Code(n.clone()), Text(" is ".into()), Value(show(v))],
-                });
-            }
-        }
-        "set" => {
-            ex.headline = format!("{name} changes");
-            ex.lines = eval_lines(None);
-            ex.lines.push(vec![Code(name.clone()), Text(" is now ".into()), Value(step.value.as_ref().map(show).unwrap_or_default())]);
-        }
-        "end" => {
-            ex.lines = eval_lines(None);
-            if step.failed == Some(true) {
-                ex.headline = "The program stopped with an error".into();
-                ex.lines.push(vec![Text("see the Interactions panel for the message".into())]);
-            } else {
-                ex.headline = "The program finished".into();
-                ex.lines.push(vec![Text(format!("{} steps", trace.steps.len()))]);
-            }
-        }
-        k => ex.headline = k.to_string(),
-    }
-    ex
-}
-
-/// Everything the program printed up to and including `step`.
-pub fn output_until(view: &VisualizerView, step: usize) -> String {
-    view.trace.steps.iter().take(step + 1).map(|s| s.output.as_str()).collect()
-}
-
 /// Icons for the toolbar (re-exported for the panel).
 pub const ICON: &str = ic::ACCOUNT_TREE;
 
 #[cfg(test)]
 mod tests {
+    use super::explain::{Explanation, show_value};
     use super::*;
     use crate::racket::protocol::{VizEval, VizFrame};
 
@@ -1312,11 +1130,11 @@ mod tests {
             lines(&again),
             vec!["(rest lst) with values (rest (list 1 2)) gives (list 2)", "so (rvrs (list 2) (list 1)) runs, with lst = (list 2) and acc = (list 1)"]
         );
-        // The replaced frame stays visible, faded, as a call.
+        // The replaced call is gone, as in Racket; the call that replaced it says so.
         let lay = layout(&view.trace, 2, 8.0);
-        let kinds: Vec<_> = lay.frames.iter().map(|f| (f.name.clone(), f.args.join(" "), f.kind == FrameKind::Replaced(1))).collect();
-        assert_eq!(kinds[1], ("rvrs".into(), "(list 1 2) '()".into(), true));
-        assert_eq!(kinds[2], ("rvrs".into(), "(list 2) (list 1)".into(), false));
+        let frames: Vec<_> = lay.frames.iter().map(|f| (f.name.clone(), f.args.join(" "), f.tail)).collect();
+        assert_eq!(frames.len(), 2);
+        assert_eq!(frames[1], ("rvrs".into(), "(list 2) (list 1)".into(), true));
     }
 
     /// The question's follow-up depends on the form asking it.
@@ -1337,6 +1155,22 @@ mod tests {
         view.trace.push(VizStep { kind: "define".into(), globals: vec![("f".into(), prim("f", "fn")), ("x".into(), prim("5", "num"))], ..Default::default() });
         let lay = layout(&view.trace, 0, 8.0);
         assert_eq!(lay.frames[0].rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), vec!["x"]);
+    }
+
+    /// A BST whose `right` was only ever empty is still a tree: both fields are child slots.
+    #[test]
+    fn trees_keep_children_that_were_always_empty() {
+        let node = |id: u64, key: &str, left: VizRef| VizObject { id, k: "struct".into(), name: Some("node".into()), fields: vec![("key".into(), prim(key, "num")), ("left".into(), left), ("right".into(), prim("'()", "empty"))], ..Default::default() };
+        let mut view = VisualizerView::default();
+        // Children are sent before their parents.
+        view.trace.push(VizStep { kind: "result".into(), value: Some(VizRef::Object { id: 2 }), objects: vec![node(1, "18", prim("'()", "empty")), node(2, "34", VizRef::Object { id: 1 })], ..Default::default() });
+        let n34 = view.trace.object(2, 0).cloned().unwrap();
+        assert_eq!(view.trace.tree_children(&n34), Some(vec![1, 2]));
+        assert_eq!(label(&view.trace, &VizRef::Object { id: 2 }, 0), "node 34");
+        let lay = layout(&view.trace, 0, 8.0);
+        // The result shows at the top level, and 18 sits below 34.
+        assert_eq!(lay.frames[0].rows.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(), vec!["result"]);
+        assert!(lay.objects[&1].rect.top() > lay.objects[&2].rect.bottom());
     }
 
     #[test]

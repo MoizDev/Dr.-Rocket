@@ -341,6 +341,7 @@
   (define default? (eq? lang-print default-print))
   (λ (v)
     (unless (void? v)
+      (viz-note-result! v)
       (define img (value->image v))
       (define segments
         (if img

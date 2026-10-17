@@ -21,7 +21,8 @@
          set-viz-emitter!
          set-viz-image-encoder!
          set-viz-max-steps!
-         viz-note-output!)
+         viz-note-output!
+         viz-note-result!)
 
 ;; ---------------------------------------------------------------------------
 ;; Configuration (set by the runner)
@@ -205,7 +206,9 @@
     [(#%plain-app x ...)
      (let ([parts (map (λ (x) (annotate-expr x #f)) (syntax->list #'(x ...)))]
            [text (user-text e)])
-       (if (and text (regexp-match? #rx"^[(]" text) (pair? parts))
+       ;; Only applications the user wrote: definition forms like define-struct generate
+       ;; applications that carry the form's location but aren't calls in the program.
+       (if (and text (regexp-match? #rx"^[(]" text) (not (definition-text? text)) (pair? parts))
            ;; Remember the call site (after the arguments are evaluated) for the call step.
            (let ([temps (generate-temporaries parts)])
              #`(let-values #,(for/list ([t (in-list temps)] [p (in-list parts)]) #`[(#,t) #,p])
@@ -246,6 +249,9 @@
         (and (identifier? #'f) (eq? (syntax-e #'f) 'verify-boolean) (question? #'inner))
         #'inner]
        [_ #f])]))
+
+(define (definition-text? text)
+  (regexp-match? #rx"^[(](define|define-struct|define-values|define-syntax|define-syntax-rule|struct|define-record-procedures|define-datatype|check-expect|check-within|check-error|check-random|check-satisfied|check-member-of|check-range)[] \n\t\r)]" text))
 
 (define (literal? stx)
   (kernel-syntax-case stx #f
@@ -362,6 +368,11 @@
     (if (null? stack)
         (set! globals (append (reverse gets) globals))
         (set-frame-locals! (car stack) (append (frame-locals (car stack)) gets)))))
+
+;; A top-level expression's value, as the program prints it.
+(define (viz-note-result! v)
+  (when recording?
+    (record! "result" #f #f #f (hasheq 'value v))))
 
 (define (viz-set! name get pos span)
   (when recording?

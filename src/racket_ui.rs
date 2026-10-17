@@ -2115,7 +2115,9 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let kind = v.step().map(|s| s.kind.clone()).unwrap_or_default();
     let output = crate::visualizer::output_until(v, v.current);
     let truncated = v.trace.truncated && v.current + 1 == v.trace.steps.len();
-    if crate::visualizer::draw(v, ui, canvas, &theme, &text_of) {
+    let mut io = crate::visualizer::DrawIo::default();
+    crate::visualizer::draw(v, ui, canvas, &theme, &text_of, &mut io);
+    if io.animating {
         ui.ctx().request_repaint();
     }
     // Zoom control: − 100% +  (click the percentage to fit the diagram again).
