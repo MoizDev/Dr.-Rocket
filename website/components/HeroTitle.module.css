@@ -6,6 +6,11 @@
   white-space: pre-line;
 }
 
+/* The first line, washed out (the second is the heading's own colour). */
+.lead {
+  color: var(--heading-lead);
+}
+
 /* Untyped text keeps its space, so nothing below the headline moves while it types. */
 .rest {
   visibility: hidden;

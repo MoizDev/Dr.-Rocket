@@ -26,22 +26,19 @@
 
 
 /* Section marker: a small icon tile above each heading. */
-.iconTile {
-  display: inline-grid;
-  place-items: center;
-  width: 48px;
-  height: 48px;
-  margin-bottom: 22px;
-  border-radius: 14px;
-  background: var(--blue-50);
-  color: var(--blue);
-  box-shadow: inset 0 0 0 1px var(--blue-100);
+.lead {
+  color: var(--heading-lead);
 }
 
-.iconTileOnBlue {
-  background: rgb(255 255 255 / 0.16);
-  color: #fff;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.22);
+/* Headings end at full strength: black on paper, white on the blue panel. */
+.h2,
+.featureTitle,
+.heroTitle {
+  color: #000;
+}
+
+.vizTitle .lead {
+  color: rgb(255 255 255 / 0.66);
 }
 
 .h2 {

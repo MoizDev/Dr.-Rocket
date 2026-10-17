@@ -14,6 +14,8 @@
   --sky: #61afef;
 
   --navy: #0a1433;
+  /* A heading's washed-out first line. */
+  --heading-lead: rgb(43 92 255 / 0.6);
   --navy-800: #16224a;
   --ink: #2a3557;
   --muted: #5a6687;

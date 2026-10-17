@@ -37,6 +37,15 @@ export default function HeroTitle({ text, className }: { text: string; className
     return () => window.clearTimeout(timer);
   }, [text]);
 
+  // The first line is washed out, the second at full strength.
+  const nl = text.includes("\n") ? text.indexOf("\n") : text.length;
+  const paint = (from: number, to: number) => (
+    <>
+      {from < nl && <span className={styles.lead}>{text.slice(from, Math.min(to, nl))}</span>}
+      {to > nl && text.slice(Math.max(from, nl), to)}
+    </>
+  );
+
   return (
     <h1 className={className} aria-label={text.replace("\n", " ")}>
       <span className={styles.line} data-phase={phase} aria-hidden="true">
@@ -45,9 +54,9 @@ export default function HeroTitle({ text, className }: { text: string; className
             <RocketMark size={64} />
           </span>
         )}
-        <span>{text.slice(0, shown)}</span>
+        <span>{paint(0, shown)}</span>
         {phase !== "static" && <span className={styles.caret} />}
-        <span className={styles.rest}>{text.slice(shown)}</span>
+        <span className={styles.rest}>{paint(shown, text.length)}</span>
       </span>
     </h1>
   );

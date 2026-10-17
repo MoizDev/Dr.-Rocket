@@ -3,7 +3,7 @@ import Download, { HeaderDownload } from "@/components/Download";
 import Reveal from "@/components/Reveal";
 import VizVideo from "@/components/VizVideo";
 import HeroTitle from "@/components/HeroTitle";
-import { ArrowRight, ArrowUpRight, GitHubIcon, Glyph, type GlyphName, OsIcon, RocketMark } from "@/components/icons";
+import { ArrowRight, ArrowUpRight, GitHubIcon, Glyph, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, REPO, VERSION, VERSION_LABEL } from "@/lib/release";
 import s from "./page.module.css";
 
@@ -131,9 +131,8 @@ export default function Home() {
         <section className={s.why} aria-labelledby="why-title">
           <div className={`container ${s.whyGrid}`}>
             <div data-reveal>
-              <span className={s.iconTile}><Glyph name="zap" /></span>
               <h2 id="why-title" className={s.h2}>
-                Same Racket underneath. A modern editor on top.
+                <Lead>Same Racket underneath.</Lead> A modern editor on top.
               </h2>
             </div>
             <p className={s.whyText} data-reveal style={{ "--reveal-delay": 80 } as React.CSSProperties}>
@@ -164,11 +163,8 @@ export default function Home() {
           <div className="container">
             <div className={s.vizPanel}>
               <div className={s.vizHead} data-reveal>
-                <span className={`${s.iconTile} ${s.iconTileOnBlue}`}>
-                  <Glyph name="tree" />
-                </span>
                 <h2 id="viz-title" className={s.vizTitle}>
-                  Watch your program think.
+                  <Lead>Watch your</Lead> program think.
                 </h2>
                 <p className={s.vizLede}>
                   Run a program and replay it one step at a time. Every call gets a frame, trees and lists are drawn as
@@ -198,8 +194,7 @@ export default function Home() {
         <section className={s.features} id="features" aria-label="Features">
           <div className="container">
             <Feature
-              icon="step"
-              title="A stepper that matches DrRacket, step for step."
+              title={["A stepper that matches DrRacket,", "step for step."]}
               body={
                 <>
                   See every reduction before and after, mirrored in your source. Dr. Rocket drives DrRacket&rsquo;s own
@@ -214,8 +209,7 @@ export default function Home() {
             </Feature>
 
             <Feature
-              icon="arrows"
-              title="Binding arrows, rename and a real debugger."
+              title={["Binding arrows, rename", "and a real debugger."]}
               body={
                 <>
                   Check syntax runs in the background: arrows from each binding to its uses, unused bindings, hover info,
@@ -232,8 +226,7 @@ export default function Home() {
 
             <Feature
               id="drracket"
-              icon="image"
-              title="Your DrRacket files, pasted images and all."
+              title={["Your DrRacket files,", "pasted images and all."]}
               body={
                 <>
                   Files saved by DrRacket open with their images inline, run with real images, and save back in
@@ -248,8 +241,7 @@ export default function Home() {
             </Feature>
 
             <Feature
-              icon="terminal"
-              title="Every course in a tab, a terminal one keystroke away."
+              title={["Every course in a tab,", "a terminal one keystroke away."]}
               body={
                 <>
                   Keep each course open as a project tab with its own files and layout. Run <code>raco</code> in an
@@ -264,8 +256,7 @@ export default function Home() {
             </Feature>
 
             <Feature
-              icon="palette"
-              title="Zed-grade themes, set in Fira Code."
+              title={["Zed-grade themes,", "set in Fira Code."]}
               body={
                 <>
                   The default, Moiz One Dark, matches Zed&rsquo;s One Dark Darker exactly. One Light, GitHub Light,
@@ -288,11 +279,8 @@ export default function Home() {
           <div className={`container ${s.langGrid}`}>
             <div className={s.langCopy}>
               <div data-reveal>
-                <span className={s.iconTile}>
-                  <Glyph name="cap" />
-                </span>
                 <h2 id="langs-title" className={s.h2}>
-                  Every language level your course uses.
+                  <Lead>Every language level</Lead> your course uses.
                 </h2>
                 <p className={s.lede}>
                   Pick a level just as you would in DrRacket. Teaching-language files keep DrRacket&rsquo;s header, so
@@ -372,9 +360,8 @@ export default function Home() {
         <section className={s.install} id="install" aria-labelledby="install-title">
           <div className="container">
             <div className={s.installHead} data-reveal>
-              <span className={s.iconTile}><Glyph name="download" /></span>
               <h2 id="install-title" className={s.h2}>
-                Racket first, then Dr. Rocket.
+                <Lead>Racket first,</Lead> then Dr. Rocket.
               </h2>
               <p className={s.lede}>
                 Dr. Rocket is the editor; Racket runs your programs. Any recent Racket works and we test with 9.3. If you
@@ -507,17 +494,25 @@ export default function Home() {
   );
 }
 
+/** A heading's first line, washed out; the rest follows on its own line at full strength. */
+function Lead({ children }: { children: React.ReactNode }) {
+  return (
+    <>
+      <span className={s.lead}>{children}</span>
+      <br />
+    </>
+  );
+}
+
 function Feature({
   id,
-  icon,
   title,
   body,
   children,
   code,
 }: {
   id?: string;
-  icon: GlyphName;
-  title: string;
+  title: [string, string];
   body: React.ReactNode;
   children: React.ReactNode;
   code?: boolean;
@@ -525,10 +520,9 @@ function Feature({
   return (
     <article className={s.feature} id={id}>
       <div className={s.featureCopy} data-reveal>
-        <span className={s.iconTile}>
-          <Glyph name={icon} />
-        </span>
-        <h3 className={s.featureTitle}>{title}</h3>
+        <h3 className={s.featureTitle}>
+          <Lead>{title[0]}</Lead> {title[1]}
+        </h3>
         <p className={s.featureBody}>{body}</p>
         {code && (
           <p className={s.ligatures} aria-label="Fira Code ligatures">
