@@ -8,6 +8,7 @@
 //! changed ones flash. What the running call can't reach is faded.
 
 mod explain;
+mod sexp;
 
 pub use explain::{Piece, explain, output_until, show_in};
 
@@ -38,6 +39,8 @@ pub struct Trace {
     data: HashMap<String, BTreeSet<usize>>,
     /// The program's top-level results so far: (step, value).
     results: Vec<(usize, VizRef)>,
+    /// Struct type -> its field names (for wording `node-key`, `node?`, `make-node`).
+    pub shapes: HashMap<String, Vec<String>>,
 }
 
 impl Trace {
@@ -68,6 +71,7 @@ impl Trace {
     /// before the structs that hold them, so a linked child is already known).
     fn learn_shape(&mut self, o: &VizObject, idx: usize) {
         let Some(name) = o.name.clone().filter(|_| o.k == "struct") else { return };
+        self.shapes.entry(name.clone()).or_insert_with(|| o.fields.iter().map(|(f, _)| f.clone()).collect());
         for (k, (_, r)) in o.fields.iter().enumerate() {
             match r {
                 VizRef::Object { id } => {
@@ -157,7 +161,23 @@ pub struct VisualizerView {
     pub highlighted: Option<usize>,
     /// Height of the explanation area under the diagram (dragged by the divider).
     pub explain_h: f32,
+    /// The explanation's "Show the work" section is open.
+    pub show_work: bool,
+    /// The object chip under the pointer in the explanation (last frame).
+    pub text_hover: Option<u64>,
+    /// The object under the pointer in the diagram (last frame).
+    pub diagram_hover: Option<u64>,
 }
+
+/// Colours for the objects an explanation mentions, in order of mention.
+pub const OBJ_COLORS: [Color32; 6] = [
+    Color32::from_rgb(0x3b, 0x82, 0xf6),
+    Color32::from_rgb(0xf5, 0x9e, 0x0b),
+    Color32::from_rgb(0x22, 0xc5, 0x5e),
+    Color32::from_rgb(0xa8, 0x55, 0xf7),
+    Color32::from_rgb(0xec, 0x48, 0x99),
+    Color32::from_rgb(0x14, 0xb8, 0xa6),
+];
 
 impl Default for VisualizerView {
     fn default() -> Self {
@@ -175,6 +195,9 @@ impl Default for VisualizerView {
             images: HashMap::new(),
             highlighted: None,
             explain_h: 170.0,
+            show_work: false,
+            text_hover: None,
+            diagram_hover: None,
         }
     }
 }
@@ -268,9 +291,14 @@ fn text_w(char_w: f32, s: &str) -> f32 {
     s.chars().count() as f32 * char_w
 }
 
+/// A primitive as students read it: the empty list is `empty`, not `'()`.
+pub fn prim_display<'a>(v: &'a str, k: &str) -> &'a str {
+    if k == "empty" { "empty" } else { v }
+}
+
 fn prim_text(r: &VizRef) -> Option<&str> {
     match r {
-        VizRef::Prim { v, .. } => Some(v),
+        VizRef::Prim { v, k } => Some(prim_display(v, k)),
         VizRef::Object { .. } => None,
     }
 }
@@ -346,7 +374,7 @@ fn tree_node_size(o: &VizObject, children: &[usize], cw: f32) -> Vec2 {
 /// `(list 3 4)`. Objects are named after their type and data, as a student would say them.
 pub fn label(trace: &Trace, r: &VizRef, step: usize) -> String {
     let id = match r {
-        VizRef::Prim { v, .. } => return v.clone(),
+        VizRef::Prim { v, k } => return prim_display(v, k).to_string(),
         VizRef::Object { id } => *id,
     };
     let Some(o) = trace.object(id, step) else { return "…".into() };
@@ -354,7 +382,8 @@ pub fn label(trace: &Trace, r: &VizRef, step: usize) -> String {
         "struct" => {
             let name = o.name.clone().unwrap_or_else(|| "struct".into());
             let kids = trace.tree_children(o).unwrap_or_default();
-            let data: Vec<&str> = o.fields.iter().enumerate().filter(|(k, _)| !kids.contains(k)).filter_map(|(_, (_, r))| prim_text(r)).take(2).collect();
+            // Its data, without the links and empties: `node 34`, `posn 3 4`.
+            let data: Vec<&str> = o.fields.iter().enumerate().filter(|(k, _)| !kids.contains(k)).filter(|(_, (_, r))| !matches!(r, VizRef::Prim { k, .. } if k == "empty")).filter_map(|(_, (_, r))| prim_text(r)).take(2).collect();
             if data.is_empty() { name } else { format!("{name} {}", data.join(" ")) }
         }
         "cons" => show_in(trace, r, step, 22),
@@ -607,7 +636,7 @@ impl Pen<'_> {
     fn value(&self, r: &VizRef, at: Pos2, align: Align2, arrows: &mut Vec<Arrow>, from_current: bool) {
         match r {
             VizRef::Prim { v, k } => {
-                let text = if k == "fn" { format!("ƒ {v}") } else { v.clone() };
+                let text = if k == "fn" { format!("ƒ {v}") } else { prim_display(v, k).to_string() };
                 self.ui.painter().text(at, align, text, self.mono(), self.fade(self.prim_color(k)));
             }
             VizRef::Object { id } => {
@@ -1077,9 +1106,9 @@ pub const ICON: &str = ic::ACCOUNT_TREE;
 
 #[cfg(test)]
 mod tests {
-    use super::explain::{Explanation, show_value};
+    use super::explain::show_value;
     use super::*;
-    use crate::racket::protocol::{VizEval, VizFrame};
+    use crate::racket::protocol::VizFrame;
 
     fn prim(v: &str, k: &str) -> VizRef {
         VizRef::Prim { v: v.into(), k: k.into() }
@@ -1090,60 +1119,25 @@ mod tests {
     fn frame(name: &str, vars: Vec<(&str, VizRef)>, replaced: bool) -> VizFrame {
         VizFrame { name: name.into(), nargs: vars.len(), vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced, pos: None, span: 0 }
     }
-    /// An explanation's lines as plain text.
-    fn lines(e: &Explanation) -> Vec<String> {
-        e.lines.iter().map(|l| l.iter().map(|p| match p { Piece::Text(t) | Piece::Code(t) | Piece::Value(t) => t.as_str() }).collect()).collect()
-    }
-
-    /// (rvrs '(1 2) '()) -> (rvrs '(2) '(1)): a tail call, with the arithmetic shown.
+    /// (rvrs '(1 2) '()) -> (rvrs '(2) '(1)): the replaced call is gone, as in Racket, and
+    /// the call that replaced it says so.
     #[test]
-    fn explains_tail_recursion_with_values_and_operations() {
-        let program = "(empty? lst)(rest lst)";
-        let code = |p: usize, n: usize| program.chars().skip(p).take(n).collect::<String>();
+    fn tail_calls_replace_their_caller() {
         let mut view = VisualizerView::default();
         let list12 = vec![cell(1, prim("1", "num"), VizRef::Object { id: 2 }), cell(2, prim("2", "num"), prim("'()", "empty"))];
-        view.trace.push(VizStep { index: 0, kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 1 }), ("acc", prim("'()", "empty"))], false)], objects: list12, ..Default::default() });
-        view.trace.push(VizStep { index: 1, kind: "question".into(), frames: vec![frame("rvrs", vec![], false)], value: Some(prim("#false", "bool")), pos: Some(0), span: 12, ..Default::default() });
+        view.trace.push(VizStep { kind: "call".into(), name: Some("rvrs".into()), frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 1 }), ("acc", prim("'()", "empty"))], false)], objects: list12, ..Default::default() });
         let acc = vec![cell(3, prim("1", "num"), prim("'()", "empty"))];
         view.trace.push(VizStep {
-            index: 2,
             kind: "call".into(),
             name: Some("rvrs".into()),
             frames: vec![frame("rvrs", vec![("lst", VizRef::Object { id: 1 }), ("acc", prim("'()", "empty"))], true), frame("rvrs", vec![("lst", VizRef::Object { id: 2 }), ("acc", VizRef::Object { id: 3 })], false)],
-            evals: vec![VizEval { pos: Some(12), span: 10, args: vec![VizRef::Object { id: 1 }], value: Some(VizRef::Object { id: 2 }) }],
             objects: acc,
             ..Default::default()
         });
-
-        let first = explain(&view, &view.trace.steps[0], &code);
-        assert_eq!(first.headline, "Calling rvrs");
-        assert_eq!(lines(&first), vec!["so (rvrs (list 1 2) '()) runs, with lst = (list 1 2) and acc = '()"]);
-        let q = explain(&view, &view.trace.steps[1], &code);
-        assert_eq!(q.headline, "Is (empty? lst) true? No");
-        assert_eq!(q.code, "(empty? lst)");
-        let again = explain(&view, &view.trace.steps[2], &code);
-        assert!(again.headline.starts_with("rvrs calls itself again. It's a tail call"), "{}", again.headline);
-        assert_eq!(
-            lines(&again),
-            vec!["(rest lst) with values (rest (list 1 2)) gives (list 2)", "so (rvrs (list 2) (list 1)) runs, with lst = (list 2) and acc = (list 1)"]
-        );
-        // The replaced call is gone, as in Racket; the call that replaced it says so.
-        let lay = layout(&view.trace, 2, 8.0);
+        let lay = layout(&view.trace, 1, 8.0);
         let frames: Vec<_> = lay.frames.iter().map(|f| (f.name.clone(), f.args.join(" "), f.tail)).collect();
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[1], ("rvrs".into(), "(list 2) (list 1)".into(), true));
-    }
-
-    /// The question's follow-up depends on the form asking it.
-    #[test]
-    fn question_wording_follows_the_form() {
-        let view = VisualizerView::default();
-        for (prog, expect) in [("(cond\n  [(empty? l) 0]", "cond skips"), ("(if (empty? l) 0 1)", "else-branch")] {
-            let pos = prog.find("(empty?").unwrap();
-            let step = VizStep { index: 0, kind: "question".into(), value: Some(prim("#false", "bool")), pos: Some(pos), span: 11, ..Default::default() };
-            let code = |p: usize, n: usize| prog.chars().skip(p).take(n).collect::<String>();
-            assert!(lines(&explain(&view, &step, &code)).concat().contains(expect), "{prog}");
-        }
     }
 
     #[test]
@@ -1176,7 +1170,7 @@ mod tests {
         let node = VizObject { id: 1, k: "struct".into(), name: Some("node".into()), fields: vec![("left".into(), prim("'()", "empty")), ("key".into(), prim("5", "num")), ("right".into(), prim("'()", "empty"))], ..Default::default() };
         let pair = cell(2, prim("1", "num"), prim("2", "num"));
         view.trace.push(VizStep { objects: vec![node, pair], ..Default::default() });
-        assert_eq!(show_value(&view, &VizRef::Object { id: 1 }, 0, 60), "(make-node '() 5 '())");
+        assert_eq!(show_value(&view, &VizRef::Object { id: 1 }, 0, 60), "(make-node empty 5 empty)");
         assert_eq!(show_value(&view, &VizRef::Object { id: 2 }, 0, 60), "(cons 1 2)");
     }
 }

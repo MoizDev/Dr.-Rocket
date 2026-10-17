@@ -2115,8 +2115,13 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let kind = v.step().map(|s| s.kind.clone()).unwrap_or_default();
     let output = crate::visualizer::output_until(v, v.current);
     let truncated = v.trace.truncated && v.current + 1 == v.trace.steps.len();
-    let mut io = crate::visualizer::DrawIo::default();
+    // Objects the explanation mentions get a colour, shared by their chips and a ring in the
+    // diagram; hovering either side highlights both.
+    let mentioned = explanation.as_ref().map(|e| e.objects()).unwrap_or_default();
+    let colors: HashMap<u64, Color32> = mentioned.iter().enumerate().map(|(k, id)| (*id, crate::visualizer::OBJ_COLORS[k % crate::visualizer::OBJ_COLORS.len()])).collect();
+    let mut io = crate::visualizer::DrawIo { marks: colors.clone(), hovered_in_text: v.text_hover, ..Default::default() };
     crate::visualizer::draw(v, ui, canvas, &theme, &mut io);
+    v.diagram_hover = io.hovered;
     if io.animating {
         ui.ctx().request_repaint();
     }
@@ -2157,36 +2162,79 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     };
     let mut eui = ui.new_child(UiBuilder::new().max_rect(area));
     eui.set_clip_rect(area);
+    let mut text_hover = None;
+    let mut toggle_work = false;
     egui::ScrollArea::vertical().id_salt("viz-explain").auto_shrink([false, false]).show(&mut eui, |ui| {
         let w = ui.available_width();
-        let chip = |ui: &Ui, text: &str, bg: Color32, fg: Color32| -> egui::text::LayoutJob {
-            let mut job = egui::text::LayoutJob::default();
-            job.append(text, 0.0, egui::TextFormat { font_id: ui::mono(13.0), color: fg, background: bg, ..Default::default() });
-            let _ = ui;
-            job
+        // One piece of an explanation; object chips report hover so the diagram can follow.
+        let mut piece = |ui: &mut Ui, p: &crate::visualizer::Piece, size: f32, base: Color32| {
+            use crate::visualizer::Piece;
+            let (rt, id) = match p {
+                Piece::Text(t) => (egui::RichText::new(t).font(ui::ui_font(size)).color(base), None),
+                Piece::Name(t) => (egui::RichText::new(t).font(ui::mono(size - 0.5)).color(theme.syntax.variable.color), None),
+                Piece::Code(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(tk.hover), None),
+                Piece::Value(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(with_alpha(theme.text_accent, 40)), None),
+                Piece::Obj { id, label } => {
+                    let c = colors.get(id).copied().unwrap_or(theme.text_accent);
+                    let hot = v.diagram_hover == Some(*id) || v.text_hover == Some(*id);
+                    (egui::RichText::new(format!(" {label} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(with_alpha(c, if hot { 110 } else { 55 })), Some(*id))
+                }
+                Piece::Answer(yes) => (egui::RichText::new(if *yes { "Yes" } else { "No" }).font(ui::semibold(size)).color(if *yes { theme.success } else { theme.error }), None),
+            };
+            let resp = ui.add(egui::Label::new(rt).sense(if id.is_some() { Sense::hover() } else { Sense::empty() }));
+            if let Some(id) = id
+                && resp.hovered()
+            {
+                text_hover = Some(id);
+            }
         };
         if let Some(e) = &explanation {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(badge).font(ui::semibold(10.5)).color(color));
                 if !e.code.is_empty() {
                     let code = if e.code.chars().count() > 80 { format!("{}…", e.code.chars().take(79).collect::<String>()) } else { e.code.clone() };
-                    ui.label(chip(ui, &format!(" {code} "), tk.hover, theme.text));
+                    ui.label(egui::RichText::new(format!(" {code} ")).font(ui::mono(12.5)).color(theme.text_muted).background_color(tk.hover));
+                }
+            });
+            ui.add_space(6.0);
+            ui.horizontal_wrapped(|ui| {
+                ui.set_max_width(w - 8.0);
+                ui.spacing_mut().item_spacing = vec2(0.0, 4.0);
+                for p in &e.headline {
+                    piece(ui, p, 15.0, theme.text);
+                }
+                if truncated {
+                    piece(ui, &crate::visualizer::Piece::Text(format!("  (recording stopped after {} steps)", v.trace.max_steps)), 13.0, theme.text_muted);
                 }
             });
             ui.add_space(4.0);
-            let headline = if truncated { format!("{}  (recording stopped after {} steps)", e.headline, v.trace.max_steps) } else { e.headline.clone() };
-            ui.label(egui::RichText::new(headline).font(ui::medium(14.0)).color(theme.text));
-            ui.add_space(2.0);
             for line in &e.lines {
-                let mut job = egui::text::LayoutJob { wrap: egui::text::TextWrapping { max_width: w - 8.0, ..Default::default() }, ..Default::default() };
-                for piece in line {
-                    match piece {
-                        crate::visualizer::Piece::Text(t) => job.append(t, 0.0, egui::TextFormat { font_id: ui::ui_font(13.5), color: theme.text_muted, ..Default::default() }),
-                        crate::visualizer::Piece::Code(t) => job.append(&format!(" {t} "), 0.0, egui::TextFormat { font_id: ui::mono(13.0), color: theme.text, background: tk.hover, ..Default::default() }),
-                        crate::visualizer::Piece::Value(t) => job.append(&format!(" {t} "), 0.0, egui::TextFormat { font_id: ui::mono(13.0), color: theme.text, background: with_alpha(theme.text_accent, 60), ..Default::default() }),
+                ui.horizontal_wrapped(|ui| {
+                    ui.set_max_width(w - 8.0);
+                    ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
+                    for p in line {
+                        piece(ui, p, 13.5, theme.text_muted);
+                    }
+                });
+            }
+            if !e.work.is_empty() {
+                ui.add_space(4.0);
+                let label = format!("{} Show the work ({})", if v.show_work { "▾" } else { "▸" }, e.work.len());
+                if ui.add(egui::Label::new(egui::RichText::new(label).font(ui::medium(12.5)).color(theme.text_accent)).sense(Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    toggle_work = true;
+                }
+                if v.show_work {
+                    for line in &e.work {
+                        ui.horizontal_wrapped(|ui| {
+                            ui.set_max_width(w - 8.0);
+                            ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
+                            piece(ui, &crate::visualizer::Piece::Text("   ".into()), 13.0, theme.text_muted);
+                            for p in line {
+                                piece(ui, p, 13.0, theme.text_muted);
+                            }
+                        });
                     }
                 }
-                ui.label(job);
             }
         }
         if !output.is_empty() {
@@ -2200,6 +2248,10 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             });
         }
     });
+    v.text_hover = text_hover;
+    if toggle_work {
+        v.show_work = !v.show_work;
+    }
     // Highlight the step's code in the editor.
     let step_range = v.step().and_then(|s| s.pos.map(|p| p..p + s.span.max(1)));
     if v.highlighted != Some(v.current) {
