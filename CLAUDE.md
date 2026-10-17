@@ -21,6 +21,9 @@ For a new app release, first attach the files to the GitHub release (macOS DMG v
 `tools/bundle.sh --universal --dmg`, Windows and Linux via the Release workflow), then bump
 `version` in `website/release.json` and deploy as above.
 
+The download files keep the same URLs across releases, so after replacing one run
+`vercel cache purge --type cdn --yes` (in `website/`), or the CDN keeps serving the old file.
+
 After deploying, check that https://doctorocket.com loads and that each
 `/downloads/DrRocket-{mac.dmg,windows-x64.zip,linux-x64.tar.gz}` returns 200 with the
 versioned file name in `Content-Disposition`.
