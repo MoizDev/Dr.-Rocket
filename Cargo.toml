@@ -1,6 +1,6 @@
 [package]
 name = "drrocket"
-version = "1.0.0-beta.1"
+version = "1.0.0-beta.2"
 edition = "2024"
 description = "Dr. Rocket: a fast, beautiful IDE for Racket"
 
