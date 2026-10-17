@@ -25,6 +25,11 @@ it. To add it to your app launcher, copy `drrocket` onto your `PATH` (e.g. `~/.l
 Dr. Rocket finds Racket on its own. If it says "Racket not found", set the path in
 Settings → Racket.
 
+**If Dr. Rocket is slow or glitchy on Windows or Linux,** open Settings → Appearance →
+Graphics. It shows what's drawing the window (your GPU through DirectX 12, Vulkan or OpenGL,
+or the CPU) and lets you pick another renderer. If a launch ever fails because of the
+graphics driver, Dr. Rocket tries the next renderer on its own the next time it starts.
+
 ## What to try
 
 Use it for your real work for a week, the way you'd use DrRacket. In particular:
