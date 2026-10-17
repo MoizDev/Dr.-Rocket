@@ -57,8 +57,9 @@ export default function Home() {
         <section className={s.hero} id="top">
           <div className={`container ${s.heroGrid}`}>
             <div className={s.heroCopy}>
-              <p className={s.pill} data-reveal>
-                V{VERSION.replace(/-beta\.\d+$/, "")} beta
+              <p className={s.badges} data-reveal>
+                <span className={s.pill}>V{VERSION.replace(/-beta\.\d+$/, "")} beta</span>
+                <span className={`${s.pill} ${s.pillSoft}`}>OSS</span>
               </p>
               <h1 className={s.heroTitle} data-reveal style={{ "--reveal-delay": 60 } as React.CSSProperties}>
                 Everything DrRacket does, at native speed.

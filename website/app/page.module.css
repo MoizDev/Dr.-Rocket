@@ -252,9 +252,15 @@
   align-items: start;
 }
 
+.badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 28px;
+}
+
 .pill {
   display: inline-block;
-  margin-bottom: 28px;
   padding: 6px 12px;
   border-radius: 8px;
   background: var(--blue);
@@ -263,6 +269,11 @@
   font-size: 13px;
   font-weight: 500;
   letter-spacing: 0.04em;
+}
+
+.pillSoft {
+  background: rgb(43 92 255 / 0.25);
+  color: var(--blue);
 }
 
 .heroTitle {
