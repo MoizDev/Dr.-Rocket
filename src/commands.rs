@@ -43,6 +43,7 @@ pub enum Command {
     SelectTheme,
     ToggleRainbowBrackets,
     ToggleBindingArrows,
+    ToggleVimMode,
     MoveInteractions,
     // Racket
     Run,
@@ -168,6 +169,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::ZoomOut, label: "Zoom Out", group: "View", icon: ic::ZOOM_OUT, shortcut: sc(CMD, Key::Minus) },
     CommandInfo { cmd: Command::ZoomReset, label: "Reset Zoom", group: "View", icon: ic::FORMAT_SIZE, shortcut: sc(CMD, Key::Num0) },
     CommandInfo { cmd: Command::SelectTheme, label: "Select Theme…", group: "View", icon: ic::PALETTE, shortcut: sc(cmd_shift(), Key::K) },
+    CommandInfo { cmd: Command::ToggleVimMode, label: "Toggle Vim Mode", group: "Editor", icon: ic::KEYBOARD, shortcut: None },
     CommandInfo { cmd: Command::ToggleRainbowBrackets, label: "Toggle Rainbow Brackets", group: "View", icon: ic::DATA_ARRAY, shortcut: None },
     CommandInfo { cmd: Command::ToggleBindingArrows, label: "Toggle Binding Arrows", group: "View", icon: ic::EAST, shortcut: None },
     CommandInfo { cmd: Command::Settings, label: "Settings", group: "App", icon: ic::SETTINGS, shortcut: sc(CMD, Key::Comma) },

@@ -1238,6 +1238,20 @@ pub fn after_editor(app: &mut App) {
 
 fn editor_action(app: &mut App, i: usize, a: EditorAction) {
     match a {
+        EditorAction::Vim(e) => {
+            use crate::editor::vim::Effect;
+            let id = app.tabs[i].id;
+            match e {
+                Effect::Save => app.run_command(Command::Save),
+                Effect::Close { force } => app.close_tab(id, force),
+                Effect::App(name) => {
+                    if let Some(c) = crate::commands::COMMANDS.iter().find(|c| format!("{:?}", c.cmd) == name) {
+                        app.run_command(c.cmd);
+                    }
+                }
+                _ => {}
+            }
+        }
         EditorAction::Hover(pos) => {
             let tab = &app.tabs[i];
             if tab.editor.deco.hover_doc.as_ref().is_some_and(|(r, _)| r.start == pos) {

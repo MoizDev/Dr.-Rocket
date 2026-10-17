@@ -428,9 +428,20 @@ impl App {
         caret_and_brackets_preview(ui, &theme, &self.settings, self.settings.buffer_font_size.min(17.0));
         ui.add_space(10.0);
 
-        ui.label(egui::RichText::new("Caret").font(ui::semibold(15.0)).color(theme.text));
+        ui.label(egui::RichText::new("Keybindings").font(ui::semibold(15.0)).color(theme.text));
         ui.add_space(4.0);
         let s = &mut self.settings;
+        row(ui, &theme, "Vim mode", "Neovim keys: normal, insert and visual modes, Space as the leader (Space e toggles the sidebar), : for commands", |ui| {
+            toggle(ui, &theme, &mut s.vim_mode);
+        });
+        if s.vim_mode {
+            row(ui, &theme, "Relative line numbers", "Number lines by their distance from the cursor, for jumps like 5j or 3k", |ui| {
+                toggle(ui, &theme, &mut s.relative_line_numbers);
+            });
+        }
+        ui.add_space(10.0);
+        ui.label(egui::RichText::new("Caret").font(ui::semibold(15.0)).color(theme.text));
+        ui.add_space(4.0);
         row(ui, &theme, "Shape", "Block is the thick, terminal-style caret", |ui| {
             for (shape, label) in [(CursorShape::Underline, "Underline"), (CursorShape::Block, "Block"), (CursorShape::Bar, "Bar")] {
                 if ui.add(egui::Button::new(label).selected(s.cursor_shape == shape)).clicked() {

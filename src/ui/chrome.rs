@@ -401,8 +401,10 @@ impl App {
         if let Some(tab) = self.active_tab() {
             let b = &tab.editor.doc.buffer;
             let p = b.selections.primary();
-            let line = b.line_of(p.head);
-            let col = b.col_of(p.head);
+            // Vim's visual selection ends past its cursor.
+            let head = tab.editor.vim.as_ref().and_then(|v| v.cursor_pos()).unwrap_or(p.head);
+            let line = b.line_of(head);
+            let col = b.col_of(head);
             let sel = if p.is_empty() { String::new() } else { format!(" ({} selected)", p.end() - p.start()) };
             let cursors = if b.selections.list.len() > 1 { format!("{} cursors  ", b.selections.list.len()) } else { String::new() };
             let pos = rb.add(egui::Label::new(egui::RichText::new(format!("{cursors}Ln {}, Col {}{sel}", line + 1, col + 1)).font(ui::ui_font(12.5)).color(theme.text_muted)).sense(Sense::click()));

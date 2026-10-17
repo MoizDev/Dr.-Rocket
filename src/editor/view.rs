@@ -183,6 +183,8 @@ pub enum EditorAction {
     HistoryPrev,
     HistoryNext,
     RunSelection,
+    /// Something Vim mode asks of the app (save, close, an app command).
+    Vim(crate::editor::vim::Effect),
 }
 
 /// Trackpad scrolling locks to the axis a gesture starts on, so a slightly diagonal swipe
@@ -302,6 +304,10 @@ pub struct EditorView {
     pub actions: Vec<EditorAction>,
     /// Lines the host wants revealed (e.g. error locations).
     pending_reveal: Option<usize>,
+    /// Vim mode's state, while the setting is on.
+    pub vim: Option<crate::editor::vim::Vim>,
+    /// A scroll Vim asked for (zz, ^D...), applied once the viewport is known.
+    vim_scroll: Option<crate::editor::vim::ScrollTo>,
 }
 
 const SCROLLBAR_W: f32 = 12.0;
@@ -335,6 +341,8 @@ impl EditorView {
             focus_request: false,
             actions: Vec::new(),
             pending_reveal: None,
+            vim: None,
+            vim_scroll: None,
         }
     }
 
@@ -609,14 +617,30 @@ impl EditorView {
         if std::env::var_os("DRROCKET_TRACE").is_some() && ui.input(|i| i.events.iter().any(|e| matches!(e, Event::Text(_)))) {
             eprintln!("text event: editor {:?} focused={focused} focus_request={} mode={:?}", self.id, self.focus_request, style.mode);
         }
+        // Vim mode follows the setting (code editors only).
+        let vim_on = style.settings.vim_mode && code && !self.read_only;
+        if vim_on != self.vim.is_some() {
+            self.vim = vim_on.then(crate::editor::vim::Vim::new);
+        }
         if focused {
-            ui.memory_mut(|m| m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: self.find.open || self.completion.is_some() }));
+            ui.memory_mut(|m| m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: self.find.open || self.completion.is_some() || self.vim.is_some() }));
         }
         let now = ctx.input(|i| i.time);
         let version_before = self.doc.version();
         let sel_before = self.doc.buffer.selections.clone();
 
         self.handle_mouse(ui, &resp, style, now);
+        // A mouse selection continues in visual mode; a click leaves it.
+        if let Some(v) = self.vim.as_mut() {
+            let sel = self.doc.buffer.selections.primary();
+            if self.doc.buffer.selections != sel_before {
+                if sel.is_empty() && matches!(v.mode, crate::editor::vim::Mode::Visual | crate::editor::vim::Mode::VisualLine) {
+                    v.mode = crate::editor::vim::Mode::Normal;
+                } else {
+                    v.select_from_mouse(sel);
+                }
+            }
+        }
         if focused && !self.read_only {
             self.handle_keys(ui, style);
         } else if focused {
@@ -651,6 +675,17 @@ impl EditorView {
                 }
                 self.hover = None;
             }
+        }
+        if let Some(s) = self.vim_scroll.take() {
+            use crate::editor::vim::ScrollTo;
+            let cur = self.doc.buffer.line_of(self.doc.buffer.selections.primary().head) as f32 * line_h;
+            match s {
+                ScrollTo::Center => self.scroll.y = cur - (viewport_h - line_h) / 2.0,
+                ScrollTo::Top => self.scroll.y = cur,
+                ScrollTo::Bottom => self.scroll.y = cur + line_h - viewport_h,
+                ScrollTo::Lines(n) => self.scroll.y += n as f32 * line_h,
+            }
+            self.scroll_to_cursor = !matches!(s, ScrollTo::Center | ScrollTo::Top | ScrollTo::Bottom);
         }
         if let Some(line) = self.pending_reveal.take() {
             let y = line as f32 * line_h;
@@ -881,7 +916,9 @@ impl EditorView {
 
         // Gutter.
         if code {
-            self.paint_gutter(ui, &painter, rect, gutter_w, first, last, cursor_line, style, &resp);
+            // In Vim's visual modes the selection ends past the cursor: number from the cursor.
+            let number_line = self.vim.as_ref().and_then(|v| v.cursor_pos()).map_or(cursor_line, |c| self.doc.buffer.line_of(c));
+            self.paint_gutter(ui, &painter, rect, gutter_w, first, last, number_line, style, &resp);
         }
 
         // Sticky header: the top-level form enclosing the first visible line.
@@ -905,6 +942,11 @@ impl EditorView {
             self.show_completion(ui, style);
         } else {
             self.completion = None;
+        }
+
+        // Vim: the mode, the which-key list after the leader, and the `:` menu.
+        if self.vim.is_some() {
+            self.paint_vim(ui, rect, style, gutter_w, focused);
         }
 
         // IME position.
@@ -1049,7 +1091,17 @@ impl EditorView {
         };
         let sels = self.doc.buffer.selections.clone();
         let line_h = self.geom.line_h;
+        // Vim: a block in normal and visual mode (on the visual cursor), a bar in insert mode,
+        // an underline in replace mode.
+        let vim_shape = self.vim.as_ref().map(|v| match v.mode {
+            crate::editor::vim::Mode::Insert => CursorShape::Bar,
+            crate::editor::vim::Mode::Replace => CursorShape::Underline,
+            _ => CursorShape::Block,
+        });
+        let vim_cursor = self.vim.as_ref().and_then(|v| v.cursor_pos());
         for (k, s) in sels.list.iter().enumerate() {
+            let head = if k == sels.primary { vim_cursor.unwrap_or(s.head) } else { s.head };
+            let s = &Selection::new(s.anchor, head);
             let line = self.doc.buffer.line_of(s.head);
             let col = s.head - self.doc.buffer.line_start(line);
             let target = pos2(self.x_of(line, col), self.line_y(line));
@@ -1069,7 +1121,7 @@ impl EditorView {
             if !blink_on {
                 continue;
             }
-            let shape = if style.mode == EditorMode::Repl && !focused { CursorShape::Bar } else { style.settings.cursor_shape };
+            let shape = if style.mode == EditorMode::Repl && !focused { CursorShape::Bar } else { vim_shape.unwrap_or(style.settings.cursor_shape) };
             let color = if focused { theme.cursor } else { with_alpha(theme.cursor, 110) };
             match shape {
                 CursorShape::Bar => {
@@ -1121,13 +1173,24 @@ impl EditorView {
                 }
             }
         }
+        // Vim's relative numbers: distances from the cursor, and its own line's number set left.
+        let relative = self.vim.is_some() && style.settings.relative_line_numbers;
+        let digits_w = {
+            let digits = self.doc.buffer.line_count().max(1).ilog10() as usize + 1;
+            p.layout_no_wrap("0".repeat(digits), font.clone(), theme.line_number).size().x
+        };
         for line in first..=last {
             let y = self.line_y(line);
             let row = Rect::from_min_max(pos2(gr.left(), y), pos2(gr.right(), y + self.geom.line_h));
             let is_cur = line == cursor_line;
             if style.settings.show_line_numbers {
                 let color = if is_cur { theme.active_line_number } else { theme.line_number };
-                p.text(pos2(gr.right() - 14.0, row.center().y), Align2::RIGHT_CENTER, format!("{}", line + 1), font.clone(), color);
+                if relative && is_cur {
+                    p.text(pos2(gr.right() - 14.0 - digits_w, row.center().y), Align2::LEFT_CENTER, format!("{}", line + 1), font.clone(), color);
+                } else {
+                    let n = if relative { line.abs_diff(cursor_line) } else { line + 1 };
+                    p.text(pos2(gr.right() - 14.0, row.center().y), Align2::RIGHT_CENTER, format!("{n}"), font.clone(), color);
+                }
             }
             let bp_center = pos2(gr.left() + 12.0, row.center().y);
             if self.deco.breakpoints.contains(&line) {
@@ -1348,7 +1411,9 @@ impl EditorView {
 
     fn handle_hover(&mut self, ui: &Ui, resp: &Response, style: &EditorStyle, now: f64, toks: &[Token]) {
         let theme = style.theme;
-        let Some(hp) = resp.hover_pos() else {
+        // Vim's popups sit over the text: no hover card on top of them.
+        let vim_popup = self.vim.as_ref().is_some_and(|v| v.cmdline.is_some() || v.which_key().is_some());
+        let Some(hp) = resp.hover_pos().filter(|_| !vim_popup) else {
             self.hover = None;
             return;
         };
@@ -1618,6 +1683,9 @@ impl EditorView {
         let auto_close = style.settings.auto_close_brackets;
         let repl = style.mode == EditorMode::Repl;
         for e in events {
+            if self.vim.is_some() && self.vim_event(ui, style, &e) {
+                continue;
+            }
             match e {
                 Event::Text(t) => {
                     if t.chars().all(|c| c.is_control()) {
@@ -1663,6 +1731,267 @@ impl EditorView {
                 _ => {}
             }
         }
+    }
+
+    /// Vim mode's overlays: a mode pill (with pending keys, macro recording and messages) at the
+    /// bottom left, the which-key list above it after the leader, and the command menu.
+    fn paint_vim(&self, ui: &Ui, rect: Rect, style: &EditorStyle, gutter_w: f32, focused: bool) {
+        use crate::editor::vim::Mode;
+        let Some(v) = self.vim.as_ref() else { return };
+        let theme = style.theme;
+        let tk = Tokens::of(theme);
+        let p = ui.painter_at(rect);
+        let shadow = egui::epaint::Shadow { offset: [0, 6], blur: 18, spread: 0, color: with_alpha(Color32::BLACK, if theme.dark { 110 } else { 40 }) };
+
+        // Mode pill.
+        let (label, color) = match v.mode {
+            Mode::Normal if v.one_shot() => ("(INSERT)", theme.success),
+            Mode::Normal => ("NORMAL", theme.text_accent),
+            Mode::Insert => ("INSERT", theme.success),
+            Mode::Replace => ("REPLACE", theme.error),
+            Mode::Visual => ("VISUAL", theme.syntax.keyword.color),
+            Mode::VisualLine => ("V-LINE", theme.syntax.keyword.color),
+        };
+        let pill_font = ui::semibold(11.0);
+        let g = p.layout_no_wrap(label.to_string(), pill_font, if theme.dark { theme.editor_bg } else { Color32::WHITE });
+        let base = pos2(rect.left() + gutter_w.max(10.0) + 6.0, rect.bottom() - 12.0);
+        let pill = Rect::from_min_size(pos2(base.x, base.y - 20.0), vec2(g.size().x + 16.0, 20.0));
+        let alpha = if focused { 255 } else { 150 };
+        p.rect_filled(pill, CornerRadius::same(10), with_alpha(color, alpha));
+        p.galley(pos2(pill.left() + 8.0, pill.center().y - g.size().y / 2.0), g, theme.editor_bg);
+        let mut x = pill.right() + 8.0;
+        let extra = |p: &egui::Painter, x: &mut f32, text: &str, c: Color32, mono: bool| {
+            if text.is_empty() {
+                return;
+            }
+            let font = if mono { ui::mono(12.5) } else { ui::ui_font(12.5) };
+            let g = p.layout_no_wrap(text.to_string(), font, c);
+            let bg = Rect::from_min_size(pos2(*x, pill.top()), vec2(g.size().x + 14.0, pill.height()));
+            p.rect_filled(bg, CornerRadius::same(10), with_alpha(tk.popup, 235));
+            p.galley(pos2(bg.left() + 7.0, bg.center().y - g.size().y / 2.0), g, c);
+            *x = bg.right() + 6.0;
+        };
+        if let Some(r) = v.recording_into() {
+            extra(&p, &mut x, &format!("recording @{r}"), theme.error, false);
+        }
+        extra(&p, &mut x, &v.pending(), theme.text, true);
+        if let Some(m) = &v.message {
+            let c = if m.starts_with('E') { theme.error } else { theme.text_muted };
+            extra(&p, &mut x, m, c, false);
+        }
+
+        // Which-key: what can follow the leader.
+        if let Some((typed, items)) = v.which_key().filter(|(_, i)| !i.is_empty()) {
+            let w = (rect.width() - 24.0).min(760.0);
+            let col_w = 190.0f32;
+            let cols = ((w - 24.0) / col_w).floor().max(1.0) as usize;
+            let rows = items.len().div_ceil(cols);
+            let h = 40.0 + rows as f32 * 24.0 + 10.0;
+            let panel = Rect::from_min_size(pos2(rect.center().x - w / 2.0, pill.top() - 10.0 - h), vec2(w, h));
+            p.add(shadow.as_shape(panel, CornerRadius::same(12)));
+            p.rect(panel, CornerRadius::same(12), tk.popup, Stroke::new(1.0, tk.subtle_border), StrokeKind::Inside);
+            let title = if typed.is_empty() { "Space".to_string() } else { format!("Space {}", typed.chars().map(String::from).collect::<Vec<_>>().join(" ")) };
+            p.text(pos2(panel.left() + 16.0, panel.top() + 20.0), Align2::LEFT_CENTER, title, ui::semibold(12.5), theme.text_muted);
+            for (k, (key, desc, group)) in items.iter().enumerate() {
+                let (c, r) = (k / rows, k % rows);
+                let at = pos2(panel.left() + 16.0 + c as f32 * col_w, panel.top() + 44.0 + r as f32 * 24.0);
+                let shown = if key == " " { "␣" } else { key.as_str() };
+                let kr = Rect::from_min_size(pos2(at.x, at.y - 9.0), vec2(22.0, 18.0));
+                p.rect_filled(kr, CornerRadius::same(5), tk.hover);
+                p.text(kr.center(), Align2::CENTER_CENTER, shown, ui::mono(12.5), theme.text);
+                p.text(pos2(kr.right() + 8.0, at.y), Align2::LEFT_CENTER, *desc, ui::ui_font(13.0), if *group { theme.text_accent } else { theme.text });
+            }
+        }
+
+        // The command line: `:` as a menu of commands, `/` and `?` as a search box.
+        if let Some((kind, text)) = &v.cmdline {
+            let w = (rect.width() - 40.0).min(560.0);
+            let suggestions = v.ex_suggestions();
+            let shown = suggestions.len().min(8);
+            let row_h = 30.0;
+            let h = 44.0 + if shown > 0 { 8.0 + shown as f32 * row_h + 6.0 } else { 0.0 };
+            let panel = Rect::from_min_size(pos2(rect.center().x - w / 2.0, rect.top() + (rect.height() * 0.12).max(24.0)), vec2(w, h));
+            p.add(shadow.as_shape(panel, CornerRadius::same(12)));
+            p.rect(panel, CornerRadius::same(12), tk.popup, Stroke::new(1.0, with_alpha(theme.text_accent, 140)), StrokeKind::Inside);
+            let input = Rect::from_min_size(panel.min, vec2(w, 44.0));
+            let icon = match kind {
+                ':' => ic::TERMINAL,
+                _ => ic::SEARCH,
+            };
+            p.text(pos2(input.left() + 18.0, input.center().y), Align2::CENTER_CENTER, icon, ui::icon_font(17.0), theme.text_accent);
+            let mut job = LayoutJob::default();
+            job.append(&kind.to_string(), 0.0, TextFormat { font_id: ui::mono(14.5), color: theme.text_accent, ..Default::default() });
+            job.append(text, 0.0, TextFormat { font_id: ui::mono(14.5), color: theme.text, ..Default::default() });
+            let g = p.layout_job(job);
+            let tx = input.left() + 36.0;
+            p.galley(pos2(tx, input.center().y - g.size().y / 2.0), g.clone(), theme.text);
+            let caret_x = tx + g.size().x + 1.0;
+            p.rect_filled(Rect::from_min_size(pos2(caret_x, input.center().y - 9.0), vec2(2.0, 18.0)), CornerRadius::same(1), theme.cursor);
+            if text.is_empty() {
+                let hint = match kind {
+                    ':' => "w saves, q closes, %s/old/new/g, a line number, or any command",
+                    '/' => "search forward",
+                    _ => "search backward",
+                };
+                p.text(pos2(caret_x + 8.0, input.center().y), Align2::LEFT_CENTER, hint, ui::ui_font(13.0), theme.text_placeholder);
+            }
+            if shown > 0 {
+                p.hline(panel.x_range().shrink(1.0), input.bottom(), Stroke::new(1.0, tk.subtle_border));
+                for (k, (cmd, desc)) in suggestions.iter().take(shown).enumerate() {
+                    let r = Rect::from_min_size(pos2(panel.left() + 6.0, input.bottom() + 6.0 + k as f32 * row_h), vec2(w - 12.0, row_h));
+                    if v.ex_selected == Some(k) {
+                        p.rect_filled(r, CornerRadius::same(7), with_alpha(theme.text_accent, 40));
+                    }
+                    p.text(pos2(r.left() + 12.0, r.center().y), Align2::LEFT_CENTER, format!(":{cmd}"), ui::mono(13.5), theme.text);
+                    p.text(pos2(r.left() + 140.0, r.center().y), Align2::LEFT_CENTER, *desc, ui::ui_font(13.0), theme.text_muted);
+                }
+            }
+        }
+    }
+
+    /// Vim mode's handling of one input event; false leaves it to the normal editor (typing
+    /// in insert mode, ⌘ shortcuts, clipboard events).
+    fn vim_event(&mut self, ui: &Ui, style: &EditorStyle, e: &Event) -> bool {
+        use crate::editor::vim::{BACKSPACE, ENTER, ESC, Mode, TAB, ctrl};
+        let Some(v) = self.vim.as_ref() else { return false };
+        let typing = matches!(v.mode, Mode::Insert | Mode::Replace) && v.cmdline.is_none() && !v.awaits_key();
+        match e {
+            Event::Text(t) => {
+                if t.chars().all(|c| c.is_control()) {
+                    return true;
+                }
+                if !typing {
+                    for c in t.chars() {
+                        self.vim_feed(ui, style, c);
+                    }
+                    return true;
+                }
+                let replace = v.mode == Mode::Replace;
+                for c in t.chars() {
+                    if replace && let Some(v) = self.vim.as_ref() {
+                        v.overwrite_next(&mut self.doc);
+                    }
+                    self.doc.type_text(&c.to_string(), style.settings.auto_close_brackets);
+                    if let Some(v) = self.vim.as_mut() {
+                        v.note_insert(c);
+                    }
+                }
+                self.goal_col = None;
+                self.update_completion_after_typing(t, style.settings.auto_complete);
+                true
+            }
+            Event::Key { key, pressed: true, modifiers, .. } => {
+                let (key, m) = (*key, *modifiers);
+                if m.command || m.mac_cmd {
+                    return false;
+                }
+                let ctrl_key = m.ctrl;
+                if typing {
+                    if key == Key::Escape || (ctrl_key && matches!(key, Key::OpenBracket | Key::C)) {
+                        self.completion = None;
+                        self.vim_feed(ui, style, ESC);
+                        return true;
+                    }
+                    // Insert mode's control keys: ^W ^U ^H delete, ^T ^D shift, ^R pastes a
+                    // register, ^E ^Y copy from below/above, ^O runs one normal command.
+                    let insert_ctrl = [(Key::W, 'w'), (Key::U, 'u'), (Key::H, 'h'), (Key::T, 't'), (Key::D, 'd'), (Key::R, 'r'), (Key::E, 'e'), (Key::Y, 'y'), (Key::O, 'o'), (Key::J, 'j')];
+                    if ctrl_key
+                        && !m.shift
+                        && let Some((_, c)) = insert_ctrl.iter().find(|(k, _)| *k == key)
+                    {
+                        self.completion = None;
+                        self.vim_feed(ui, style, ctrl(*c));
+                        return true;
+                    }
+                    // Typed by the editor below; noted for `.` and macros (not when Enter or Tab
+                    // accept a completion).
+                    let noted = match key {
+                        Key::Enter | Key::Tab if self.completion.is_some() => None,
+                        Key::Enter => Some(ENTER),
+                        Key::Backspace => Some(BACKSPACE),
+                        Key::Tab => Some(TAB),
+                        _ => None,
+                    };
+                    if let (Some(k), Some(v)) = (noted, self.vim.as_mut()) {
+                        v.note_insert(k);
+                    }
+                    return false;
+                }
+                let k = if ctrl_key {
+                    match key {
+                        Key::OpenBracket | Key::C => Some(ESC),
+                        k => {
+                            let n = k.name();
+                            (n.len() == 1 && n.chars().all(|c| c.is_ascii_alphabetic())).then(|| ctrl(n.chars().next().unwrap_or('a').to_ascii_lowercase()))
+                        }
+                    }
+                } else {
+                    match key {
+                        Key::Escape => Some(ESC),
+                        Key::Enter => Some(ENTER),
+                        Key::Backspace => Some(BACKSPACE),
+                        Key::Tab => Some(TAB),
+                        Key::ArrowLeft => Some('h'),
+                        Key::ArrowRight => Some('l'),
+                        Key::ArrowUp => Some('k'),
+                        Key::ArrowDown => Some('j'),
+                        Key::Delete => Some('x'),
+                        Key::Home => Some('0'),
+                        Key::End => Some('$'),
+                        Key::PageUp => Some(ctrl('b')),
+                        Key::PageDown => Some(ctrl('f')),
+                        _ => None,
+                    }
+                };
+                if let Some(k) = k {
+                    self.vim_feed(ui, style, k);
+                }
+                // Printable keys arrive as text; nothing else types in normal mode.
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Send a key to Vim and carry out what it asks for.
+    fn vim_feed(&mut self, ui: &Ui, style: &EditorStyle, k: char) {
+        use crate::editor::vim::{Effect, View};
+        let line_h = self.geom.line_h.max(1.0);
+        let first = (self.scroll.y / line_h).floor() as usize;
+        let rows = ((self.geom.rect.height() / line_h) as usize).max(2);
+        let last = (first + rows - 2).min(self.doc.buffer.line_count().saturating_sub(1));
+        let clipboard = || arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok());
+        let view = View { first_line: first, last_line: last, auto_close: style.settings.auto_close_brackets, clipboard: &clipboard };
+        let Some(vim) = self.vim.as_mut() else { return };
+        let effects = vim.feed(&mut self.doc, &view, k);
+        self.goal_col = None;
+        if !matches!(vim.mode, crate::editor::vim::Mode::Insert | crate::editor::vim::Mode::Replace) {
+            self.completion = None;
+        }
+        let head = self.doc.buffer.selections.primary().head;
+        let mut saving = false;
+        for e in effects {
+            match e {
+                Effect::Clipboard(t) => {
+                    self.doc.images.shelve_for_clipboard(&t);
+                    ui.ctx().copy_text(t);
+                }
+                Effect::Scroll(s) => self.vim_scroll = Some(s),
+                Effect::Close { force: false } if self.doc.buffer.is_dirty() && !saving => {
+                    if let Some(v) = self.vim.as_mut() {
+                        v.message = Some("E37: No write since last change (add ! to override)".into());
+                    }
+                }
+                Effect::GotoDefinition => self.actions.push(EditorAction::GotoDefinition(head)),
+                Effect::ShowDocs => self.actions.push(EditorAction::OpenDocs(head)),
+                Effect::Rename => self.actions.push(EditorAction::Rename(head)),
+                other => {
+                    saving |= other == Effect::Save;
+                    self.actions.push(EditorAction::Vim(other));
+                }
+            }
+        }
+        self.scroll_to_cursor = true;
     }
 
     fn vertical(&mut self, lines: isize, extend: bool) {

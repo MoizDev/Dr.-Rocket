@@ -60,6 +60,11 @@ pub struct Settings {
     pub smooth_caret: bool,
     /// Show test results in the editor: a gutter tick per passing test, and failures inline.
     pub test_results_in_editor: bool,
+    /// Vim (Neovim) keybindings in the editor, with a LazyVim-style Space leader.
+    pub vim_mode: bool,
+    /// In Vim mode, number lines by their distance from the cursor (the cursor's line keeps its
+    /// own number), for counts like `5j`.
+    pub relative_line_numbers: bool,
     /// Width of the bar caret (and height of the underline caret) in points.
     pub cursor_width: f32,
     /// Custom caret color (`#rrggbb`); the theme's cursor color when unset.
@@ -107,6 +112,8 @@ impl Default for Settings {
             cursor_blink: true,
             smooth_caret: true,
             test_results_in_editor: true,
+            vim_mode: false,
+            relative_line_numbers: true,
             cursor_width: 2.0,
             cursor_color: None,
             rainbow_brackets: true,

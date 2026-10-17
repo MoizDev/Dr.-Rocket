@@ -989,6 +989,11 @@ impl App {
             Command::ZoomIn => self.zoom_active(Some(0.1)),
             Command::ZoomOut => self.zoom_active(Some(-0.1)),
             Command::ZoomReset => self.zoom_active(None),
+            Command::ToggleVimMode => {
+                self.settings.vim_mode = !self.settings.vim_mode;
+                let _ = self.settings.save();
+                self.toast(if self.settings.vim_mode { "Vim mode on: Space shows the leader keys, : opens commands" } else { "Vim mode off" }, ToastKind::Info);
+            }
             Command::ToggleRainbowBrackets => {
                 self.settings.rainbow_brackets = !self.settings.rainbow_brackets;
                 let _ = self.settings.save();
