@@ -232,6 +232,32 @@ fn debugger_pauses_at_breakpoints_with_locals() {
 }
 
 #[test]
+fn debugger_shows_only_the_users_variables_and_frames_in_teaching_languages() {
+    let b = need_racket!();
+    let path = scratch_dir().join("bsl-debug.rkt");
+    let body = "(define (pow b e acc)\n  (cond [(zero? e) acc]\n        [else (pow b (sub1 e) (* acc b))]))\n(check-expect (pow 2 3 1) 8)\n(pow 3 2 1)\n";
+    let bp = body.find("(pow b (sub1").unwrap();
+    let settings = Language::Beginner.default_settings();
+    let (source, offset) = lang::program_text(Language::Beginner, &settings, Some(&path), body);
+    let config = RunConfig {
+        path: Some(path),
+        source,
+        offset,
+        language: Language::Beginner.run_language(),
+        options: RunOptions { instrument: Instrument::Debug, breakpoints: vec![bp], ..RunOptions::default() },
+    };
+    let s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, |e| matches!(e, RunEvent::Paused(_)));
+    let RunEvent::Paused(p) = events.last().unwrap() else { unreachable!() };
+    let names: Vec<&str> = p.locals.iter().map(|l| l.name.as_str()).collect();
+    // The language's own definitions (`repl?`, the check-expect's `test123`) stay hidden.
+    assert_eq!(names, vec!["b", "e", "acc", "pow"], "{:?}", p.locals);
+    // So does the frame of its printing wrapper around `(pow 3 2 1)`.
+    let frames: Vec<&str> = p.stack.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(frames, vec!["(pow b (sub1 e) (* acc b))"]);
+}
+
+#[test]
 fn profiler_reports_user_functions() {
     let b = need_racket!();
     let src = "#lang racket\n(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(void (fib 27))\n";

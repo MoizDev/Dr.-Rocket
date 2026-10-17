@@ -595,8 +595,13 @@
        (hasheq 'name (format "~a" (syntax-e (car tv)))
                'value (with-handlers ([(λ (e) #t) (λ (e) "#<undefined>")])
                         (value->short-string ((cdr tv))))))))
+  ;; Frames for code the language introduced (a teaching language's printing wrapper around
+  ;; each top-level expression, say) mean nothing to the user; keep only the current frame
+  ;; and frames for code they wrote.
   (define stack
-    (for/list ([m (in-list marks)])
+    (for/list ([m (in-list marks)]
+               [k (in-naturals)]
+               #:when (or (zero? k) (user-code? (mark-source* m))))
       (define s (mark-source* m))
       (hasheq 'name (syntax->label s)
               'srcloc (syntax->srcloc-jsexpr s))))
@@ -652,7 +657,10 @@
     (annotate-for-single-stepping
      expanded break? break-before break-after
      (λ (type bound binding) (void))
-     (λ (mod var rd/wr) (set! top-level-vars (cons (cons var rd/wr) top-level-vars)))
+     ;; Only variables the user defined: languages introduce their own (`repl?`, `test1651`).
+     (λ (mod var rd/wr)
+       (when (user-written? var)
+         (set! top-level-vars (cons (cons var rd/wr) top-level-vars))))
      source-name))
   (hash-set! break-positions key (sort posns <))
   (apply-breakpoints! key)
@@ -862,6 +870,26 @@
         (substring program-source (sub1 pos) (+ pos -1 span))
         (format "~s" (syntax->datum s))))
   (truncate-string (regexp-replace* #px"\\s+" text " ") 60))
+
+;; Is `s` code the user wrote, in the program or another open file being debugged? Code a
+;; language introduces has no location, or one outside the user's text.
+(define (user-code? s)
+  (define pos (syntax-position s))
+  (define span (syntax-span s))
+  (define src (syntax-source s))
+  (and pos span
+       (if (same-source? src (main-source))
+           (<= (+ pos -1 span) (string-length program-source))
+           (and (path? src) (hash-ref debug-modules (source-key src) #f) #t))))
+
+;; Is `id` an identifier the user wrote? Its location must hold exactly its name: languages
+;; introduce identifiers (`repl?`, `test1651`) that borrow the location of the form behind them.
+(define (user-written? id)
+  (and (user-code? id)
+       (or (not (same-source? (syntax-source id) (main-source)))
+           (let ([pos (syntax-position id)] [span (syntax-span id)])
+             (string=? (substring program-source (sub1 pos) (+ pos -1 span))
+                       (symbol->string (syntax-e id)))))))
 
 ;; Images pasted into the program (see open-source-port in common.rkt).
 (define source-images (hash))
