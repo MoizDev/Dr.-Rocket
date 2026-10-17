@@ -248,8 +248,7 @@
 
 .heroGrid {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 250px;
-  gap: 64px;
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
 }
 
@@ -295,70 +294,16 @@
   font-size: 15px;
 }
 
-.news {
-  margin-top: 110px;
-  font-family: var(--font-ui);
-  font-size: 14.5px;
-  line-height: 1.6;
-}
 
-.newsLabel {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-bottom: 8px;
-  color: var(--muted);
-  font-size: 13px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-}
 
-.newsSquare {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  background: var(--blue);
-}
 
-.news ul {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
 
-.news li {
-  padding: 18px 0;
-  border-bottom: 1px solid var(--line);
-  color: var(--ink);
-}
 
-.news li:last-child {
-  border-bottom: 0;
-}
 
-.news strong {
-  color: var(--navy);
-  font-weight: 600;
-}
 
-.news a {
-  text-decoration: none;
-  transition: color 0.18s ease;
-}
 
-.news a svg {
-  display: inline;
-  vertical-align: -1px;
-  transition: transform 0.3s var(--ease-spring);
-}
 
-.news a:hover {
-  color: var(--blue);
-}
 
-.news a:hover svg {
-  transform: translate(2px, -2px);
-}
 
 .heroPanel {
   position: relative;
@@ -403,9 +348,6 @@
     gap: 0;
   }
 
-  .news {
-    display: none;
-  }
 }
 
 @media (max-width: 640px) {

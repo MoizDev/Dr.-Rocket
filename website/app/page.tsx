@@ -1,7 +1,7 @@
 import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import Reveal from "@/components/Reveal";
-import { ArrowRight, ArrowUpRight, OsIcon, RocketMark } from "@/components/icons";
+import { ArrowRight, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, VERSION } from "@/lib/release";
 import s from "./page.module.css";
 
@@ -81,28 +81,6 @@ export default function Home() {
                 . Free for macOS, Windows and Linux.
               </p>
             </div>
-
-            <aside className={s.news} aria-label="In this beta" data-reveal style={{ "--reveal-delay": 260 } as React.CSSProperties}>
-              <p className={s.newsLabel}>
-                <span className={s.newsSquare} aria-hidden="true" />
-                In this beta
-              </p>
-              <ul>
-                <li>
-                  <strong>First public beta</strong> for macOS, Windows and Linux
-                </li>
-                <li>
-                  <a href="#visualizer">
-                    <strong>The Visualizer:</strong> recursion you can watch <ArrowUpRight />
-                  </a>
-                </li>
-                <li>
-                  <a href="#drracket">
-                    Your <strong>DrRacket files</strong> open as they are, images included <ArrowUpRight />
-                  </a>
-                </li>
-              </ul>
-            </aside>
           </div>
 
           <div className="container">
