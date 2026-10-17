@@ -312,6 +312,8 @@ pub struct App {
     pub ctx: egui::Context,
     styled_for: Option<(String, f32)>,
     pub quit_confirmed: bool,
+    /// Start the app again once it has closed (applying a new renderer).
+    pub restart_on_exit: bool,
     pub automation: Option<crate::automation::Automation>,
     pub frame_count: u64,
     pub terminals: Vec<TerminalTab>,
@@ -419,6 +421,9 @@ pub struct TerminalTab {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>) -> Self {
         crate::platform::setup_window(cc);
+        if let Some(rs) = &cc.wgpu_render_state {
+            crate::startup::set_adapter(&rs.adapter.get_info());
+        }
         if std::env::var_os("DRROCKET_FRAME_STATS").is_some()
             && let Some(rs) = &cc.wgpu_render_state
         {
@@ -455,6 +460,7 @@ impl App {
             ctx: cc.egui_ctx.clone(),
             styled_for: None,
             quit_confirmed: false,
+            restart_on_exit: false,
             automation: crate::automation::Automation::from_env(),
             frame_count: 0,
             terminals: Vec::new(),
@@ -1429,6 +1435,12 @@ impl eframe::App for App {
             if std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "continuous") {
                 ctx.request_repaint();
             }
+        }
+    }
+
+    fn on_exit(&mut self) {
+        if self.restart_on_exit {
+            crate::startup::spawn_again();
         }
     }
 

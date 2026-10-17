@@ -10,11 +10,13 @@ fn dir() -> PathBuf {
 /// Version, platform and Racket, for reports.
 pub fn about(racket: Option<&str>) -> String {
     format!(
-        "Dr. Rocket {} on {} {} (Racket {})",
+        "Dr. Rocket {} on {} {} (Racket {})\nGraphics: {} [{}]",
         env!("CARGO_PKG_VERSION"),
         std::env::consts::OS,
         std::env::consts::ARCH,
-        racket.unwrap_or("not found")
+        racket.unwrap_or("not found"),
+        crate::startup::adapter().unwrap_or("not started"),
+        crate::startup::active().label()
     )
 }
 

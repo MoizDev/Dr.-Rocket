@@ -15,7 +15,7 @@
 use eframe::egui_wgpu::{WgpuSetup, WgpuSetupCreateNew};
 use eframe::wgpu::{self, Backend, Backends, DeviceType};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -28,6 +28,20 @@ pub enum Renderer {
 
 impl Renderer {
     const ALL: [Renderer; 4] = [Renderer::Default, Renderer::Dx12, Renderer::OpenGl, Renderer::Software];
+
+    /// The choices offered in Settings on this platform.
+    pub fn choices() -> Vec<Renderer> {
+        Renderer::ALL.into_iter().filter(|r| *r != Renderer::Dx12 || cfg!(windows)).collect()
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Renderer::Default => "Automatic",
+            Renderer::Dx12 => "DirectX 12",
+            Renderer::OpenGl => "OpenGL",
+            Renderer::Software => "Software (CPU)",
+        }
+    }
 
     fn name(self) -> &'static str {
         match self {
@@ -113,7 +127,53 @@ pub fn begin() -> Renderer {
     });
     // Also on a relaunch (`forced`): if this one dies too, the next launch steps down from it.
     let _ = std::fs::write(starting_marker(), b"");
+    let _ = ACTIVE.set(r);
     r
+}
+
+static ACTIVE: OnceLock<Renderer> = OnceLock::new();
+static ADAPTER: OnceLock<String> = OnceLock::new();
+
+/// The renderer this launch uses.
+pub fn active() -> Renderer {
+    ACTIVE.get().copied().unwrap_or(Renderer::Default)
+}
+
+/// The renderer the next launch will use (what Settings shows as chosen).
+pub fn chosen() -> Renderer {
+    std::env::var(RENDERER_VAR).ok().as_deref().and_then(Renderer::parse).unwrap_or_else(stored)
+}
+
+/// Pick the renderer for the next launch (`Default` goes back to automatic).
+pub fn choose(r: Renderer) {
+    if r == Renderer::Default {
+        let _ = std::fs::remove_file(renderer_file());
+    } else {
+        remember(r);
+    }
+}
+
+/// Record the graphics adapter in use, for Settings and problem reports.
+pub fn set_adapter(info: &wgpu::AdapterInfo) {
+    let kind = match info.device_type {
+        DeviceType::Cpu => "CPU",
+        DeviceType::IntegratedGpu => "integrated GPU",
+        DeviceType::DiscreteGpu => "GPU",
+        _ => "GPU",
+    };
+    let _ = ADAPTER.set(format!("{} via {:?} ({kind})", info.name, info.backend));
+}
+
+/// "Intel(R) UHD Graphics 620 via Dx12 (integrated GPU)", once known.
+pub fn adapter() -> Option<&'static str> {
+    ADAPTER.get().map(String::as_str)
+}
+
+/// Start a fresh copy of the app (used after the app closes to apply a new renderer).
+pub fn spawn_again() {
+    if let Ok(exe) = std::env::current_exe() {
+        let _ = std::process::Command::new(exe).spawn();
+    }
 }
 
 /// Called every frame; after a few painted frames the launch counts as a success.

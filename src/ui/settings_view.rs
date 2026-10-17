@@ -388,6 +388,39 @@ impl App {
         row(ui, &theme, "Interface font size", "Inter", |ui| {
             ui.add(egui::DragValue::new(&mut s.ui_font_size).range(11.0..=20.0).speed(0.1).suffix(" px"));
         });
+        if !cfg!(target_os = "macos") {
+            self.settings_graphics(ui);
+        }
+    }
+
+    /// The renderer choice (Windows and Linux): for machines whose GPU driver misbehaves.
+    fn settings_graphics(&mut self, ui: &mut Ui) {
+        use crate::startup::{self, Renderer};
+        let theme = self.theme.clone();
+        ui.add_space(14.0);
+        ui.label(egui::RichText::new("Graphics").font(ui::semibold(15.0)).color(theme.text));
+        let now = startup::adapter().unwrap_or("unknown");
+        ui.label(egui::RichText::new(format!("Drawing with {now}. If Dr. Rocket is slow or glitchy, try another renderer.")).size(12.5).color(theme.text_placeholder));
+        ui.add_space(6.0);
+        let chosen = startup::chosen();
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 14.0;
+            for r in Renderer::choices() {
+                if radio(ui, &theme, chosen == r, r.label()) && chosen != r {
+                    startup::choose(r);
+                }
+            }
+        });
+        if startup::chosen() != startup::active() {
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Restart Dr. Rocket to switch renderers.").color(theme.text_muted));
+                if ui.add(primary_button(&theme, "Restart now")).clicked() {
+                    self.restart_on_exit = true;
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+                }
+            });
+        }
     }
 
     fn settings_editor(&mut self, ui: &mut Ui) {
