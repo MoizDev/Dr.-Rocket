@@ -204,6 +204,8 @@ pub struct Session {
     /// Every open project tab (newer sessions); `current` is the one in front.
     pub projects: Vec<ProjectSession>,
     pub current: usize,
+    /// Each file's editor zoom (only files not at 100%), kept after the file is closed.
+    pub zooms: std::collections::BTreeMap<PathBuf, f32>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
@@ -240,6 +242,8 @@ pub struct Tab {
     pub lang_changed: bool,
     pub disk_mtime: Option<SystemTime>,
     pub rk: crate::racket_ui::RacketTab,
+    /// The editor's zoom (⌘+ / ⌘-), separate for each file; panels don't zoom.
+    pub zoom: f32,
     /// (buffer version, time it was first seen) for autosave debouncing.
     edit_seen: (u64, f64),
 }
@@ -307,7 +311,8 @@ pub struct App {
     pub modal: Modal,
     pub toasts: Vec<Toast>,
     next_id: u64,
-    pub zoom: f32,
+    /// Editor zoom by file (see `Tab::zoom`), remembered across sessions.
+    pub file_zooms: std::collections::BTreeMap<PathBuf, f32>,
     pub sidebar: crate::ui::sidebar::SidebarState,
     pub ctx: egui::Context,
     styled_for: Option<(String, f32)>,
@@ -457,7 +462,7 @@ impl App {
             modal: Modal::None,
             toasts: Vec::new(),
             next_id: 1,
-            zoom: 1.0,
+            file_zooms: Session::load().zooms,
             sidebar: Default::default(),
             ctx: cc.egui_ctx.clone(),
             styled_for: None,
@@ -528,8 +533,26 @@ impl App {
         Tokens::of(&self.theme)
     }
 
+    /// The code font size panels use (the REPL, tests, stepper...): the setting, unzoomed.
     pub fn font_size(&self) -> f32 {
-        (self.settings.buffer_font_size * self.zoom).clamp(8.0, 48.0)
+        self.settings.buffer_font_size.clamp(8.0, 48.0)
+    }
+
+    /// Zoom the active file's editor (`None`: back to 100%), and remember it for the file.
+    fn zoom_active(&mut self, step: Option<f32>) {
+        let Some(tab) = self.tabs.get_mut(self.active) else { return };
+        tab.zoom = match step {
+            Some(d) => ((tab.zoom + d) * 10.0).round() / 10.0,
+            None => 1.0,
+        }
+        .clamp(0.5, 2.5);
+        if let Some(p) = &tab.path {
+            if (tab.zoom - 1.0).abs() < 0.01 {
+                self.file_zooms.remove(p);
+            } else {
+                self.file_zooms.insert(p.clone(), tab.zoom);
+            }
+        }
     }
 
     pub fn ui_size(&self) -> f32 {
@@ -593,7 +616,8 @@ impl App {
             editor.completion_words = words.clone();
             rk.input.completion_words = words.clone();
         }
-        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, edit_seen: (0, 0.0) });
+        let zoom = path.as_ref().and_then(|p| self.file_zooms.get(p)).copied().unwrap_or(1.0);
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
         self.tabs.len() - 1
     }
 
@@ -835,6 +859,7 @@ impl App {
             layout: self.layout.without_terminals(),
             projects,
             current,
+            zooms: self.file_zooms.clone(),
         }
     }
 
@@ -961,9 +986,9 @@ impl App {
             }
             Command::FocusInteractions => self.layout.show(PanelItem::Interactions, Dock::Right),
             Command::MoveInteractions => self.layout.interactions_below = !self.layout.interactions_below,
-            Command::ZoomIn => self.zoom = (self.zoom + 0.1).min(2.5),
-            Command::ZoomOut => self.zoom = (self.zoom - 0.1).max(0.5),
-            Command::ZoomReset => self.zoom = 1.0,
+            Command::ZoomIn => self.zoom_active(Some(0.1)),
+            Command::ZoomOut => self.zoom_active(Some(-0.1)),
+            Command::ZoomReset => self.zoom_active(None),
             Command::ToggleRainbowBrackets => {
                 self.settings.rainbow_brackets = !self.settings.rainbow_brackets;
                 let _ = self.settings.save();
@@ -1257,7 +1282,8 @@ impl App {
         let tabs_rect = Rect::from_min_size(rect.min, vec2(rect.width(), TAB_BAR_H));
         self.tab_strip(ui, tabs_rect);
         let ed_rect = Rect::from_min_max(pos2(rect.left() + 1.0, tabs_rect.bottom()), pos2(rect.right() - 1.0, rect.bottom() - ISLAND_RADIUS as f32 * 0.5));
-        let font_size = self.font_size();
+        let zoom = self.tabs.get(self.active).map_or(1.0, |t| t.zoom);
+        let font_size = (self.font_size() * zoom).clamp(6.0, 60.0);
         let theme = self.theme.clone();
         let settings = self.settings.clone();
         let style = EditorStyle { theme: &theme, settings: &settings, font_size, mode: EditorMode::Code };
