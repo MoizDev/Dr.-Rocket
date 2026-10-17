@@ -311,6 +311,8 @@ pub struct EditorView {
     pub vim: Option<crate::editor::vim::Vim>,
     /// A scroll Vim asked for (zz, ^D...), applied once the viewport is known.
     vim_scroll: Option<crate::editor::vim::ScrollTo>,
+    /// Vim's yank flash: the yanked range and when.
+    yank_flash: Option<(Range<usize>, f64)>,
 }
 
 const SCROLLBAR_W: f32 = 12.0;
@@ -346,6 +348,7 @@ impl EditorView {
             pending_reveal: None,
             vim: None,
             vim_scroll: None,
+            yank_flash: None,
         }
     }
 
@@ -842,6 +845,22 @@ impl EditorView {
                 }
                 let c = if k == self.find.current { theme.search_active_match } else { theme.search_match };
                 self.paint_range_bg(&tp, r.start, r.end, first, last, c);
+            }
+        }
+
+        // Vim: flash what was just yanked, as Neovim does.
+        if let Some(r) = self.vim.as_mut().and_then(|v| v.yanked.take()) {
+            self.yank_flash = Some((r, ui.input(|i| i.time)));
+        }
+        if let Some((r, at)) = self.yank_flash.clone() {
+            const FLASH: f64 = 0.35;
+            let t = (ui.input(|i| i.time) - at) / FLASH;
+            if t >= 1.0 {
+                self.yank_flash = None;
+            } else {
+                let fade = 1.0 - (t * t) as f32;
+                self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.text_accent, (110.0 * fade) as u8));
+                ui.ctx().request_repaint();
             }
         }
 

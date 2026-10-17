@@ -286,6 +286,8 @@ pub struct Vim {
     insert_reg: bool,
     /// The highlighted suggestion in the `:` menu.
     pub ex_selected: Option<usize>,
+    /// Text just yanked, for the editor to flash.
+    pub yanked: Option<std::ops::Range<usize>>,
 }
 
 impl Default for Vim {
@@ -312,6 +314,7 @@ impl Default for Vim {
             one_shot: false,
             insert_reg: false,
             ex_selected: None,
+            yanked: None,
         }
     }
 }
@@ -829,6 +832,7 @@ impl Vim {
                 self.store(reg, Register { text, linewise }, op == Op::Yank, fx);
                 match op {
                     Op::Yank => {
+                        self.yanked = Some(start..if linewise { end.saturating_sub(1).max(start) } else { end });
                         let to = if linewise { doc.buffer.selections.primary().head.max(start).min(end) } else { start };
                         let to = if linewise && line_of(doc, to) != l1 { start } else { to };
                         doc.buffer.selections = Selections::single(Selection::caret(to));
