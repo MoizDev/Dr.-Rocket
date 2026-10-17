@@ -37,3 +37,18 @@ The Vercel project has `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (production
 
 To read the numbers: `select * from public.download_totals;` (or the Table Editor in the
 Supabase dashboard).
+
+## Windows testing
+
+There's no Windows machine here; use the manual GitHub workflows:
+
+- `windows-smoke.yml`: launches the released zip (`source=release`, `tag=...`) or a fresh
+  build (`source=build`) with Racket installed and reports whether it stays up, plus crash
+  reports, the renderer and Settings screenshots (artifact). `simulate_gpu_crash=true` tests
+  the renderer fallback (`src/startup.rs`).
+- `windows-bench.yml`: frame-rate runs. GitHub's runners have no GPU and present frames very
+  slowly (even the empty welcome screen runs at about 4 fps), so their numbers don't reflect
+  real machines; use them only to compare settings against each other.
+
+Benchmark and automation scripts must never open repo files they edit: `tools/bench/` works on
+a copy in `target/bench/`.
