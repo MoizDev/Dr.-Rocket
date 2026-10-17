@@ -667,10 +667,56 @@
   transform: translate(8px, 8px) rotate(1deg);
 }
 
+/* Every other row flips, image then text, and its screenshot bleeds off the left edge. */
+.feature:nth-of-type(even) {
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr);
+}
+
+.feature:nth-of-type(even) .featureCard {
+  order: -1;
+}
+
+.feature:nth-of-type(even) .featureCopy {
+  justify-self: end;
+}
+
+.feature:nth-of-type(even) .cardInset {
+  padding: clamp(28px, 4vw, 48px) clamp(28px, 4vw, 48px) 0 0;
+}
+
+.feature:nth-of-type(even) .cardShot {
+  margin-left: -18%;
+  border-radius: 0 12px 0 0;
+}
+
+.feature:nth-of-type(even):hover .cardShot,
+.feature:nth-of-type(even) .featureCard:hover .cardShot {
+  transform: translate(10px, -8px);
+}
+
+.feature:nth-of-type(even) .stackBack {
+  left: auto;
+  right: 7%;
+}
+
+.feature:nth-of-type(even) .stackFront {
+  right: auto;
+  left: 6%;
+}
+
 @media (max-width: 900px) {
-  .feature {
+  .feature,
+  .feature:nth-of-type(even) {
     grid-template-columns: 1fr;
     gap: 32px;
+  }
+
+  .feature:nth-of-type(even) .featureCard {
+    order: 0;
+  }
+
+  .feature:nth-of-type(even) .featureCopy {
+    justify-self: start;
   }
 }
 
