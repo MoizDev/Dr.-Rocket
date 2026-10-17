@@ -49,7 +49,8 @@ status=0
 for os in mac windows linux; do
   asset="$(field "downloads.$os.asset")"
   file="$(field "downloads.$os.file")"
-  if fetch "$asset" "$out/$file"; then
+  # GitHub downloads occasionally fail mid-transfer: retry before giving up.
+  if fetch "$asset" "$out/$file" || { sleep 3; fetch "$asset" "$out/$file"; } || { sleep 10; fetch "$asset" "$out/$file"; }; then
     echo "  $file  <- $asset ($(du -h "$out/$file" | cut -f1 | tr -d ' '))"
   else
     echo "  $file  skipped: $asset is not on release $tag yet" >&2
