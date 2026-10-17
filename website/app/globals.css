@@ -23,7 +23,7 @@
   --paper-2: #f7f9fd;
 
   --font-body: var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-head: var(--font-display), var(--font-body);
+  --font-head: var(--font-body);
   --font-ui: var(--font-mono), ui-monospace, "SF Mono", Menlo, monospace;
   --font-src: var(--font-code), ui-monospace, Menlo, monospace;
 

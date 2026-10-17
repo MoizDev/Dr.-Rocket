@@ -1,10 +1,10 @@
 import type { Metadata, Viewport } from "next";
-import { Fira_Code, Geist, Geist_Mono, Space_Grotesk } from "next/font/google";
+import { Fira_Code, Geist_Mono, Google_Sans } from "next/font/google";
 import { VERSION } from "@/lib/release";
 import "./globals.css";
 
-const display = Space_Grotesk({ subsets: ["latin"], weight: ["500", "600", "700"], variable: "--font-display" });
-const sans = Geist({ subsets: ["latin"], variable: "--font-sans" });
+// Google Sans for headings and text alike.
+const sans = Google_Sans({ subsets: ["latin"], variable: "--font-sans" });
 const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
 const code = Fira_Code({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-code" });
 
@@ -43,7 +43,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       data-os="other"
-      className={`${display.variable} ${sans.variable} ${mono.variable} ${code.variable}`}
+      className={`${sans.variable} ${mono.variable} ${code.variable}`}
       suppressHydrationWarning
     >
       <head>

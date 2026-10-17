@@ -14,7 +14,7 @@ const rocket = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 94.53 145.7
 
 export default async function Image() {
   const [display, mono, shot] = await Promise.all([
-    readFile(join(process.cwd(), "assets", "fonts", "SpaceGrotesk-SemiBold.ttf")),
+    readFile(join(process.cwd(), "assets", "fonts", "GoogleSans-SemiBold.ttf")),
     readFile(join(process.cwd(), "assets", "fonts", "GeistMono-Medium.ttf")),
     // The screenshots are Display P3; convert to sRGB, which is all a PNG preview can show.
     sharp(join(process.cwd(), "app", "shots", "editor.png")).resize(1240).toColourspace("srgb").jpeg({ quality: 88 }).toBuffer(),
