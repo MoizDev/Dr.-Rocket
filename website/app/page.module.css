@@ -446,7 +446,7 @@
 
 .vizPanel {
   position: relative;
-  padding: clamp(40px, 6vw, 88px) clamp(20px, 5vw, 72px);
+  padding: clamp(40px, 5vw, 80px) clamp(20px, 3.5vw, 56px);
   overflow: hidden;
   border-radius: var(--radius-lg);
   background:
