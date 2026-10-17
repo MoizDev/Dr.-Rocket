@@ -282,6 +282,9 @@
 }
 
 .heroActions {
+  /* Above the screenshot panel, so the download menu opens over it. */
+  position: relative;
+  z-index: 10;
   display: flex;
   flex-wrap: wrap;
   gap: 16px;

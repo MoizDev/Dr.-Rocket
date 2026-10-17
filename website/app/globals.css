@@ -131,7 +131,6 @@ kbd {
 :focus-visible {
   outline: 2.5px solid var(--blue);
   outline-offset: 3px;
-  border-radius: 8px;
 }
 
 .container {
