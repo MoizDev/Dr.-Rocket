@@ -35,7 +35,8 @@ pub enum Step {
     /// Press or release the primary button at a point, each in its own frame (`click` does
     /// both in one).
     /// Show this step of the visualizer in the active tab.
-    ShowVizStep(usize),
+    #[serde(rename = "show_viz_step")]
+    VizGoto(usize),
     MouseDown([f32; 2]),
     MouseUp([f32; 2]),
     /// Press at the first point, move to the second over several frames, release.
@@ -130,7 +131,14 @@ impl Automation {
     pub fn from_env() -> Option<Self> {
         let path = std::env::var("DRROCKET_AUTOMATION").ok()?;
         let text = std::fs::read_to_string(&path).ok()?;
-        let script: Script = serde_json::from_str(&text).map_err(|e| eprintln!("automation script error: {e}")).ok()?;
+        // A broken script must not leave a normal app running unattended: stop right away.
+        let script: Script = match serde_json::from_str(&text) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("automation script error: {e}");
+                std::process::exit(2);
+            }
+        };
         Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None, reset_modifiers: false, drag: None, recording: None })
     }
 
@@ -321,7 +329,7 @@ impl Automation {
                 let encoder = std::thread::spawn(move || encode(path, rx));
                 self.recording = Some(Recording { start: now, until: now + seconds, frames: Some(frames), encoder });
             }
-            Step::ShowVizStep(n) => {
+            Step::VizGoto(n) => {
                 if let Some(v) = app.active_tab_mut().and_then(|t| t.rk.viz.as_mut()) {
                     v.playing = false;
                     v.current = (*n).min(v.trace.steps.len().saturating_sub(1));

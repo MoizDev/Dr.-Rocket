@@ -233,8 +233,6 @@ struct FrameBox {
     top: bool,
     /// This call replaced its caller (a tail call): Racket doesn't keep the caller around.
     tail: bool,
-    /// Where the call that made this frame is in the program (for the connector label).
-    site: Option<(usize, usize)>,
     rect: Rect,
 }
 
@@ -391,7 +389,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
         top_rows.push(("result".into(), r.clone()));
     }
     let live_count = step.live_frames().count();
-    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, site: None, rect: Rect::NOTHING });
+    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, rect: Rect::NOTHING });
     let args_of = |f: &crate::racket::protocol::VizFrame| -> Vec<String> {
         let n = f.nargs.min(f.vars.len());
         f.vars[..n].iter().map(|(_, v)| label(trace, v, step_idx)).collect()
@@ -406,7 +404,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
         seen_live += 1;
         let newest = seen_live == live_count;
         let returns = if newest && step.kind == "return" { step.value.clone() } else { None };
-        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, top: false, tail, site: f.pos.map(|p| (p, f.span)), rect: Rect::NOTHING });
+        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, top: false, tail, rect: Rect::NOTHING });
         tail = false;
     }
     let heap_x = out.frames.iter().map(|f| f.rect.width()).fold(FRAME_W, f32::max) + 80.0;
@@ -663,7 +661,7 @@ pub struct DrawIo {
 }
 
 /// The diagram for the current step.
-pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, code: &dyn Fn(usize, usize) -> String, io: &mut DrawIo) {
+pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, io: &mut DrawIo) {
     let tk = Tokens::of(theme);
     let now = ui.input(|i| i.time);
     let cw = ui.ctx().fonts_mut(|f| f.glyph_width(&ui::mono(FONT), 'M'));
@@ -801,20 +799,19 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, c
             }
             let head = 6.0 * z;
             painter.add(Shape::convex_polygon(vec![b, b + vec2(-head * 0.6, -head), b + vec2(head * 0.6, -head)], color, Stroke::NONE));
-            // The label: the call that made this frame (or what it returns).
-            let label = if let Some(v) = &f.returns {
-                format!("returns {}", self::label(&view.trace, v, step_idx))
-            } else {
-                let call = f.site.map(|(p, n)| code(p, n)).unwrap_or_default();
-                let call: String = call.split_whitespace().collect::<Vec<_>>().join(" ");
-                let call = if call.chars().count() > 40 { format!("{}…", call.chars().take(39).collect::<String>()) } else { call };
-                if f.tail { format!("{call}  (tail call: replaces its caller)") } else { call }
+            // A short tag on the connector (the frame's title already shows the call): what
+            // the call returns, or that it replaced its caller. Kept to the frame column so it
+            // never runs into the data.
+            let label = match &f.returns {
+                Some(v) => format!("returns {}", self::label(&view.trace, v, step_idx)),
+                None if f.tail => "tail call".to_string(),
+                None => String::new(),
             };
             if !label.is_empty() {
-                // Truncated to the room left in the panel.
                 let at = pos2(a.x + 10.0 * z, (a.y + b.y) / 2.0);
-                let mut job = egui::text::LayoutJob::simple_singleline(label, ui::mono(11.5 * z), pp.fade(if returning { theme.success } else { theme.text_muted }));
-                job.wrap = egui::text::TextWrapping::truncate_at_width((rect.right() - at.x - 8.0).max(20.0));
+                let room = (r.right().max(p.right()) - at.x).max(20.0);
+                let mut job = egui::text::LayoutJob::simple_singleline(label, ui::ui_font(11.5 * z), pp.fade(if returning { theme.success } else { theme.text_muted }));
+                job.wrap = egui::text::TextWrapping::truncate_at_width(room);
                 let g = painter.layout_job(job);
                 painter.galley(pos2(at.x, at.y - g.size().y / 2.0), g, theme.text_muted);
             }
