@@ -274,7 +274,7 @@
 /* ------------------------------------------------------------------ hero */
 
 .hero {
-  padding-top: clamp(140px, 17vw, 210px);
+  padding-top: clamp(116px, 11vw, 160px);
 }
 
 /* Kiro's hero: a narrower block than the page, copy on the left, "What's new" on the right. */
@@ -311,7 +311,7 @@
 }
 
 .heroTitle {
-  font-size: clamp(42px, 5.4vw, 80px);
+  font-size: clamp(36px, 4vw, 64px);
   font-weight: 600;
   line-height: 1.04;
   letter-spacing: -0.04em;
@@ -319,7 +319,7 @@
 
 .heroLede {
   max-width: 640px;
-  margin-top: 30px;
+  margin-top: 24px;
   color: var(--ink);
   font-size: clamp(18px, 1.6vw, 21px);
   line-height: 1.55;
@@ -332,7 +332,7 @@
   display: flex;
   flex-wrap: wrap;
   gap: 16px;
-  margin-top: 40px;
+  margin-top: 32px;
 }
 
 .heroNote {
@@ -419,7 +419,7 @@
 
 .heroPanel {
   position: relative;
-  margin-top: 72px;
+  margin-top: 56px;
   padding: clamp(24px, 4.5vw, 64px) clamp(20px, 5vw, 72px) 0;
   overflow: hidden;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
