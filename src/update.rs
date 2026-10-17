@@ -553,11 +553,22 @@ fn old_path(exe: &Path) -> PathBuf {
     PathBuf::from(s)
 }
 
-/// Delete the executable a Windows update left behind (it was still running then).
+/// Delete the executable a Windows update left behind (it was still running then). Right after
+/// Restart to Update the old process may still be exiting, so keep trying for a while.
 fn cleanup_old_exe() {
-    if let Ok(exe) = std::env::current_exe() {
-        let _ = std::fs::remove_file(old_path(&exe));
+    let Ok(exe) = std::env::current_exe() else { return };
+    let old = old_path(&exe);
+    if !old.exists() {
+        return;
     }
+    let _ = std::thread::Builder::new().name("update-cleanup".into()).spawn(move || {
+        for _ in 0..120 {
+            if std::fs::remove_file(&old).is_ok() || !old.exists() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
 }
 
 /// Swap `new` in for the installed app, putting the old one back if anything fails.
