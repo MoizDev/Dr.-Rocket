@@ -6,7 +6,8 @@
 #
 #   --universal   one app for Apple Silicon and Intel Macs (needs the x86_64-apple-darwin
 #                 Rust target: `rustup target add x86_64-apple-darwin`)
-#   --dmg         also make target/Dr. Rocket-<version>.dmg (drag to Applications)
+#   --dmg         also make target/Dr.Rocket-<version>.dmg, the branded drag-to-Applications
+#                 window (needs dmgbuild: `pipx install dmgbuild`)
 #   --install     copy the app to ~/Applications
 #
 # Distribution signing (otherwise the app is signed ad hoc, which only runs on this Mac):
@@ -90,13 +91,15 @@ fi
 echo "Built $app"
 
 if [ "$dmg" = 1 ]; then
-  image="target/Dr. Rocket-$version.dmg"
-  staging="$(mktemp -d)/Dr. Rocket"
-  mkdir -p "$staging"
-  cp -R "$app" "$staging/"
-  ln -s /Applications "$staging/Applications"
+  image="target/Dr.Rocket-$version.dmg"
   rm -f "$image"
-  hdiutil create -volname "Dr. Rocket" -srcfolder "$staging" -fs HFS+ -format UDZO "$image" >/dev/null
+  # The branded window (background, arrow, icon positions) needs dmgbuild:
+  # `pipx install dmgbuild` or `pip install dmgbuild`.
+  if ! command -v dmgbuild >/dev/null 2>&1; then
+    echo "--dmg needs dmgbuild (pipx install dmgbuild)" >&2
+    exit 1
+  fi
+  dmgbuild -s tools/dmg/settings.py -D app="$app" "Dr. Rocket" "$image" >/dev/null
   if [ -n "$DEVELOPER_ID" ]; then
     codesign --force --timestamp -s "$DEVELOPER_ID" "$image"
   fi
