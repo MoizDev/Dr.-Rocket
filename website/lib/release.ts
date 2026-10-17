@@ -22,6 +22,8 @@ export type Download = {
 };
 
 export const VERSION: string = release.version;
+/** The version as the badge shows it: "1.0.0-beta.4" -> "V1.0.0 beta 4". */
+export const VERSION_LABEL: string = `V${VERSION.replace(/-beta\.(\d+)$/, " beta $1")}`;
 export const REPO: string = release.repo;
 
 const NAMES: Record<Os, { name: string; kind: string }> = {

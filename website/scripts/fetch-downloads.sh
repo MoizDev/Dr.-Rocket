@@ -1,8 +1,10 @@
 #!/bin/sh
 # Fetch the release binaries into public/downloads under stable names.
 #
-# The GitHub repo is private, so the site serves the files itself. Version, repo and file names
-# all come from release.json. Uses the gh CLI when it is logged in, otherwise the GitHub API
+# The GitHub repo is private, so the site serves the files itself. The version is the newest
+# GitHub release (prereleases included, drafts not) that has the macOS and Windows downloads
+# attached; it is written into release.json, which the pages read. Repo and file names come
+# from release.json. Uses the gh CLI when it is logged in, otherwise the GitHub API
 # with $GITHUB_TOKEN (for CI or a Vercel build). An asset missing from the release (say, a
 # Linux build that hasn't been attached yet) is skipped with a warning, not an error.
 #
@@ -15,9 +17,7 @@ manifest="$here/release.json"
 
 field() { node -e "const r=require(process.argv[1]); const v=process.argv[2].split('.').reduce((o,k)=>o[k],r); console.log(String(v).replaceAll('{version}', r.version))" "$manifest" "$1"; }
 
-version="$(field version)"
 repo="$(field repo)"
-tag="v$version"
 mkdir -p "$out"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -28,6 +28,34 @@ if [ "$use_gh" = 0 ] && [ -z "${GITHUB_TOKEN:-}" ]; then
   echo "fetch-downloads: need a logged-in gh CLI or GITHUB_TOKEN to read $repo" >&2
   exit 1
 fi
+
+# The newest release with the macOS and Windows files attached becomes the site's version.
+if [ "$use_gh" = 1 ]; then
+  gh api "repos/$repo/releases?per_page=20" >"$tmp/releases.json"
+else
+  curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" "https://api.github.com/repos/$repo/releases?per_page=20" >"$tmp/releases.json"
+fi
+node -e '
+  const fs = require("fs");
+  const [manifest, list] = process.argv.slice(1);
+  const r = JSON.parse(fs.readFileSync(manifest, "utf8"));
+  const releases = JSON.parse(fs.readFileSync(list, "utf8")).filter((x) => !x.draft);
+  const ready = releases.find((x) => {
+    const v = x.tag_name.replace(/^v/, "");
+    const names = new Set(x.assets.map((a) => a.name));
+    return ["mac", "windows"].every((os) => names.has(r.downloads[os].asset.replaceAll("{version}", v)));
+  });
+  if (!ready) { console.error("fetch-downloads: no release has the macOS and Windows files yet"); process.exit(1); }
+  const v = ready.tag_name.replace(/^v/, "");
+  if (v !== r.version) {
+    console.log(`  version ${r.version} -> ${v} (newest release on GitHub)`);
+    r.version = v;
+    fs.writeFileSync(manifest, JSON.stringify(r, null, 2) + "\n");
+  }
+' "$manifest" "$tmp/releases.json"
+version="$(field version)"
+tag="v$version"
+echo "  release $tag"
 
 fetch() { # fetch ASSET DEST -> 0 when downloaded
   asset="$1"; dest="$2"

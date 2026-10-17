@@ -3,7 +3,7 @@ import { ImageResponse } from "next/og";
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import sharp from "sharp";
-import { VERSION } from "@/lib/release";
+import { VERSION_LABEL } from "@/lib/release";
 
 export const alt = "Dr. Rocket: everything DrRacket does, at native speed. A Racket IDE for macOS, Windows and Linux.";
 export const size = { width: 1200, height: 630 };
@@ -19,7 +19,6 @@ export default async function Image() {
     // The screenshots are Display P3; convert to sRGB, which is all a PNG preview can show.
     sharp(join(process.cwd(), "app", "shots", "editor.png")).resize(1240).toColourspace("srgb").jpeg({ quality: 88 }).toBuffer(),
   ]);
-  const version = VERSION.replace(/-beta\.\d+$/, "");
 
   return new ImageResponse(
     (
@@ -31,7 +30,7 @@ export default async function Image() {
           </div>
           <div style={{ display: "flex", gap: 8, marginTop: 52 }}>
             <div style={{ fontFamily: "Mono", fontSize: 18, color: "#fff", background: "#2b5cff", padding: "7px 14px", borderRadius: 9 }}>
-              {`V${version} beta`}
+              {VERSION_LABEL}
             </div>
             <div style={{ fontFamily: "Mono", fontSize: 18, color: "#2b5cff", background: "rgba(43,92,255,0.1)", padding: "7px 14px", borderRadius: 9 }}>
               OSS

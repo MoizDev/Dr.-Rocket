@@ -4,7 +4,7 @@ import Reveal from "@/components/Reveal";
 import VizVideo from "@/components/VizVideo";
 import HeroTitle from "@/components/HeroTitle";
 import { ArrowRight, ArrowUpRight, GitHubIcon, Glyph, type GlyphName, OsIcon, RocketMark } from "@/components/icons";
-import { DOWNLOADS, REPO, VERSION } from "@/lib/release";
+import { DOWNLOADS, REPO, VERSION, VERSION_LABEL } from "@/lib/release";
 import s from "./page.module.css";
 
 import checksyntax from "./shots/checksyntax.png";
@@ -59,7 +59,7 @@ export default function Home() {
           <div className={`container ${s.heroGrid}`}>
             <div className={s.heroCopy}>
               <p className={s.badges} data-reveal>
-                <span className={s.pill}>V{VERSION.replace(/-beta\.\d+$/, "")} beta</span>
+                <span className={s.pill}>{VERSION_LABEL}</span>
                 <span className={`${s.pill} ${s.pillSoft}`}>OSS</span>
               </p>
               <HeroTitle className={s.heroTitle} text={"Everything DrRacket does,\nat native speed."} />

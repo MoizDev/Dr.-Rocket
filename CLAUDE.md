@@ -17,9 +17,11 @@ vercel deploy --prebuilt --prod
 
 Don't use a plain `vercel deploy` or git-triggered builds: they can't fetch the downloads.
 
-For a new app release, first attach the files to the GitHub release (macOS DMG via
-`tools/bundle.sh --universal --dmg`, Windows and Linux via the Release workflow), then bump
-`version` in `website/release.json` and deploy as above.
+For a new app release, attach the files to the GitHub release (macOS DMG via
+`tools/bundle.sh --universal --dmg`, Windows and Linux via the Release workflow), then deploy as
+above. The build takes its version from GitHub: the newest release with the macOS and Windows
+files attached. It writes that into `website/release.json` (commit the change), and the badge,
+downloads and share image all follow it.
 
 The download files keep the same URLs across releases, so after replacing one run
 `vercel cache purge --type cdn --yes` (in `website/`), or the CDN keeps serving the old file.
