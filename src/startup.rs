@@ -170,10 +170,17 @@ pub fn set_adapter(info: &wgpu::AdapterInfo) {
         DeviceType::DiscreteGpu => "GPU",
         _ => "GPU",
     };
-    let _ = ADAPTER.set(format!("{} via {:?} ({kind})", info.name, info.backend));
+    let api = match info.backend {
+        Backend::Dx12 => "DirectX 12",
+        Backend::Vulkan => "Vulkan",
+        Backend::Gl => "OpenGL",
+        Backend::Metal => "Metal",
+        _ => "an unknown API",
+    };
+    let _ = ADAPTER.set(format!("{} through {api} ({kind})", info.name));
 }
 
-/// "Intel(R) UHD Graphics 620 via Dx12 (integrated GPU)", once known.
+/// "Intel(R) UHD Graphics 620 through DirectX 12 (integrated GPU)", once known.
 pub fn adapter() -> Option<&'static str> {
     ADAPTER.get().map(String::as_str)
 }
