@@ -165,44 +165,50 @@
   display: flex;
   align-items: center;
   gap: 24px;
-  max-width: calc(var(--max) + 48px);
+  /* As wide as the hero's content (plus the 1px border), so its edges line up with the
+     headline. */
+  max-width: 1282px;
   height: 68px;
   margin: 0 auto;
-  padding: 0 14px 0 24px;
+  /* At rest the bar is invisible: the logo and the button sit on the content edges. */
+  padding: 0;
   border: 1px solid transparent;
   border-radius: 22px;
   pointer-events: auto;
   transition:
+    max-width 0.5s var(--ease-out),
+    height 0.5s var(--ease-out),
+    padding 0.5s var(--ease-out),
+    border-radius 0.5s var(--ease-out),
     background-color 0.3s ease,
     border-color 0.3s ease,
     box-shadow 0.3s ease;
 }
 
-/* Kiro's header turns into a floating pill once the page moves. */
-@supports (animation-timeline: scroll()) {
-  .nav {
-    animation: pill linear both;
-    animation-timeline: scroll(root);
-    animation-range: 0 120px;
-  }
+/* Once the page moves, the header compacts into a floating pill. */
+:global(html[data-scrolled]) .nav {
+  max-width: 1060px;
+  height: 56px;
+  padding: 0 10px 0 20px;
+  border-radius: 18px;
+  background: rgb(255 255 255 / 0.82);
+  border-color: var(--line);
+  box-shadow: var(--shadow-soft);
+  backdrop-filter: saturate(1.6) blur(16px);
+  -webkit-backdrop-filter: saturate(1.6) blur(16px);
 }
 
-@supports not (animation-timeline: scroll()) {
-  .nav {
-    background: rgb(255 255 255 / 0.82);
-    border-color: var(--line);
-    box-shadow: var(--shadow-soft);
-    backdrop-filter: saturate(1.6) blur(16px);
-    -webkit-backdrop-filter: saturate(1.6) blur(16px);
-  }
+.brand {
+  transition: font-size 0.5s var(--ease-out);
 }
 
-@keyframes pill {
-  to {
-    background: rgb(255 255 255 / 0.82);
-    border-color: var(--line);
-    box-shadow: var(--shadow-soft);
-    backdrop-filter: saturate(1.6) blur(16px);
+:global(html[data-scrolled]) .brand {
+  font-size: 19px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav {
+    transition: none;
   }
 }
 

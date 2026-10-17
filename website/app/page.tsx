@@ -1,5 +1,6 @@
 import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
+import NavScroll from "@/components/NavScroll";
 import Reveal from "@/components/Reveal";
 import VizVideo from "@/components/VizVideo";
 import HeroTitle from "@/components/HeroTitle";
@@ -32,6 +33,7 @@ export default function Home() {
   return (
     <>
       <Reveal />
+      <NavScroll />
       <a className={s.skip} href="#main">
         Skip to content
       </a>
