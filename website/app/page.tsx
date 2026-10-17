@@ -1,8 +1,8 @@
 import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import Reveal from "@/components/Reveal";
-import { ArrowRight, OsIcon, RocketMark } from "@/components/icons";
-import { DOWNLOADS, VERSION } from "@/lib/release";
+import { ArrowRight, GitHubIcon, OsIcon, RocketMark } from "@/components/icons";
+import { DOWNLOADS, REPO, VERSION } from "@/lib/release";
 import s from "./page.module.css";
 
 import checksyntax from "./shots/checksyntax.png";
@@ -69,8 +69,8 @@ export default function Home() {
               </p>
               <div className={s.heroActions} data-reveal style={{ "--reveal-delay": 180 } as React.CSSProperties}>
                 <Download />
-                <a className={s.ghost} href="#visualizer">
-                  See the Visualizer <ArrowRight />
+                <a className={s.ghost} href={`https://github.com/${REPO}`} target="_blank" rel="noopener">
+                  <GitHubIcon /> View on GitHub
                 </a>
               </div>
               <p className={s.heroNote} data-reveal style={{ "--reveal-delay": 220 } as React.CSSProperties}>
