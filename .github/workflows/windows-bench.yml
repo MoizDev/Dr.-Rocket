@@ -1,0 +1,24 @@
+# Frame-rate benchmark on Windows (GitHub's runners have no GPU, so this measures the
+# software renderer): tools/bench/editor.json with DRROCKET_FRAME_STATS. Manual only.
+name: Windows bench
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Bench
+        shell: pwsh
+        run: |
+          $env:DRROCKET_FRAME_STATS = "1"
+          $env:DRROCKET_AUTOMATION = "tools/bench/editor.json"
+          $p = Start-Process target/release/drrocket.exe -PassThru -Wait -RedirectStandardError err.txt -RedirectStandardOutput out.txt
+          "exit $($p.ExitCode)"
+          Get-Content err.txt

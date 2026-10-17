@@ -1,0 +1,1 @@
+{"window":[1480,940],"steps":[{"open_folder":"racket"},{"open":"racket/visualize.rkt"},{"wait_ms":3000},{"log":"phase: idle"},{"wait_ms":8000},{"log":"phase: end"},{"quit":true}]}

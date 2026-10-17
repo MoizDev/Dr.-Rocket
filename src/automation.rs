@@ -160,7 +160,6 @@ impl Automation {
             raw.events.push(Event::ModifiersChanged(Modifiers::NONE));
             self.reset_modifiers = false;
         }
-        ctx.request_repaint();
         if let Some(rec) = &mut self.recording {
             if now < rec.until
                 && let Some(frames) = &rec.frames
@@ -180,15 +179,22 @@ impl Automation {
             }
             self.recording = None;
         }
+        // Keep frames coming only while the script needs them, so idle stretches (waits, the
+        // end of the script) measure the app's own repainting, not the harness's.
         if self.wait_frames > 0 {
             self.wait_frames -= 1;
+            ctx.request_repaint();
             return;
         }
         if let Some(t) = self.wait_until_time {
             if now < t {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(t - now));
                 return;
             }
             self.wait_until_time = None;
+        }
+        if self.index < self.script.steps.len() {
+            ctx.request_repaint();
         }
         if let Some(done) = &self.shot_done {
             if !done.load(Ordering::SeqCst) {

@@ -388,6 +388,12 @@ pub struct TerminalTab {
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>, open: Vec<PathBuf>) -> Self {
         crate::platform::setup_window(cc);
+        if std::env::var_os("DRROCKET_FRAME_STATS").is_some()
+            && let Some(rs) = &cc.wgpu_render_state
+        {
+            let info = rs.adapter.get_info();
+            eprintln!("renderer: {} ({:?}, {:?}, driver {} {})", info.name, info.backend, info.device_type, info.driver, info.driver_info);
+        }
         crate::platform::set_repaint_context(&cc.egui_ctx);
         crate::platform::install_menu(crate::ui::brand::APP_NAME, &crate::commands::menu_specs());
         egui_extras::install_image_loaders(&cc.egui_ctx);
@@ -1379,6 +1385,11 @@ impl eframe::App for App {
             let scrolls = ctx.input(|i| i.events.iter().filter(|e| matches!(e, egui::Event::MouseWheel { .. })).count() as u32);
             let fill = ctx.fonts(|f| f.font_atlas_fill_ratio());
             stats.record(started.elapsed(), frame.info().cpu_usage, scrolls, fill);
+            if std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "causes") {
+                for cause in ctx.repaint_causes() {
+                    eprintln!("repaint cause: {cause}");
+                }
+            }
             // `DRROCKET_FRAME_STATS=continuous`: redraw every frame to measure render throughput.
             if std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "continuous") {
                 ctx.request_repaint();
