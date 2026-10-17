@@ -10,7 +10,8 @@
 mod explain;
 mod sexp;
 
-pub use explain::{Piece, explain, inline_note, output_until, show_in};
+pub use explain::{Piece, explain, inline_note, output_until, show_in, work_done};
+pub use explain::{Seg, seg_text, waiting};
 
 use crate::racket::protocol::{VizObject, VizRef, VizStep};
 use crate::theme::{Theme, mix, with_alpha};
@@ -43,9 +44,17 @@ pub struct Trace {
     pub shapes: HashMap<String, Vec<String>>,
     /// Calls on the stack at each step.
     depths: Vec<usize>,
+    /// The program that ran, and its forms (for what a waiting call will do next).
+    pub source: Vec<char>,
+    pub forms: Vec<sexp::Node>,
 }
 
 impl Trace {
+    pub fn set_source(&mut self, text: &str) {
+        self.source = text.chars().collect();
+        self.forms = sexp::read_all(&self.source);
+    }
+
     pub fn push(&mut self, mut step: VizStep) {
         // Consecutive definitions of functions read as one step ("Defining f and g").
         let fn_define = |s: &VizStep| s.kind == "define" && s.name.as_deref().is_some_and(|names| names.split(", ").all(|n| s.globals.iter().any(|(g, v)| g == n && matches!(v, VizRef::Prim { k, .. } if k == "fn"))));
@@ -274,6 +283,19 @@ impl VisualizerView {
 const FRAME_W: f32 = 240.0;
 const ROW_H: f32 = 26.0;
 const HEADER_H: f32 = 32.0;
+/// Call cards: the title, each variable, the question being asked (a decision diamond), and
+/// the footer with what it does once the call it's waiting on returns.
+const CARD_HEAD: f32 = 38.0;
+const CARD_ROW: f32 = 24.0;
+const CARD_PAD: f32 = 10.0;
+const ASK_H: f32 = 32.0;
+const FOOTER_H: f32 = 36.0;
+/// Content's inset from the card's left edge.
+const CARD_INSET: f32 = 16.0;
+/// The top level without data of its own: a capsule.
+const CAPSULE_H: f32 = 32.0;
+/// The slot in the footer for the awaited value, in characters of the box font.
+const SLOT_CHARS: f32 = 3.0;
 const FONT: f32 = 13.5;
 /// Vertical gap between frames, room for the connector and its label.
 const FRAME_GAP: f32 = 52.0;
@@ -299,7 +321,41 @@ struct FrameBox {
     top: bool,
     /// This call replaced its caller (a tail call): Racket doesn't keep the caller around.
     tail: bool,
+    /// What it will do when the call it's waiting on returns: `then (bst-insert 37 ▢)`.
+    then: Option<Vec<Seg>>,
+    /// The awaited value, as it comes back (on the step where the call below returns).
+    filled: Option<VizRef>,
+    /// The question the running call is asking, and its answer (on a question step).
+    asks: Option<(String, Option<bool>)>,
     rect: Rect,
+}
+
+impl FrameBox {
+    fn capsule(&self) -> bool {
+        self.top && self.rows.is_empty() && self.then.is_none() && self.asks.is_none()
+    }
+
+    fn rows(&self) -> usize {
+        let rows = self.rows.len() + self.returns.is_some() as usize;
+        if self.top { rows } else { rows.max(1) }
+    }
+
+    fn state(&self, kind: &str) -> FrameState {
+        match (self.current, self.returns.is_some()) {
+            (true, true) => FrameState::Returning,
+            (true, false) if self.top && kind == "end" => FrameState::Done,
+            (true, false) => FrameState::Running,
+            (false, _) => FrameState::Waiting,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FrameState {
+    Running,
+    Waiting,
+    Returning,
+    Done,
 }
 
 #[derive(Clone)]
@@ -446,10 +502,23 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
     // tail call are gone in Racket, so they aren't drawn; the call that replaced them says so.
     let mut y = 0.0;
     let mut push = |out: &mut Layout, mut f: FrameBox| {
-        let title_w = text_w(cw, &format!("({} {})", f.name, f.args.join(" "))) + 28.0;
-        let row_w = f.rows.iter().map(|(n, v)| text_w(cw, n) + text_w(cw, &label(trace, v, step_idx)).min(text_w(cw, &"x".repeat(18))) + 56.0).fold(0.0, f32::max);
-        let w = title_w.max(row_w).clamp(FRAME_W, 420.0);
-        let h = if f.top && f.rows.is_empty() { HEADER_H } else { HEADER_H + (f.rows.len() + f.returns.is_some() as usize).max(1) as f32 * ROW_H + 8.0 };
+        let (w, h) = if f.capsule() {
+            (text_w(cw, &f.name) + 130.0, CAPSULE_H)
+        } else {
+            // Title and state tag; rows; the question; the footer.
+            let title_w = text_w(cw, &format!("({} {})", f.name, f.args.join(" "))) + CARD_INSET + 104.0;
+            let row_w = f.rows.iter().map(|(n, v)| text_w(cw, n) + text_w(cw, &label(trace, v, step_idx)).min(text_w(cw, &"x".repeat(18))) + CARD_INSET + 64.0).fold(0.0, f32::max);
+            let ask_w = f.asks.as_ref().map_or(0.0, |(q, _)| text_w(cw, q) + CARD_INSET + 90.0);
+            let then_w = f.then.as_ref().map_or(0.0, |t| {
+                let slot = f.filled.as_ref().map_or(SLOT_CHARS, |v| label(trace, v, step_idx).chars().count() as f32 + 1.5);
+                text_w(cw, &seg_text(t)) + (slot - 1.0) * cw + CARD_INSET + 84.0
+            });
+            let w = title_w.max(row_w).max(ask_w).max(then_w).clamp(FRAME_W, 440.0);
+            let rows = f.rows();
+            let body = if rows == 0 { 0.0 } else { rows as f32 * CARD_ROW + CARD_PAD };
+            let h = CARD_HEAD + body + if f.asks.is_some() { ASK_H } else { 0.0 } + if f.then.is_some() { FOOTER_H } else { 0.0 };
+            (w, h.max(CARD_HEAD + CARD_PAD))
+        };
         f.rect = Rect::from_min_size(pos2(0.0, y), vec2(w, h));
         y += h + FRAME_GAP;
         out.frames.push(f);
@@ -461,7 +530,23 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
         top_rows.push(("result".into(), r.clone()));
     }
     let live_count = step.live_frames().count();
-    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, rect: Rect::NOTHING });
+    let then = waiting(trace, step, None);
+    // The value coming back into a waiting call's slot: on a return, for the caller.
+    let lands = |live_index: usize| (step.kind == "return" && live_index + 1 == live_count).then(|| step.value.clone()).flatten();
+    let filled = lands(0);
+    // The question the running code is asking (top level or a call).
+    let asks = (step.kind == "question")
+        .then(|| {
+            let p = step.pos?;
+            let q: String = trace.source.get(p..p + step.span)?.iter().collect();
+            let answer = match &step.value {
+                Some(VizRef::Prim { v, .. }) => Some(v != "#false"),
+                _ => None,
+            };
+            Some((q.split_whitespace().collect::<Vec<_>>().join(" "), answer))
+        })
+        .flatten();
+    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, then, filled, asks: if live_count == 0 { asks.clone() } else { None }, rect: Rect::NOTHING });
     let args_of = |f: &crate::racket::protocol::VizFrame| -> Vec<String> {
         let n = f.nargs.min(f.vars.len());
         f.vars[..n].iter().map(|(_, v)| label(trace, v, step_idx)).collect()
@@ -476,8 +561,15 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
         seen_live += 1;
         let newest = seen_live == live_count;
         let returns = if newest && step.kind == "return" { step.value.clone() } else { None };
-        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, top: false, tail, rect: Rect::NOTHING });
+        let then = if newest { None } else { waiting(trace, step, Some(k)) };
+        let filled = if newest { None } else { lands(seen_live) };
+        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, top: false, tail, then, filled, asks: if newest { asks.clone() } else { None }, rect: Rect::NOTHING });
         tail = false;
+    }
+    // One column, centred on a common axis (the connectors run straight where they can).
+    let column = out.frames.iter().map(|f| f.rect.width()).fold(0.0, f32::max);
+    for f in &mut out.frames {
+        f.rect = f.rect.translate(vec2(((column - f.rect.width()) / 2.0).round(), 0.0));
     }
     let heap_x = out.frames.iter().map(|f| f.rect.width()).fold(FRAME_W, f32::max) + 80.0;
     let mut roots: Vec<&VizRef> = Vec::new();
@@ -676,29 +768,70 @@ impl Pen<'_> {
         mix(self.tk.island, self.theme.text, 0.035)
     }
     /// A value slot: primitives as text, objects as a dot (the arrow is drawn later).
-    fn value(&self, r: &VizRef, at: Pos2, align: Align2, arrows: &mut Vec<Arrow>, from_current: bool) {
+    /// Returns where it starts on the left.
+    fn value(&self, r: &VizRef, at: Pos2, align: Align2, arrows: &mut Vec<Arrow>, from_current: bool) -> f32 {
         match r {
             VizRef::Prim { v, k } => {
                 let text = if k == "fn" { format!("ƒ {v}") } else { prim_display(v, k).to_string() };
-                self.ui.painter().text(at, align, text, self.mono(), self.fade(self.prim_color(k)));
+                self.ui.painter().text(at, align, text, self.mono(), self.fade(self.prim_color(k))).left()
             }
             VizRef::Object { id } => {
                 let dot = if align == Align2::CENTER_CENTER { at } else { at + vec2(-4.0 * self.zoom, 0.0) };
                 self.ui.painter().circle_filled(dot, 3.5 * self.zoom, self.fade(self.theme.text_accent));
                 arrows.push(Arrow { from: dot, to: *id, strong: from_current, tree: false, label: None, alpha: self.alpha });
+                dot.x - 3.5 * self.zoom
             }
         }
     }
     /// A frame row's value, right-aligned at `at`: primitives as text; objects as their name
     /// (`node 34`, muted) and a dot the arrow leaves from.
-    fn slot(&self, r: &VizRef, trace: &Trace, step: usize, at: Pos2, arrows: &mut Vec<Arrow>, from_current: bool) {
-        self.value(r, at, Align2::RIGHT_CENTER, arrows, from_current);
+    /// Returns where it starts on the left.
+    fn slot(&self, r: &VizRef, trace: &Trace, step: usize, at: Pos2, arrows: &mut Vec<Arrow>, from_current: bool) -> f32 {
+        let left = self.value(r, at, Align2::RIGHT_CENTER, arrows, from_current);
         if let VizRef::Object { .. } = r {
             let name = label(trace, r, step);
             let name = if name.chars().count() > 18 { format!("{}…", name.chars().take(17).collect::<String>()) } else { name };
-            self.ui.painter().text(at - vec2(14.0 * self.zoom, 0.0), Align2::RIGHT_CENTER, name, self.mono(), self.fade(self.theme.text_muted));
+            return self.ui.painter().text(at - vec2(14.0 * self.zoom, 0.0), Align2::RIGHT_CENTER, name, self.mono(), self.fade(self.theme.text_muted)).left();
+        }
+        left
+    }
+}
+
+/// Program text in a card, coloured like the editor: brackets muted, the function after an
+/// open bracket in the function colour, numbers as numbers. Code after the slot (not run yet)
+/// is a little quieter. `open`: the text before ended with an open bracket.
+fn code_job(job: &mut egui::text::LayoutJob, text: &str, font: &FontId, open: &mut bool, fade: impl Fn(Color32) -> Color32, theme: &Theme, later: bool) {
+    let quiet = |c: Color32| if later { mix(c, theme.text_muted, 0.45) } else { c };
+    let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: fade(quiet(c)), ..Default::default() };
+    let mut word = String::new();
+    let flush = |word: &mut String, job: &mut egui::text::LayoutJob, open: &mut bool| {
+        if word.is_empty() {
+            return;
+        }
+        let c = if *open {
+            theme.syntax.function.color
+        } else if word.parse::<f64>().is_ok() {
+            theme.syntax.number.color
+        } else {
+            theme.text
+        };
+        job.append(word, 0.0, fmt(c));
+        word.clear();
+        *open = false;
+    };
+    for ch in text.chars() {
+        match ch {
+            '(' | '[' | '{' | ')' | ']' | '}' | ' ' => {
+                flush(&mut word, job, open);
+                job.append(&ch.to_string(), 0.0, fmt(theme.text_muted));
+                if ch != ' ' {
+                    *open = matches!(ch, '(' | '[' | '{');
+                }
+            }
+            c => word.push(c),
         }
     }
+    flush(&mut word, job, open);
 }
 
 struct Arrow {
@@ -852,7 +985,9 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
 
     // Frames, with connectors from each caller to its callee labelled with the call.
     let z = view.zoom;
-    let mut prev: Option<Rect> = None;
+    let kind = view.trace.steps.get(step_idx).map(|s| s.kind.clone()).unwrap_or_default();
+    // The previous card, and its slot for the awaited value (the connector leaves from there).
+    let mut prev: Option<(Rect, Option<Rect>)> = None;
     for f in &lay.frames {
         let (min, alpha) = pos_of(Key::Frame(f.key), f.rect.min);
         // Callers waiting on the running call recede a little.
@@ -860,46 +995,117 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
         let pp = Pen { ui: &child_ui, cw, theme, tk, origin, zoom: z, alpha };
         let r = pp.r(Rect::from_min_size(min, f.rect.size()));
         let painter = child_ui.painter();
-        if let Some(p) = prev {
-            let (a, b) = (pos2(p.center().x, p.bottom()), pos2(p.center().x, r.top()));
+        let state = f.state(&kind);
+        if let Some((p, slot)) = prev {
+            // From the caller's slot (or its bottom) to this card; a value coming back
+            // points up into the slot.
             let returning = f.returns.is_some();
             let color = pp.fade(if returning { theme.success } else { mix(tk.subtle_border, theme.text_accent, 0.6) });
-            if f.tail {
-                painter.add(Shape::dashed_line(&[a, b - vec2(0.0, 6.0 * z)], Stroke::new(1.3, color), 5.0 * z, 4.0 * z));
-            } else {
-                painter.line_segment([a, b - vec2(0.0, 6.0 * z)], Stroke::new(1.3, color));
-            }
             let head = 6.0 * z;
-            painter.add(Shape::convex_polygon(vec![b, b + vec2(-head * 0.6, -head), b + vec2(head * 0.6, -head)], color, Stroke::NONE));
-            // A short tag on the connector (the frame's title already shows the call): what
-            // the call returns, or that it replaced its caller. Kept to the frame column so it
-            // never runs into the data.
-            let label = match &f.returns {
-                Some(v) => format!("returns {}", self::label(&view.trace, v, step_idx)),
-                None if f.tail => "tail call".to_string(),
-                None => String::new(),
-            };
-            if !label.is_empty() {
-                let at = pos2(a.x + 10.0 * z, (a.y + b.y) / 2.0);
-                let room = (r.right().max(p.right()) - at.x).max(20.0);
-                let mut job = egui::text::LayoutJob::simple_singleline(label, ui::ui_font(11.5 * z), pp.fade(if returning { theme.success } else { theme.text_muted }));
-                job.wrap = egui::text::TextWrapping::truncate_at_width(room);
-                let g = painter.layout_job(job);
-                painter.galley(pos2(at.x, at.y - g.size().y / 2.0), g, theme.text_muted);
+            let from = slot.map_or(pos2(p.center().x, p.bottom()), |s| pos2(s.center().x, s.bottom() + 2.0 * z));
+            let to = pos2(r.center().x, r.top());
+            let (a, b) = if returning { (from + vec2(0.0, head), to) } else { (from, to - vec2(0.0, head)) };
+            let bend = (b.y - a.y) * 0.5;
+            let curve: Vec<Pos2> = (0..=24)
+                .map(|i| {
+                    let t = i as f32 / 24.0;
+                    let u = 1.0 - t;
+                    let (c1, c2) = (a + vec2(0.0, bend), b - vec2(0.0, bend));
+                    pos2(
+                        u * u * u * a.x + 3.0 * u * u * t * c1.x + 3.0 * u * t * t * c2.x + t * t * t * b.x,
+                        u * u * u * a.y + 3.0 * u * u * t * c1.y + 3.0 * u * t * t * c2.y + t * t * t * b.y,
+                    )
+                })
+                .collect();
+            if f.tail {
+                painter.extend(Shape::dashed_line(&curve, Stroke::new(1.3, color), 5.0 * z, 4.0 * z));
+            } else {
+                painter.add(Shape::line(curve.clone(), Stroke::new(1.3, color)));
+            }
+            let tip = if returning { vec![from, from + vec2(-head * 0.6, head), from + vec2(head * 0.6, head)] } else { vec![to, to + vec2(-head * 0.6, -head), to + vec2(head * 0.6, -head)] };
+            painter.add(Shape::convex_polygon(tip, color, Stroke::NONE));
+            // A tail call says so on its connector, in a pill on the curve (so it never needs
+            // room beside it). What a call returns needs no tag: it's in the returning card,
+            // and lands in the caller's slot.
+            if f.tail && !returning {
+                let mid = curve[curve.len() / 2];
+                let g = painter.layout_no_wrap("tail call".into(), ui::medium(11.0 * z), pp.fade(theme.text_muted));
+                let pill = Rect::from_center_size(mid, g.size() + vec2(14.0 * z, 6.0 * z));
+                painter.rect(pill, CornerRadius::same((pill.height() / 2.0) as u8), pp.fade(theme.background), Stroke::new(1.0, pp.fade(tk.subtle_border)), StrokeKind::Inside);
+                painter.galley(pill.center() - g.size() / 2.0, g, theme.text_muted);
             }
         }
-        prev = Some(r);
-        let radius = CornerRadius::same((8.0 * z) as u8);
-        let border = if f.current { theme.text_accent } else { tk.subtle_border };
-        let bg = if f.top { with_alpha(pp.box_bg(), 170) } else { pp.box_bg() };
-        painter.rect(r, radius, pp.fade(bg), Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
-        // Title: `(name arg …)` for calls.
-        let title_y = r.top() + HEADER_H / 2.0 * z;
+        let radius = if f.capsule() { CornerRadius::same((r.height() / 2.0).min(255.0) as u8) } else { CornerRadius::same((12.0 * z) as u8) };
+        let accent = match state {
+            FrameState::Running => theme.text_accent,
+            FrameState::Returning | FrameState::Done => theme.success,
+            FrameState::Waiting => theme.text_muted,
+        };
+        // Depth: a soft shadow under every card; the running one glows in its colour.
+        let shadow = if f.current {
+            egui::epaint::Shadow { offset: [0, 2], blur: (18.0 * z).min(255.0) as u8, spread: 0, color: pp.fade(with_alpha(accent, if theme.dark { 70 } else { 55 })) }
+        } else {
+            egui::epaint::Shadow { offset: [0, (3.0 * z) as i8], blur: (12.0 * z).min(255.0) as u8, spread: 0, color: pp.fade(Color32::from_black_alpha(if theme.dark { 70 } else { 22 })) }
+        };
+        painter.add(shadow.as_shape(r, radius));
+        let border = if f.current { accent } else { tk.subtle_border };
+        let bg = if f.top { mix(pp.box_bg(), theme.background, 0.3) } else { pp.box_bg() };
+        painter.rect_filled(r, radius, pp.fade(bg));
+
+        // State: a pill for running / returning / done; waiting is quieter (an hourglass).
+        let tag_at = |cy: f32| -> f32 {
+            match state {
+                FrameState::Waiting => {
+                    let g = painter.layout_no_wrap("waiting".into(), ui::medium(11.0 * z), pp.fade(theme.text_muted));
+                    let x = r.right() - 14.0 * z - g.size().x;
+                    let left = painter.text(pos2(x - 4.0 * z, cy), Align2::RIGHT_CENTER, ic::HOURGLASS_EMPTY, ui::icon_font(13.0 * z), pp.fade(theme.text_muted)).left();
+                    painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text_muted);
+                    left
+                }
+                _ => {
+                    let tag = match state {
+                        FrameState::Running => "RUNNING",
+                        FrameState::Returning => "RETURNING",
+                        _ => "DONE",
+                    };
+                    let g = painter.layout_no_wrap(tag.into(), ui::semibold(9.5 * z), pp.fade(accent));
+                    let tr = Rect::from_min_size(pos2(r.right() - 12.0 * z - g.size().x - 14.0 * z, cy - 9.0 * z), vec2(g.size().x + 14.0 * z, 18.0 * z));
+                    painter.rect_filled(tr, CornerRadius::same((9.0 * z) as u8), pp.fade(with_alpha(accent, 36)));
+                    painter.galley(pos2(tr.left() + 7.0 * z, tr.center().y - g.size().y / 2.0), g, accent);
+                    tr.left()
+                }
+            }
+        };
+
+        // The top level with nothing of its own: a capsule.
+        if f.capsule() {
+            let cy = r.center().y;
+            let tag_left = tag_at(cy);
+            let icon = painter.text(pos2(r.left() + 14.0 * z, cy), Align2::LEFT_CENTER, ic::HOME, ui::icon_font(14.0 * z), pp.fade(theme.text_muted));
+            let mut job = egui::text::LayoutJob::simple_singleline(f.name.clone(), pp.label(12.5), pp.fade(theme.text_muted));
+            job.wrap = egui::text::TextWrapping::truncate_at_width((tag_left - 8.0 * z - icon.right() - 6.0 * z).max(20.0));
+            let g = painter.layout_job(job);
+            painter.galley(pos2(icon.right() + 6.0 * z, cy - g.size().y / 2.0), g, theme.text_muted);
+            painter.rect_stroke(r, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
+            prev = Some((r, None));
+            continue;
+        }
+
+        // Header: `(name arg …)` (or the top level), and the state.
+        let left = r.left() + CARD_INSET * z;
+        let title_y = r.top() + CARD_HEAD / 2.0 * z;
+        let tag_left = tag_at(title_y);
+        let title_room = (tag_left - 10.0 * z - left).max(20.0);
         if f.top {
-            painter.text(pos2(r.left() + 12.0 * z, title_y), Align2::LEFT_CENTER, &f.name, pp.label(12.5), pp.fade(theme.text_muted));
+            let icon = painter.text(pos2(left, title_y), Align2::LEFT_CENTER, ic::HOME, ui::icon_font(14.0 * z), pp.fade(theme.text_muted));
+            let mut job = egui::text::LayoutJob::simple_singleline(f.name.clone(), pp.label(12.5), pp.fade(theme.text_muted));
+            job.wrap = egui::text::TextWrapping::truncate_at_width((title_room - icon.width() - 6.0 * z).max(20.0));
+            let g = painter.layout_job(job);
+            painter.galley(pos2(icon.right() + 6.0 * z, title_y - g.size().y / 2.0), g, theme.text_muted);
         } else {
             let mut job = egui::text::LayoutJob::default();
-            let fmt = |c: Color32| egui::TextFormat { font_id: ui::mono(FONT * z), color: pp.fade(c), ..Default::default() };
+            let font = ui::mono(14.5 * z);
+            let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: pp.fade(c), ..Default::default() };
             job.append("(", 0.0, fmt(theme.text_muted));
             job.append(&f.name, 0.0, fmt(theme.syntax.function.color));
             for a in &f.args {
@@ -907,26 +1113,133 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
                 job.append(a, 0.0, fmt(theme.text));
             }
             job.append(")", 0.0, fmt(theme.text_muted));
-            job.wrap = egui::text::TextWrapping::truncate_at_width(r.width() - 20.0 * z);
+            job.wrap = egui::text::TextWrapping::truncate_at_width(title_room);
             let g = painter.layout_job(job);
-            painter.galley(pos2(r.left() + 12.0 * z, title_y - g.size().y / 2.0), g, theme.text);
+            painter.galley(pos2(left, title_y - g.size().y / 2.0), g, theme.text);
         }
-        if f.top && f.rows.is_empty() {
-            continue;
-        }
-        painter.hline(r.x_range(), r.top() + HEADER_H * z, Stroke::new(1.0, pp.fade(tk.subtle_border)));
-        let mut y = HEADER_H + ROW_H / 2.0 + 4.0;
+
+        // Rows: `name ····· value`, right under the title.
+        let mut y = CARD_HEAD - 2.0 + CARD_ROW / 2.0;
+        let leader = |name_right: f32, value_left: f32, y: f32| {
+            let (x0, x1) = (name_right + 8.0 * z, value_left - 8.0 * z);
+            if x1 - x0 > 10.0 * z {
+                painter.extend(Shape::dotted_line(&[pos2(x0, y), pos2(x1, y)], pp.fade(with_alpha(theme.text_muted, 60)), 5.0 * z, 0.8 * z));
+            }
+        };
+        let right = r.right() - 14.0 * z;
         for (name, v) in &f.rows {
             let result = f.top && name == "result" && Some(v) == view.trace.result_at(step_idx);
             let color = if result { theme.success } else { theme.syntax.variable.color };
-            painter.text(r.min + vec2(12.0, y) * z, Align2::LEFT_CENTER, name, if result { pp.label(12.5) } else { pp.mono() }, pp.fade(color));
-            pp.slot(v, &view.trace, step_idx, pos2(r.right() - 12.0 * z, r.top() + y * z), &mut arrows, f.current || result);
-            y += ROW_H;
+            let at_y = r.top() + y * z;
+            let nr = painter.text(pos2(left, at_y), Align2::LEFT_CENTER, name, if result { pp.label(12.5) } else { pp.mono() }, pp.fade(color));
+            let vl = pp.slot(v, &view.trace, step_idx, pos2(right, at_y), &mut arrows, f.current || result);
+            leader(nr.right(), vl, at_y);
+            y += CARD_ROW;
         }
         if let Some(v) = &f.returns {
-            painter.text(r.min + vec2(12.0, y) * z, Align2::LEFT_CENTER, "returns", pp.label(12.5), pp.fade(theme.success));
-            pp.slot(v, &view.trace, step_idx, pos2(r.right() - 12.0 * z, r.top() + y * z), &mut arrows, true);
+            let at_y = r.top() + y * z;
+            let nr = painter.text(pos2(left, at_y), Align2::LEFT_CENTER, "returns", pp.label(12.5), pp.fade(theme.success));
+            let vl = pp.slot(v, &view.trace, step_idx, pos2(right, at_y), &mut arrows, true);
+            leader(nr.right(), vl, at_y);
         }
+        if !f.top && f.rows.is_empty() && f.returns.is_none() {
+            painter.text(pos2(left, r.top() + y * z), Align2::LEFT_CENTER, "no arguments", pp.label(12.0), pp.fade(theme.text_placeholder));
+        }
+
+        // The question being asked: a decision diamond, the question, and its answer.
+        let footer_h = if f.then.is_some() { FOOTER_H * z } else { 0.0 };
+        if let Some((q, answer)) = &f.asks {
+            let band = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h - ASK_H * z), pos2(r.right(), r.bottom() - footer_h));
+            let cy = band.center().y - 2.0 * z;
+            let kc = theme.syntax.keyword.color;
+            let d = 8.0 * z;
+            let c = pos2(left + d, cy);
+            let diamond = vec![pos2(c.x, c.y - d), pos2(c.x + d, c.y), pos2(c.x, c.y + d), pos2(c.x - d, c.y)];
+            painter.add(Shape::convex_polygon(diamond, pp.fade(with_alpha(kc, 45)), Stroke::new(1.2, pp.fade(kc))));
+            painter.text(c, Align2::CENTER_CENTER, "?", ui::semibold(9.5 * z), pp.fade(kc));
+            let (ans, ac) = match answer {
+                Some(true) => ("Yes", theme.success),
+                Some(false) => ("No", theme.error),
+                None => ("", theme.text_muted),
+            };
+            let ar = painter.text(pos2(right, cy), Align2::RIGHT_CENTER, ans, ui::semibold(12.5 * z), pp.fade(ac));
+            let mut job = egui::text::LayoutJob::default();
+            let mut open = false;
+            code_job(&mut job, q, &ui::mono(FONT * z), &mut open, |c| pp.fade(c), theme, false);
+            let x = c.x + d + 8.0 * z;
+            job.wrap = egui::text::TextWrapping::truncate_at_width((ar.left() - 10.0 * z - x).max(20.0));
+            let g = painter.layout_job(job);
+            painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text);
+        }
+
+        // Footer: what it does once the call below returns, with a slot for that value.
+        let mut slot_rect = None;
+        if let Some(segs) = &f.then {
+            let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h), r.max);
+            let rr = (12.0 * z) as u8;
+            painter.rect_filled(foot, CornerRadius { nw: 0, ne: 0, sw: rr, se: rr }, pp.fade(mix(pp.box_bg(), theme.background, 0.6)));
+            painter.hline(r.x_range(), foot.top(), Stroke::new(1.0, pp.fade(tk.subtle_border)));
+            let cy = foot.center().y;
+            let then = painter.text(pos2(left, cy), Align2::LEFT_CENTER, "THEN", ui::semibold(9.5 * z), pp.fade(theme.text_muted));
+            let mut x = then.right() + 10.0 * z;
+            let font = ui::mono(FONT * z);
+            let mut after_hole = false;
+            let mut prev_open = false;
+            for sg in segs {
+                if x >= right {
+                    break;
+                }
+                match sg {
+                    Seg::Code(t) => {
+                        let mut job = egui::text::LayoutJob::default();
+                        code_job(&mut job, t, &font, &mut prev_open, |c| pp.fade(c), theme, after_hole);
+                        job.wrap = egui::text::TextWrapping::truncate_at_width(right - x);
+                        let g = painter.layout_job(job);
+                        let w = g.size().x;
+                        painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text);
+                        x += w;
+                    }
+                    Seg::Value(t) => {
+                        let mut job = egui::text::LayoutJob::simple_singleline(t.clone(), font.clone(), pp.fade(theme.text));
+                        job.wrap = egui::text::TextWrapping::truncate_at_width(right - x - 8.0 * z);
+                        let g = painter.layout_job(job);
+                        let chip = Rect::from_min_size(pos2(x, cy - 10.0 * z), vec2(g.size().x + 8.0 * z, 20.0 * z));
+                        painter.rect_filled(chip, CornerRadius::same((5.0 * z) as u8), pp.fade(with_alpha(theme.text, 16)));
+                        painter.galley(pos2(x + 4.0 * z, cy - g.size().y / 2.0), g, theme.text);
+                        x = chip.right();
+                        prev_open = false;
+                    }
+                    Seg::Hole => {
+                        after_hole = true;
+                        prev_open = false;
+                        let text = f.filled.as_ref().map(|v| self::label(&view.trace, v, step_idx));
+                        let g = text.map(|t| painter.layout_no_wrap(t, font.clone(), pp.fade(theme.success)));
+                        let w = g.as_ref().map_or(SLOT_CHARS * cw * z, |g| g.size().x + 14.0 * z).min((right - x).max(16.0 * z));
+                        let sr = Rect::from_min_size(pos2(x + 1.0 * z, cy - 10.0 * z), vec2(w, 20.0 * z));
+                        let round = CornerRadius::same((10.0 * z) as u8);
+                        match g {
+                            // The answer, landing where it's used.
+                            Some(g) => {
+                                painter.rect(sr, round, pp.fade(with_alpha(theme.success, 46)), Stroke::new(1.0, pp.fade(with_alpha(theme.success, 160))), StrokeKind::Inside);
+                                painter.galley(pos2(sr.left() + 7.0 * z, cy - g.size().y / 2.0), g, theme.success);
+                            }
+                            // Still waiting: an empty slot.
+                            None => {
+                                let c = theme.text_accent;
+                                painter.rect(sr, round, pp.fade(with_alpha(c, 40)), Stroke::new(1.0, pp.fade(with_alpha(c, 110))), StrokeKind::Inside);
+                                for d in [-1.0, 0.0, 1.0] {
+                                    painter.circle_filled(pos2(sr.center().x + d * 5.0 * z, cy), 1.5 * z, pp.fade(c));
+                                }
+                            }
+                        }
+                        slot_rect = Some(sr);
+                        x = sr.right() + 1.0 * z;
+                    }
+                }
+            }
+        }
+        painter.rect_stroke(r, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
+        prev = Some((r, slot_rect));
     }
 
     // Objects.
@@ -1160,7 +1473,7 @@ mod tests {
         VizObject { id, k: "cons".into(), first: Some(first), rest: Some(rest), ..Default::default() }
     }
     fn frame(name: &str, vars: Vec<(&str, VizRef)>, replaced: bool) -> VizFrame {
-        VizFrame { name: name.into(), nargs: vars.len(), vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced, pos: None, span: 0 }
+        VizFrame { name: name.into(), nargs: vars.len(), vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced, pos: None, span: 0, done: vec![] }
     }
     /// (rvrs '(1 2) '()) -> (rvrs '(2) '(1)): the replaced call is gone, as in Racket, and
     /// the call that replaced it says so.

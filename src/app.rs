@@ -1511,8 +1511,8 @@ impl eframe::App for App {
                 && v.highlighted.is_some()
             {
                 v.highlighted = None;
-                tab.editor.deco.marks.retain(|m| m.kind != crate::editor::view::MarkKind::Viz);
-                tab.editor.deco.viz_note = None;
+                tab.editor.deco.marks.retain(|m| !matches!(m.kind, crate::editor::view::MarkKind::Viz | crate::editor::view::MarkKind::VizWork));
+                tab.editor.deco.viz_notes.clear();
             }
         }
         self.modal_ui(&ctx);

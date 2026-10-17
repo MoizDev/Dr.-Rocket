@@ -67,6 +67,8 @@ pub enum MarkKind {
     Debug,
     /// Visualizer: the code of the current step.
     Viz,
+    /// Visualizer: code the step worked out along the way, like `(random 100)` or `(sub1 n)`.
+    VizWork,
 }
 
 #[derive(Clone, Debug)]
@@ -129,9 +131,17 @@ pub struct Decorations {
     pub semantic: Option<Semantic>,
     /// Documentation lines for the identifier under the mouse (blue box), keyed by range.
     pub hover_doc: Option<(Range<usize>, Vec<String>)>,
-    /// The visualizer's note for the code it is showing (`k is 12 → Yes`), written faintly
-    /// after the end of that line.
-    pub viz_note: Option<(usize, String)>,
+    /// The visualizer's notes, written after the end of their lines: the values of the code
+    /// it is showing (`k is 12 → Yes`) and of work done on the way (`(random 100) → 37`).
+    pub viz_notes: Vec<VizNote>,
+}
+
+#[derive(Clone, Debug)]
+pub struct VizNote {
+    pub pos: usize,
+    pub text: String,
+    /// About work done on the way (drawn in the [`MarkKind::VizWork`] colour).
+    pub work: bool,
 }
 
 impl Decorations {
@@ -161,8 +171,8 @@ impl Decorations {
         if let Some((r, _)) = &mut self.hover_doc {
             map(r);
         }
-        if let Some((p, _)) = &mut self.viz_note {
-            *p = super::buffer::map_pos(*p, edit, inserted, false);
+        for n in &mut self.viz_notes {
+            n.pos = super::buffer::map_pos(n.pos, edit, inserted, false);
         }
     }
 }
@@ -727,7 +737,19 @@ impl EditorView {
             self.scroll_to_cursor = false;
         }
         self.scroll.y = self.scroll.y.clamp(0.0, max_scroll_y);
-        let max_scroll_x = (self.max_line_chars as f32 * char_w - (rect.right() - text_left - SCROLLBAR_W - 40.0)).max(0.0);
+        // The visualizer's notes extend their lines: scrolling reaches their ends too.
+        let note_scale = (style.font_size * 0.86).round() / style.font_size;
+        let mut note_chars: Vec<(usize, f32)> = Vec::new();
+        for n in &self.deco.viz_notes {
+            let line = self.doc.buffer.line_of(n.pos);
+            let w = n.text.chars().count() as f32 * note_scale;
+            match note_chars.iter_mut().find(|(l, _)| *l == line) {
+                Some((_, total)) => *total += w + 3.0 * note_scale,
+                None => note_chars.push((line, w)),
+            }
+        }
+        let widest = note_chars.iter().map(|(l, w)| self.doc.buffer.line_len(*l) as f32 + 2.0 + w).fold(self.max_line_chars as f32, f32::max);
+        let max_scroll_x = (widest * char_w - (rect.right() - text_left - SCROLLBAR_W - 40.0)).max(0.0);
         self.scroll.x = self.scroll.x.clamp(0.0, max_scroll_x);
 
         // ---- visible lines
@@ -809,18 +831,26 @@ impl EditorView {
                 MarkKind::Uncovered => (with_alpha(theme.warning, if theme.dark { 72 } else { 90 }), Some(theme.warning)),
                 MarkKind::Debug => (with_alpha(theme.success, 50), Some(theme.success)),
                 MarkKind::Viz => (with_alpha(theme.text_accent, 46), Some(theme.text_accent)),
+                MarkKind::VizWork => (with_alpha(theme.terminal.ansi[5], 44), Some(theme.terminal.ansi[5])),
             };
             self.paint_range_bg(&tp, m.range.start, m.range.end, first, last, fill);
             if let Some(b) = border {
                 self.paint_range_underline(&tp, m.range.start, m.range.end, first, last, with_alpha(b, 200));
             }
-            // The visualizer's current line gets an arrow in the gutter.
-            if m.kind == MarkKind::Viz {
-                let line = self.doc.buffer.line_of(m.range.start);
-                if (first..=last).contains(&line) {
-                    let cy = self.line_y(line) + line_h / 2.0;
-                    let x = text_left - 6.0;
-                    ui.painter_at(rect).add(egui::Shape::convex_polygon(vec![pos2(x, cy), pos2(x - 7.0, cy - 5.0), pos2(x - 7.0, cy + 5.0)], theme.text_accent, Stroke::NONE));
+            // The visualizer's current line gets an arrow in the gutter, and other lines where
+            // it did work on the way a dot.
+            let line = self.doc.buffer.line_of(m.range.start);
+            if (first..=last).contains(&line) {
+                let cy = self.line_y(line) + line_h / 2.0;
+                let x = text_left - 6.0;
+                match m.kind {
+                    MarkKind::Viz => {
+                        ui.painter_at(rect).add(egui::Shape::convex_polygon(vec![pos2(x, cy), pos2(x - 7.0, cy - 5.0), pos2(x - 7.0, cy + 5.0)], theme.text_accent, Stroke::NONE));
+                    }
+                    MarkKind::VizWork if !self.deco.marks.iter().any(|v| v.kind == MarkKind::Viz && self.doc.buffer.line_of(v.range.start) == line) => {
+                        ui.painter_at(rect).circle_filled(pos2(x - 3.5, cy), 2.5, theme.terminal.ansi[5]);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -907,25 +937,27 @@ impl EditorView {
             self.paint_squiggle(&tp, d.range.start, d.range.end.max(d.range.start + 1), first, last, c);
         }
 
-        // The visualizer's note, after the line it is about.
-        if let Some((pos, note)) = &self.deco.viz_note {
-            let line = self.doc.buffer.line_of(*pos);
+        // The visualizer's notes, after the lines they are about (one line's notes side by side).
+        let mut note_lines: Vec<usize> = self.deco.viz_notes.iter().map(|n| self.doc.buffer.line_of(n.pos)).collect();
+        note_lines.sort_unstable();
+        note_lines.dedup();
+        for line in note_lines {
             if (first..=last).contains(&line) {
                 let after = self.x_of(line, self.doc.buffer.line_len(line)) + self.geom.char_w * 2.0;
                 let y = self.line_y(line) + self.geom.line_h / 2.0;
-                let right = self.geom.rect.right() - SCROLLBAR_W - 10.0;
-                let mut job = LayoutJob::simple_singleline(note.clone(), ui::mono((style.font_size * 0.86).round()), with_alpha(theme.text_accent, 225));
-                job.wrap = egui::text::TextWrapping::truncate_at_width((self.geom.rect.width() * 0.6).max(80.0));
-                let g = tp.layout_job(job);
-                if after + g.size().x <= right {
-                    tp.galley(pos2(after, y - g.size().y / 2.0), g, theme.text_accent);
-                } else {
-                    // The line runs past the edge: pin the note to the right edge, on a chip so
-                    // it reads over the code beneath.
-                    let r = Rect::from_min_max(pos2(right - g.size().x - 16.0, y - g.size().y / 2.0 - 3.0), pos2(right, y + g.size().y / 2.0 + 3.0));
-                    tp.rect(r, CornerRadius::same(6), style.theme.editor_bg, Stroke::new(1.0, with_alpha(theme.text_accent, 120)), egui::StrokeKind::Inside);
-                    tp.galley(pos2(r.left() + 8.0, y - g.size().y / 2.0), g, theme.text_accent);
+                let font = ui::mono((style.font_size * 0.86).round());
+                // After the end of the line (never over code), at full length: scrolling
+                // sideways reaches the end. The step's own note comes first.
+                let mut job = LayoutJob::default();
+                for n in self.deco.viz_notes.iter().filter(|n| self.doc.buffer.line_of(n.pos) == line) {
+                    let c = if n.work { theme.terminal.ansi[5] } else { theme.text_accent };
+                    if !job.text.is_empty() {
+                        job.append("   ", 0.0, egui::TextFormat::simple(font.clone(), c));
+                    }
+                    job.append(&n.text, 0.0, egui::TextFormat::simple(font.clone(), with_alpha(c, 225)));
                 }
+                let g = tp.layout_job(job);
+                tp.galley(pos2(after, y - g.size().y / 2.0), g, theme.text_accent);
             }
         }
 
@@ -1398,6 +1430,12 @@ impl EditorView {
             let y = to_y(self.doc.buffer.line_of(d.range.start));
             let c = if d.severity == Severity::Error { theme.error } else { theme.warning };
             p.rect_filled(Rect::from_min_size(pos2(track.right() - 6.0, y), vec2(4.0, 3.0)), CornerRadius::same(1), c);
+        }
+        // The visualizer's step (and the work it did on the way), which may be off screen.
+        for m in self.deco.marks.iter().filter(|m| matches!(m.kind, MarkKind::Viz | MarkKind::VizWork)) {
+            let y = to_y(self.doc.buffer.line_of(m.range.start));
+            let c = if m.kind == MarkKind::Viz { theme.text_accent } else { theme.terminal.ansi[5] };
+            p.rect_filled(Rect::from_min_size(pos2(track.left() + 2.0, y), vec2(4.0, 3.0)), CornerRadius::same(1), c);
         }
         let cy = to_y(self.doc.buffer.line_of(self.doc.buffer.selections.primary().head));
         p.hline(track.left() + 2.0..=track.right() - 2.0, cy, Stroke::new(1.5, with_alpha(theme.text, 70)));

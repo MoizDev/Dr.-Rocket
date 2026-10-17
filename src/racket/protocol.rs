@@ -413,6 +413,9 @@ pub struct VizFrame {
     /// Where the call that made this frame is in the program.
     pub pos: Option<usize>,
     pub span: usize,
+    /// What its body has worked out so far, oldest first: operations and the values of calls
+    /// that returned to it (`args` empty).
+    pub done: Vec<VizEval>,
 }
 
 /// One recorded step: what happened, the call stack and globals, and changed objects.
@@ -435,6 +438,8 @@ pub struct VizStep {
     pub evals: Vec<VizEval>,
     /// What the program printed since the previous step.
     pub output: String,
+    /// What the top level's current expression has worked out so far (see [`VizFrame::done`]).
+    pub top_done: Vec<VizEval>,
 }
 
 /// A primitive operation at a call site in the user's code, e.g. `(sub1 n)` with 4 → 3.

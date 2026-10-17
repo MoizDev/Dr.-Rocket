@@ -282,7 +282,7 @@
 ;; ---------------------------------------------------------------------------
 ;; Recording
 
-(struct frame (name args [locals #:mutable] pos span [replaced? #:mutable #:auto]) #:auto-value #f)
+(struct frame (name args [locals #:mutable] pos span [replaced? #:mutable #:auto] [done #:mutable #:auto]) #:auto-value #f)
 ;; The most recent user-written application about to run: (list pos span tail?).
 (define current-site #f)
 (define (viz-site! pos span tail?) (set! current-site (list pos span tail?)))
@@ -296,14 +296,36 @@
 
 ;; Primitive operations since the last step: (list pos span args result), newest first.
 (define pending-evals '())
+;; Positions of the primitive operations running now, innermost first: a user function they
+;; call (like the function given to `map`) doesn't answer the operation's own call site.
+(define running-prims '())
 (define (viz-compute pos span f args)
   (call-with-values
-   (λ () (apply f args))
+   (λ ()
+     (dynamic-wind
+      (λ () (set! running-prims (cons pos running-prims)))
+      (λ () (apply f args))
+      (λ () (set! running-prims (cdr running-prims)))))
    (λ results
      (when (and recording? (= 1 (length results)))
        (set! pending-evals (take (cons (list pos span args (car results)) pending-evals)
-                                 (min 12 (add1 (length pending-evals))))))
+                                 (min 32 (add1 (length pending-evals)))))
+       (note-done! (if (pair? stack) (car stack) #f) pos span (car results)))
      (apply values results))))
+
+;; What each call's body has worked out so far, (list pos span value) newest first, so a call
+;; waiting on another can show what it will do with the answer: `(bst-insert 37 ▢)`. `#f` is
+;; the top level, whose values last until its expression is done.
+(define top-done '())
+(define (done-of f) (if f (or (frame-done f) '()) top-done))
+(define (note-done! f pos span v)
+  (when pos
+    (define kept (for/list ([d (in-list (done-of f))]
+                            [_ (in-range 40)]
+                            #:unless (and (equal? (car d) pos) (equal? (cadr d) span)))
+                   d))
+    (define done (cons (list pos span v) kept))
+    (if f (set-frame-done! f done) (set! top-done done))))
 
 ;; Program output since the last step.
 (define pending-output (open-output-string))
@@ -321,6 +343,8 @@
   (set! step-count 0)
   (set! truncated? #f)
   (set! pending-evals '())
+  (set! running-prims '())
+  (set! top-done '())
   (set! pending-output (open-output-string))
   (set! recording? #t)
   (emitter (hasheq 'ev "viz-start" 'max_steps max-steps)))
@@ -336,8 +360,13 @@
     [(not recording?) (thunk)]
     [else
      (define site (or current-site (list pos span #f)))
+     (define current-site-fresh? (and current-site #t))
      (set! current-site #f)
      (define f (frame name args '() (car site) (cadr site)))
+     ;; The caller gets this call's value at its call site (unless a primitive operation
+     ;; made the call, or it's a tail call: then the caller is gone).
+     (define answers (and current-site-fresh? (not (caddr site)) (not (and (pair? running-prims) (equal? (car running-prims) (car site))))))
+     (define caller (and (pair? stack) (car stack)))
      ;; A tail call replaces the caller's frame (it returns whatever this call returns).
      (when (and (caddr site) (pair? stack))
        (set-frame-replaced?! (car stack) #t))
@@ -350,6 +379,8 @@
                (define vals (call-with-values thunk list))
                (unless (frame-replaced? f)
                  (record! "return" (frame-pos f) (frame-span f) name (if (= 1 (length vals)) (hasheq 'value (car vals)) #f)))
+               (when (and answers (= 1 (length vals)))
+                 (note-done! caller (frame-pos f) (frame-span f) (car vals)))
                vals)
              (λ () (set! stack (remq f stack)))))]))
 
@@ -361,7 +392,8 @@
 (define (viz-define! gets pos span)
   (when recording?
     (set! globals (append (reverse gets) globals))
-    (record! "define" pos span (string-join (map car gets) ", ") #f)))
+    (record! "define" pos span (string-join (map car gets) ", ") #f)
+    (set! top-done '())))
 
 (define (viz-bind! gets)
   (when recording?
@@ -372,7 +404,8 @@
 ;; A top-level expression's value, as the program prints it.
 (define (viz-note-result! v)
   (when recording?
-    (record! "result" #f #f #f (hasheq 'value v))))
+    (record! "result" #f #f #f (hasheq 'value v))
+    (set! top-done '())))
 
 (define (viz-set! name get pos span)
   (when recording?
@@ -419,6 +452,9 @@
      (define (vars gets)
        (for/list ([g (in-list gets)])
          (list (car g) (ref (with-handlers ([(λ (e) #t) (λ (e) (void))]) ((cdr g)))))))
+     (define (done-json done)
+       (for/list ([d (in-list (reverse done))])
+         (hasheq 'pos (car d) 'span (cadr d) 'value (ref (caddr d)))))
      (define globals-json (vars (reverse globals)))
      (define frames-json
        ;; Frames replaced by a tail call are sent too (marked), so the IDE can show where the
@@ -429,7 +465,8 @@
                  'nargs (length (frame-args f))
                  'pos (or (frame-pos f) (json-null))
                  'span (or (frame-span f) 0)
-                 'vars (vars (append (frame-args f) (frame-locals f))))))
+                 'vars (vars (append (frame-args f) (frame-locals f)))
+                 'done (done-json (done-of f)))))
      (define evals
        (for/list ([e (in-list (reverse pending-evals))])
          (hasheq 'pos (or (car e) (json-null)) 'span (cadr e)
@@ -447,6 +484,7 @@
                              'globals globals-json
                              'frames frames-json
                              'evals evals
+                             'top_done (done-json top-done)
                              'output output)])
                  ([(k v) (in-hash (or extra (hasheq)))])
          (hash-set h k (if (eq? k 'value) (ref v) v))))

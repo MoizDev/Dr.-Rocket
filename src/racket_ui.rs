@@ -5,7 +5,7 @@
 use crate::app::{App, Dock, Modal, PanelItem, Tab, ToastKind};
 use crate::commands::Command;
 use crate::editor::highlight::racket_job;
-use crate::editor::view::{self, Arrow, ArrowKind, Diagnostic, EditorAction, EditorMode, EditorStyle, EditorView, Inlay, InlayKind, Mark, MarkKind, Semantic, Severity};
+use crate::editor::view::{self, Arrow, ArrowKind, Diagnostic, EditorAction, EditorMode, EditorStyle, EditorView, Inlay, InlayKind, Mark, MarkKind, Semantic, Severity, VizNote};
 use crate::racket::lang::{self, Language, TeachingSettings};
 use crate::racket::protocol::{self as proto, CheckSyntaxResult, DebugAction, ErrorReport, Instrument, PausedState, ProfileReport, RunEvent, RunOptions, Segment, ServerRequest, ServerResponse, Srcloc, Step, StepperEvent, TestReport};
 use crate::racket::runner::{IdleRunner, RunConfig, RunSession};
@@ -655,7 +655,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             // Clear run decorations.
             tab.editor.deco.marks.retain(|m| m.kind == MarkKind::StepBefore);
             tab.editor.deco.inlays.clear();
-            tab.editor.deco.viz_note = None;
+            tab.editor.deco.viz_notes.clear();
             tab.editor.deco.diagnostics.retain(|d| d.message.starts_with('\u{200b}'));
             app.layout.show(PanelItem::Interactions, Dock::Right);
             if instrument == Instrument::Debug {
@@ -839,6 +839,9 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             let v = tab.rk.viz.get_or_insert_with(Default::default);
             *v = Default::default();
             v.trace.max_steps = max_steps;
+            // Positions in the trace are into the program as it ran.
+            let n = tab.editor.doc.buffer.len();
+            v.trace.set_source(&tab.editor.doc.buffer.slice(0..n));
         }
         RunEvent::VizStep(step) => {
             if let Some(v) = tab.rk.viz.as_mut() {
@@ -2353,6 +2356,7 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 // apart by weight and colour.
                 Piece::Name(t) => (egui::RichText::new(t).font(ui::medium(size)).color(theme.syntax.variable.color), None),
                 Piece::Code(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(tk.hover), None),
+                Piece::Work(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(with_alpha(theme.terminal.ansi[5], 56)), None),
                 Piece::Value(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(with_alpha(theme.text_accent, 40)), None),
                 Piece::Obj { id, label } => {
                     let c = colors.get(id).copied().unwrap_or(theme.text_accent);
@@ -2408,7 +2412,8 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                         ui.horizontal_wrapped(|ui| {
                             ui.set_max_width(w - 8.0);
                             ui.spacing_mut().item_spacing = vec2(0.0, 3.0);
-                            piece(ui, &crate::visualizer::Piece::Text("   ".into()), 13.0, theme.text_muted);
+                            // A dot in the colour the editor marks this work with.
+                            ui.label(egui::RichText::new(" •  ").font(ui::ui_font(13.0)).color(theme.terminal.ansi[5]));
                             for p in line {
                                 piece(ui, p, 13.0, theme.text_muted);
                             }
@@ -2432,20 +2437,35 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     if toggle_work {
         v.show_work = !v.show_work;
     }
-    // Highlight the step's code in the editor, with a note of its values beside it.
-    let step_range = v.step().and_then(|s| s.pos.map(|p| p..p + s.span.max(1)));
+    // Highlight the step's code in the editor, with a note of its values beside it; and, in a
+    // second colour, what it worked out on the way (`(random 100)`), with those values too.
     if v.highlighted != Some(v.current) {
         v.highlighted = Some(v.current);
-        tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Viz);
-        tab.editor.deco.viz_note = None;
+        let deco = &mut tab.editor.deco;
+        deco.marks.retain(|m| !matches!(m.kind, MarkKind::Viz | MarkKind::VizWork));
+        deco.viz_notes.clear();
         let n = tab.editor.doc.buffer.len();
-        if let Some(r) = step_range {
-            let r = r.start.min(n)..r.end.min(n);
-            tab.editor.deco.marks.push(Mark { range: r.clone(), kind: MarkKind::Viz });
-            if let (Some(s), Some(e)) = (v.step(), &explanation) {
-                tab.editor.deco.viz_note = crate::visualizer::inline_note(s, e).map(|note| (r.start, note));
+        let clamp = |r: std::ops::Range<usize>| r.start.min(n)..r.end.min(n);
+        if let Some(s) = v.step() {
+            let own = s.pos.map(|p| clamp(p..p + s.span.max(1)));
+            let work = crate::visualizer::work_done(&v.trace, s, &text_of);
+            if let Some(r) = &own {
+                deco.marks.push(Mark { range: r.clone(), kind: MarkKind::Viz });
+                if let Some(note) = explanation.as_ref().and_then(|e| crate::visualizer::inline_note(s, e)) {
+                    deco.viz_notes.push(VizNote { pos: r.start, text: note, work: false });
+                }
             }
-            tab.editor.reveal_soft(r.start);
+            for w in &work {
+                deco.marks.push(Mark { range: clamp(w.range.clone()), kind: MarkKind::VizWork });
+                if let Some(note) = &w.note {
+                    deco.viz_notes.push(VizNote { pos: w.range.start.min(n), text: note.clone(), work: true });
+                }
+            }
+            // Bring the step into view, or (for a step without code of its own, like the
+            // program's result) the work it did.
+            if let Some(p) = own.map(|r| r.start).or(work.first().map(|w| w.range.start.min(n))) {
+                tab.editor.reveal_soft(p);
+            }
         }
     }
 }

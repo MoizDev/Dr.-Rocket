@@ -20,6 +20,9 @@ pub enum Piece {
     Name(String),
     /// Program text that isn't put into words, in a code chip.
     Code(String),
+    /// Code the step worked out along the way (`(random 100)`), in the colour it's marked
+    /// with in the editor.
+    Work(String),
     /// A plain value (a number, a string, `empty`), in a value chip.
     Value(String),
     /// An object, by name (`node 34`), in a chip of its own colour.
@@ -83,12 +86,151 @@ pub fn inline_note(step: &VizStep, ex: &Explanation) -> Option<String> {
     }
 }
 
+/// Code a step worked out on the way (a primitive operation like `(random 100)`), shown in
+/// a second colour in the editor so it's clear it ran.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Work {
+    pub range: std::ops::Range<usize>,
+    /// `(random 100) → 37`, written after the line: for work outside the step's own code
+    /// (whose values the step's note already gives) and not inside other work.
+    pub note: Option<String>,
+}
+
+/// Everything the step worked out since the previous one, other than its own code, in the
+/// order it ran. `code` reads source text by (position, length).
+pub fn work_done(trace: &Trace, step: &VizStep, code: &dyn Fn(usize, usize) -> String) -> Vec<Work> {
+    let own = step.pos.map(|p| p..p + step.span.max(1));
+    // The same code can run more than once between steps: the last run is the one that counts.
+    let mut done: Vec<(std::ops::Range<usize>, Option<&VizRef>)> = Vec::new();
+    for e in &step.evals {
+        let Some(p) = e.pos else { continue };
+        let r = p..p + e.span.max(1);
+        if Some(&r) == own.as_ref() {
+            continue;
+        }
+        done.retain(|(d, _)| *d != r);
+        done.push((r, e.value.as_ref()));
+    }
+    let inside = |a: &std::ops::Range<usize>, b: &std::ops::Range<usize>| a != b && b.start <= a.start && a.end <= b.end;
+    done.iter()
+        .map(|(r, v)| {
+            let shown = own.as_ref().is_none_or(|o| !inside(r, o) && r != o) && !done.iter().any(|(d, _)| inside(r, d));
+            let note = shown.then_some(*v).flatten().map(|v| {
+                let text = one_line(&code(r.start, r.end - r.start));
+                let text = if text.chars().count() > 32 { format!("{}…", text.chars().take(31).collect::<String>()) } else { text };
+                format!("{text} → {}", label(trace, v, step.index))
+            });
+            Work { range: r.clone(), note }
+        })
+        .collect()
+}
+
+/// A piece of what a waiting call will do next: `(bst-insert 37 ▢)`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Seg {
+    Code(String),
+    /// A value already worked out (or a variable's value), shown in place of its code.
+    Value(String),
+    /// The call it's waiting on.
+    Hole,
+}
+
+/// Forms that aren't waiting to use a value the way a function application is: a call's
+/// result there is the answer itself (`cond`, `if`, a body), so they end the context.
+const NOT_APPLICATIONS: &[&str] = &[
+    "define", "define-struct", "define-values", "cond", "if", "else", "and", "or", "when", "unless", "local", "let", "let*", "letrec", "lambda", "λ", "begin", "begin0", "set!",
+    "case", "match", "quote", "quasiquote", "check-expect", "check-within", "check-error", "check-random", "check-satisfied", "check-member-of", "check-range", "time",
+];
+
+/// What a call on the stack will do once the call it's waiting on returns: the function
+/// applications around that call, with what's already worked out shown as values and the
+/// call itself as a hole: `(bst-insert 37 ▢)`, `(* 3 ▢)`, `(make-node 34 ▢ (node-right t))`.
+/// `k` is the frame (an index into the step's frames), or `None` for the top level. `None`
+/// when there's nothing left to do (the call's answer is the frame's answer).
+pub fn waiting(trace: &Trace, step: &VizStep, k: Option<usize>) -> Option<Vec<Seg>> {
+    let callee = step.frames.get(k.map_or(0, |k| k + 1))?;
+    let site = callee.pos?;
+    let site = (site, site + callee.span);
+    let (done, vars): (&[crate::racket::protocol::VizEval], &[(String, VizRef)]) = match k {
+        Some(k) => (&step.frames[k].done, &step.frames[k].vars),
+        None => (&step.top_done, &[]),
+    };
+    let path = sexp::path_to(&trace.forms, site.0, site.1)?;
+    let application = |n: &Node| trace.source.get(n.start) == Some(&'(') && n.head().is_some_and(|h| !NOT_APPLICATIONS.contains(&h));
+    let mut top = path.len() - 1;
+    while top > 0 && application(path[top - 1]) {
+        top -= 1;
+    }
+    if top == path.len() - 1 {
+        return None;
+    }
+    let mut out = Vec::new();
+    seg(trace, step.index, path[top], site, done, vars, false, &mut out);
+    // Adjacent code reads as one piece.
+    let mut merged: Vec<Seg> = Vec::new();
+    for s in out {
+        match (merged.last_mut(), s) {
+            (Some(Seg::Code(a)), Seg::Code(b)) => a.push_str(&b),
+            (_, s) => merged.push(s),
+        }
+    }
+    Some(merged)
+}
+
+/// `n` as segments: left of the hole everything has been worked out (values); the hole; and
+/// to its right, code that hasn't run yet.
+#[allow(clippy::too_many_arguments)]
+fn seg(trace: &Trace, step: usize, n: &Node, site: (usize, usize), done: &[crate::racket::protocol::VizEval], vars: &[(String, VizRef)], head: bool, out: &mut Vec<Seg>) {
+    if (n.start, n.end) == site {
+        out.push(Seg::Hole);
+        return;
+    }
+    let before = n.end <= site.0;
+    if before && !head {
+        let value = done.iter().rev().find(|d| d.pos == Some(n.start) && d.span == n.end - n.start).and_then(|d| d.value.as_ref());
+        let value = value.or_else(|| n.atom().and_then(|a| vars.iter().rev().find(|(v, _)| v == a)).map(|(_, v)| v));
+        if let Some(v) = value {
+            out.push(Seg::Value(label(trace, v, step)));
+            return;
+        }
+    }
+    match n.atom() {
+        Some(a) => out.push(Seg::Code(a.to_string())),
+        None => {
+            let open = trace.source.get(n.start).copied().unwrap_or('(');
+            let close = match open {
+                '[' => ']',
+                '{' => '}',
+                _ => ')',
+            };
+            out.push(Seg::Code(open.to_string()));
+            for (i, item) in n.items().iter().enumerate() {
+                if i > 0 {
+                    out.push(Seg::Code(" ".into()));
+                }
+                seg(trace, step, item, site, done, vars, i == 0, out);
+            }
+            out.push(Seg::Code(close.to_string()));
+        }
+    }
+}
+
+/// Segments as one line of text, the hole as `▢`.
+pub fn seg_text(segs: &[Seg]) -> String {
+    segs.iter()
+        .map(|s| match s {
+            Seg::Code(t) | Seg::Value(t) => t.as_str(),
+            Seg::Hole => "▢",
+        })
+        .collect()
+}
+
 /// Pieces as plain text.
 pub fn plain(pieces: &[Piece]) -> String {
     pieces
         .iter()
         .map(|p| match p {
-            Piece::Text(t) | Piece::Name(t) | Piece::Code(t) | Piece::Value(t) => t.clone(),
+            Piece::Text(t) | Piece::Name(t) | Piece::Code(t) | Piece::Work(t) | Piece::Value(t) => t.clone(),
             Piece::Obj { label, .. } => label.clone(),
             Piece::Answer(yes) => if *yes { "Yes".into() } else { "No".into() },
         })
@@ -413,7 +555,7 @@ fn random_lines(ctx: &Ctx) -> Vec<Vec<Piece>> {
         .filter_map(|e| {
             let n = ctx.read(e.pos?, e.span)?;
             let v = e.value.as_ref()?;
-            (n.head() == Some("random")).then(|| vec![Piece::Code(one_line(&node_text(&n))), text(" picked "), ctx.value(v)])
+            (n.head() == Some("random")).then(|| vec![Piece::Work(one_line(&node_text(&n))), text(" picked "), ctx.value(v)])
         })
         .collect()
 }
@@ -489,6 +631,19 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
                     ex.lines.push(line);
                 }
             }
+            // What the caller will do with the answer, when there's more to do than pass it on.
+            if !tail
+                && let Some(c) = caller
+                && let Some(k) = step.frames.iter().position(|f| std::ptr::eq(f, c))
+                && let Some(w) = waiting(trace, step, Some(k))
+            {
+                ex.lines.push(vec![text("When it returns, "), Piece::Name(c.name.clone()), text(" goes on with "), Piece::Code(seg_text(&w))]);
+            } else if !tail
+                && caller.is_none()
+                && let Some(w) = waiting(trace, step, None)
+            {
+                ex.lines.push(vec![text("When it returns, the top level goes on with "), Piece::Code(seg_text(&w))]);
+            }
             if tail && !recursive {
                 ex.lines.push(vec![text("A tail call: it takes over from "), Piece::Name(from.clone().unwrap_or_default()), text(", which would only pass its result on")]);
             } else if tail {
@@ -542,10 +697,18 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
             ex.lines.extend(random_lines(&ctx));
             ex.lines.extend(built_lines(&ctx, value));
             let back_to = live.len().checked_sub(2).and_then(|k| live.get(k)).copied();
-            ex.lines.push(match back_to {
+            // Where the answer goes: into the hole of what the caller was waiting to do.
+            let k = back_to.and_then(|b| step.frames.iter().position(|f| std::ptr::eq(f, b)));
+            let then = if back_to.is_some() { k.and_then(|k| waiting(trace, step, Some(k))) } else { waiting(trace, step, None) };
+            let mut line = match back_to {
                 Some(b) => vec![text("Back to "), Piece::Name(b.name.clone()), text(", which was waiting for this result")],
                 None => vec![text("Back to the top level")],
-            });
+            };
+            if let Some(w) = then {
+                line.push(text(if back_to.is_some() { " to finish " } else { ", to finish " }));
+                line.push(Piece::Code(seg_text(&w)));
+            }
+            ex.lines.push(line);
             ex.work = work_lines(&ctx, own);
         }
         "define" => {
@@ -727,7 +890,7 @@ mod tests {
         VizRef::Object { id }
     }
     fn frame(name: &str, vars: Vec<(&str, VizRef)>, nargs: usize, pos: Option<usize>, span: usize) -> VizFrame {
-        VizFrame { name: name.into(), nargs, vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced: false, pos, span }
+        VizFrame { name: name.into(), nargs, vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced: false, pos, span, done: vec![] }
     }
     fn node(id: u64, key: &str, left: VizRef, right: VizRef) -> VizObject {
         VizObject { id, k: "struct".into(), name: Some("node".into()), fields: vec![("key".into(), prim(key, "num")), ("left".into(), left), ("right".into(), right)], ..Default::default() }
@@ -738,6 +901,28 @@ mod tests {
     /// The source text of `program`, read by (position, length) like the editor buffer.
     fn reader(program: &'static str) -> impl Fn(usize, usize) -> String {
         move |p: usize, n: usize| program.chars().skip(p).take(n).collect::<String>()
+    }
+
+    /// Work done on the way is marked wherever it is, but values are noted only where the
+    /// step's own note doesn't already give them: outside its code, and not inside other work.
+    #[test]
+    fn work_on_the_way_is_marked_and_noted_once() {
+        let program = "(bst-insert (random 100) (big-tree (sub1 n)))\n(< k (node-key t))\n(+ (* 2 x) 1)";
+        let code = reader(program);
+        let at = |s: &str| program.find(s).unwrap();
+        let ev = |s: &str, v: &str| VizEval { pos: Some(at(s)), span: s.len(), args: vec![], value: Some(prim(v, "num")) };
+        let trace = Trace::default();
+        let notes = |step: &VizStep| work_done(&trace, step, &code).into_iter().map(|w| (code(w.range.start, w.range.end - w.range.start), w.note)).collect::<Vec<_>>();
+        // A call: `random` ran beside it, `sub1` inside it (its value is the call's argument).
+        let call = VizStep { kind: "call".into(), pos: Some(at("(big-tree")), span: "(big-tree (sub1 n))".len(), evals: vec![ev("(random 100)", "37"), ev("(sub1 n)", "2")], ..Default::default() };
+        assert_eq!(notes(&call), vec![("(random 100)".into(), Some("(random 100) → 37".into())), ("(sub1 n)".into(), None)]);
+        // A question is itself an operation: it isn't marked twice.
+        let question = VizStep { kind: "question".into(), pos: Some(at("(< k")), span: "(< k (node-key t))".len(), evals: vec![ev("(node-key t)", "34"), ev("(< k (node-key t))", "1")], ..Default::default() };
+        assert_eq!(notes(&question), vec![("(node-key t)".into(), None)]);
+        // The program's result has no code of its own: nested work is marked, the outer
+        // value noted; code that ran twice is marked once, with its last value.
+        let result = VizStep { kind: "result".into(), evals: vec![ev("(* 2 x)", "4"), ev("(* 2 x)", "6"), ev("(+ (* 2 x) 1)", "7")], ..Default::default() };
+        assert_eq!(notes(&result), vec![("(* 2 x)".into(), None), ("(+ (* 2 x) 1)".into(), Some("(+ (* 2 x) 1) → 7".into()))]);
     }
 
     /// The user's BST insert, at its comparison: in words, with the values that decide it.

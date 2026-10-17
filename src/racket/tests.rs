@@ -909,3 +909,63 @@ fn visualizer_records_r5rs_programs() {
     }
     assert_eq!(items, ["3", "2", "1"]);
 }
+
+/// Every call on the stack shows what it will do with the answer it's waiting for, with what
+/// it already worked out as values: `(cons 37 ▢)`, `(* 3 ▢)`, `(+ 1 ▢)` once the first
+/// `fib` came back, code still to run left as code, and the top level's own expression.
+#[test]
+fn visualizer_waiting_calls_show_what_they_do_next() {
+    let b = need_racket!();
+    let src = "#lang htdp/isl+\n\
+(define (rand-list n) (cond [(zero? n) empty] [else (cons (random 100) (rand-list (sub1 n)))]))\n\
+(define (fact n) (cond [(zero? n) 1] [else (* n (fact (sub1 n)))]))\n\
+(define (fib n) (cond [(< n 2) n] [else (+ (fib (- n 1)) (fib (- n 2)))]))\n\
+(define (twice l) (cons (* 2 (first l)) (twice2 (rest l)) ))\n\
+(define (twice2 l) (cond [(empty? l) empty] [else (twice l)]))\n\
+(rand-list 2)\n\
+(define x (+ 1 (fact 2)))\n\
+(fib 2)\n\
+(twice2 (list 5 6))\n\
+(map (lambda (v) (fact v)) (list 1))\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::Visualize)).unwrap();
+    let events = run_until(&s, ready(None));
+    let mut trace = crate::visualizer::Trace::default();
+    trace.set_source(src);
+    for e in &events {
+        if let RunEvent::VizStep(s) = e {
+            trace.push((**s).clone());
+        }
+    }
+    // Everything each step says is waiting, as (frame, what it does next).
+    let mut seen: Vec<(String, String)> = Vec::new();
+    for step in &trace.steps {
+        let mut add = |who: String, w: Option<Vec<crate::visualizer::Seg>>| {
+            if let Some(w) = w {
+                let pair = (who, crate::visualizer::seg_text(&w));
+                if !seen.contains(&pair) {
+                    seen.push(pair);
+                }
+            }
+        };
+        add("top".into(), crate::visualizer::waiting(&trace, step, None));
+        for (k, f) in step.frames.iter().enumerate() {
+            add(format!("{} {}", f.name, f.vars.first().map(|v| crate::visualizer::label(&trace, &v.1, step.index)).unwrap_or_default()), crate::visualizer::waiting(&trace, step, Some(k)));
+        }
+    }
+    let has = |who: &str, what: &str| seen.iter().any(|(w, t)| w == who && t == what);
+    let random = seen.iter().find(|(w, _)| w == "rand-list 2").map(|(_, t)| t.clone()).unwrap_or_default();
+    assert!(regex_like_cons_number(&random), "rand-list 2 waits with its random number in place: {seen:?}");
+    assert!(has("top", "(+ 1 ▢)"), "the top level's own expression: {seen:?}");
+    assert!(has("fact 2", "(* 2 ▢)"), "{seen:?}");
+    assert!(has("fib 2", "(+ ▢ (fib (- n 2)))"), "the second call hasn't run: still code: {seen:?}");
+    assert!(has("fib 2", "(+ 1 ▢)"), "the first call's answer fills in: {seen:?}");
+    assert!(has("twice (list 5 6)", "(cons 10 ▢)"), "{seen:?}");
+    // Nothing waits where the answer is passed straight on: a top-level call, a `cond`
+    // answer, a function given to `map` (its answers go to map, not to (map …)).
+    assert!(!seen.iter().any(|(_, t)| t == "▢" || t.contains("map")), "{seen:?}");
+    assert!(!seen.iter().any(|(w, _)| w.starts_with("twice2")), "{seen:?}");
+}
+
+fn regex_like_cons_number(s: &str) -> bool {
+    s.strip_prefix("(cons ").and_then(|r| r.strip_suffix(" ▢)")).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n < 100))
+}
