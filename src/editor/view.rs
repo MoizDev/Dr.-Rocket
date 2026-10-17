@@ -96,10 +96,6 @@ pub struct Semantic {
     pub arrows: Vec<Arrow>,
     pub tooltips: Vec<(Range<usize>, String)>,
     pub unused: Vec<Range<usize>>,
-    /// Start positions of identifiers bound in this program (definitions, parameters, and their
-    /// uses), as opposed to imported ones. Colored as variables even in call position, like
-    /// Zed's semantic highlighting.
-    pub local: std::collections::HashSet<usize>,
     pub docs: Vec<(Range<usize>, String)>,
 }
 
@@ -511,7 +507,6 @@ impl EditorView {
         let mut job = LayoutJob::default();
         job.wrap.max_width = f32::INFINITY;
         let unused = self.deco.semantic.as_ref().map(|s| &s.unused);
-        let local = self.deco.semantic.as_ref().map(|s| &s.local);
         let images = &self.doc.images;
         let space_w = self.geom.char_w;
         let push = |job: &mut LayoutJob, from: usize, to: usize, h: Highlight, dim: bool| {
@@ -550,8 +545,9 @@ impl EditorView {
                 push(&mut job, at, s, plain, false);
             }
             let name = t.kind == Kind::Symbol && matches!(t.class, Class::Function | Class::Variable);
-            // A call to a function defined in this file reads as a variable; imported ones stay functions.
-            let class = if name && local.is_some_and(|l| l.contains(&t.start)) { Class::Variable } else { t.class };
+            // Anything in call position is a function (blue), the program's own included;
+            // variables are red.
+            let class = t.class;
             let h = if t.mismatched { Highlight { color: theme.error, italic: false, bold: true } } else { self.highlight_for(class, t.depth, theme, style.settings.rainbow_brackets) };
             let dim = name && unused.is_some_and(|u| u.iter().any(|r| r.start == t.start));
             push(&mut job, s, e, h, dim);

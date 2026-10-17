@@ -544,7 +544,6 @@ fn apply_check(app: &mut App, tab_id: u64, version: u64, explicit: bool, r: Chec
             .collect(),
         tooltips: r.tooltips.iter().map(|t| (t.start..t.end, t.text.clone())).collect(),
         unused: r.colors.iter().filter(|c| c.style.contains("unused")).map(|c| c.start..c.end).collect(),
-        local: r.colors.iter().filter(|c| c.style == "lexically-bound").map(|c| c.start).collect(),
         docs: r.docs.iter().filter_map(|d| d.url().map(|u| (d.start..d.end, u))).collect(),
     };
     tab.editor.deco.semantic = Some(sem);
