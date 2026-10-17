@@ -10,8 +10,12 @@ use crate::commands::{COMMANDS, Command};
 use egui::{Event, Key, Modifiers, PointerButton, pos2};
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::io::Write;
+use std::process::{Command as Process, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{SyncSender, sync_channel};
+use std::thread::JoinHandle;
 
 #[derive(Deserialize, Debug, Clone)]
 #[serde(rename_all = "snake_case")]
@@ -36,6 +40,9 @@ pub enum Step {
     /// Wait until a named condition holds: "racket-ready", "run-finished", "stepper-ready".
     WaitUntil(String),
     Screenshot(PathBuf),
+    /// `{"record": {"path": "out.mp4", "seconds": 20}}`: film the window for that long and
+    /// encode it with ffmpeg (on PATH) at 30 fps, in real time.
+    Record { path: PathBuf, seconds: f64 },
     Theme(String),
     Log(String),
     Quit(bool),
@@ -58,6 +65,59 @@ pub struct Automation {
     reset_modifiers: bool,
     /// In-progress drag: (from, to, frame).
     drag: Option<(egui::Pos2, egui::Pos2, u32)>,
+    recording: Option<Recording>,
+}
+
+/// An in-progress `record` step: every frame's screenshot goes to an encoder thread.
+struct Recording {
+    start: f64,
+    until: f64,
+    /// Dropped when filming ends; the encoder finishes once in-flight screenshots land.
+    frames: Option<SyncSender<(f64, Arc<egui::ColorImage>)>>,
+    encoder: JoinHandle<()>,
+}
+
+const RECORD_FPS: f64 = 30.0;
+
+/// Encode timestamped frames as a constant-rate video: each output frame shows the latest
+/// capture at its time, so the video plays at the speed the app ran.
+fn encode(path: PathBuf, frames: std::sync::mpsc::Receiver<(f64, Arc<egui::ColorImage>)>) {
+    let mut ffmpeg: Option<std::process::Child> = None;
+    let mut last: Option<Arc<egui::ColorImage>> = None;
+    let mut written = 0u64;
+    let write = |ffmpeg: &mut Option<std::process::Child>, img: &egui::ColorImage| {
+        let child = ffmpeg.get_or_insert_with(|| {
+            let [w, h] = img.size;
+            Process::new("ffmpeg")
+                .args(["-loglevel", "error", "-y", "-f", "rawvideo", "-pix_fmt", "rgba", "-s", &format!("{w}x{h}"), "-r", "30", "-i", "-"])
+                .args(["-c:v", "libx264", "-preset", "slow", "-crf", "18", "-pix_fmt", "yuv420p", "-movflags", "+faststart"])
+                .arg(&path)
+                .stdin(Stdio::piped())
+                .spawn()
+                .expect("ffmpeg")
+        });
+        let _ = child.stdin.as_mut().unwrap().write_all(img.as_raw());
+    };
+    for (t, img) in frames {
+        let due = (t * RECORD_FPS) as u64;
+        if let Some(prev) = &last {
+            while written < due {
+                write(&mut ffmpeg, prev);
+                written += 1;
+            }
+        } else {
+            written = due;
+        }
+        last = Some(img);
+    }
+    if let Some(prev) = &last {
+        write(&mut ffmpeg, prev);
+    }
+    if let Some(mut child) = ffmpeg {
+        drop(child.stdin.take());
+        let _ = child.wait();
+        eprintln!("automation: recorded {} ({written} frames)", path.display());
+    }
 }
 
 impl Automation {
@@ -65,7 +125,7 @@ impl Automation {
         let path = std::env::var("DRROCKET_AUTOMATION").ok()?;
         let text = std::fs::read_to_string(&path).ok()?;
         let script: Script = serde_json::from_str(&text).map_err(|e| eprintln!("automation script error: {e}")).ok()?;
-        Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None, reset_modifiers: false, drag: None })
+        Some(Self { script, index: 0, wait_until_time: None, wait_frames: 3, shot_done: None, started: None, reset_modifiers: false, drag: None, recording: None })
     }
 
     pub fn window_size() -> Option<[f32; 2]> {
@@ -101,6 +161,25 @@ impl Automation {
             self.reset_modifiers = false;
         }
         ctx.request_repaint();
+        if let Some(rec) = &mut self.recording {
+            if now < rec.until
+                && let Some(frames) = &rec.frames
+            {
+                let (frames, t) = (frames.clone(), now - rec.start);
+                // Drop a frame rather than stall the app when the encoder falls behind.
+                ctx.request_screenshot(move |img| {
+                    let _ = frames.try_send((t, img));
+                });
+                return;
+            }
+            // Keep rendering (so pending screenshot callbacks run and release the channel)
+            // until the encoder is done.
+            rec.frames = None;
+            if !rec.encoder.is_finished() {
+                return;
+            }
+            self.recording = None;
+        }
         if self.wait_frames > 0 {
             self.wait_frames -= 1;
             return;
@@ -218,6 +297,12 @@ impl Automation {
                     ctx2.request_repaint();
                 });
                 self.shot_done = Some(done);
+            }
+            Step::Record { path, seconds } => {
+                let (frames, rx) = sync_channel(4);
+                let path = path.clone();
+                let encoder = std::thread::spawn(move || encode(path, rx));
+                self.recording = Some(Recording { start: now, until: now + seconds, frames: Some(frames), encoder });
             }
             Step::Theme(name) => app.set_theme(name, false),
             Step::Log(msg) => eprintln!("automation: {msg}"),
