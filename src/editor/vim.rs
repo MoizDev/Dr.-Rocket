@@ -418,8 +418,8 @@ impl Vim {
         matches!(self.mode, Mode::Visual | Mode::VisualLine).then_some(self.cursor)
     }
 
-    /// The mouse made a selection: continue it in visual mode.
-    pub fn select_from_mouse(&mut self, sel: Selection) {
+    /// A selection made outside Vim (the mouse, Cmd+A, a double-click): continue it in visual mode.
+    pub fn adopt_selection(&mut self, sel: Selection) {
         if self.mode == Mode::Normal && !sel.is_empty() {
             self.mode = Mode::Visual;
             self.anchor = sel.anchor;
@@ -453,6 +453,9 @@ impl Vim {
         if self.cmdline.is_some() {
             self.cmdline_key(doc, k, &mut fx);
             return fx;
+        }
+        if self.mode == Mode::Normal && self.keys.is_empty() && doc.buffer.selections.list.len() == 1 {
+            self.adopt_selection(doc.buffer.selections.primary());
         }
         match self.mode {
             Mode::Insert | Mode::Replace => {
@@ -2129,6 +2132,21 @@ mod tests {
         assert_eq!(run("abcd", 1, "Rxy<Esc>").0, "axyd");
         let (t, c) = run("(a)", 0, "ia<Esc>");
         assert_eq!((t.as_str(), c), ("a(a)", 0), "Escape steps back onto the typed character");
+    }
+
+    #[test]
+    fn selections_made_outside_vim_are_visual() {
+        // Cmd+A, then y: the whole file is yanked.
+        let mut doc = Document::new("(a)\n(b)");
+        let mut vim = Vim::default();
+        doc.buffer.selections = Selections::single(Selection::new(0, 7));
+        let clip = || None;
+        let view = View { first_line: 0, last_line: 10, auto_close: false, clipboard: &clip };
+        assert_eq!(vim.feed(&mut doc, &view, 'y'), vec![Effect::Clipboard("(a)\n(b)".into())]);
+        assert_eq!(vim.mode, Mode::Normal);
+        doc.buffer.selections = Selections::single(Selection::new(0, 3));
+        vim.feed(&mut doc, &view, 'd');
+        assert_eq!(doc.text(), "\n(b)");
     }
 
     #[test]

@@ -636,21 +636,27 @@ impl EditorView {
         let sel_before = self.doc.buffer.selections.clone();
 
         self.handle_mouse(ui, &resp, style, now);
-        // A mouse selection continues in visual mode; a click leaves it.
-        if let Some(v) = self.vim.as_mut() {
-            let sel = self.doc.buffer.selections.primary();
-            if self.doc.buffer.selections != sel_before {
-                if sel.is_empty() && matches!(v.mode, crate::editor::vim::Mode::Visual | crate::editor::vim::Mode::VisualLine) {
-                    v.mode = crate::editor::vim::Mode::Normal;
-                } else {
-                    v.select_from_mouse(sel);
-                }
-            }
+        // A mouse click leaves visual mode (selections made outside Vim enter it; see below).
+        if let Some(v) = self.vim.as_mut()
+            && self.doc.buffer.selections != sel_before
+            && self.doc.buffer.selections.primary().is_empty()
+            && matches!(v.mode, crate::editor::vim::Mode::Visual | crate::editor::vim::Mode::VisualLine)
+        {
+            v.mode = crate::editor::vim::Mode::Normal;
         }
         if focused && !self.read_only {
             self.handle_keys(ui, style);
         } else if focused {
             self.handle_readonly_keys(ui);
+        }
+        // A selection made outside Vim (the mouse, Cmd+A, a double-click) continues in visual
+        // mode, so y, d, c and the rest act on it.
+        if let Some(v) = self.vim.as_mut()
+            && v.mode == crate::editor::vim::Mode::Normal
+            && v.pending().is_empty()
+            && self.doc.buffer.selections.list.len() == 1
+        {
+            v.adopt_selection(self.doc.buffer.selections.primary());
         }
         self.doc.sync();
         self.shift_decorations();
@@ -861,7 +867,7 @@ impl EditorView {
                 self.yank_flash = None;
             } else {
                 let fade = if t < HOLD { 1.0 } else { 1.0 - ((t - HOLD) / FADE) as f32 };
-                self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.text_accent, (170.0 * fade) as u8));
+                self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.warning, (100.0 * fade) as u8));
                 ui.ctx().request_repaint();
             }
         }
