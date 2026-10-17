@@ -35,6 +35,26 @@ pub fn install() {
     }));
 }
 
+/// The app couldn't start (no window or graphics device, say). A GUI app has no console on
+/// Windows, so without this the error would vanish: save it as a crash report and say so.
+pub fn startup_failed(error: &str) {
+    let when = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    let path = dir().join(format!("crash-{when}.txt"));
+    let _ = std::fs::create_dir_all(dir());
+    let _ = std::fs::write(&path, format!("{}
+Time: {when} (Unix)
+
+Could not start: {error}
+", about(None)));
+    eprintln!("Dr. Rocket could not start: {error}");
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Dr. Rocket could not start")
+        .set_description(format!("{error}\n\nThis was saved to {}. Please send it to us.", path.display()))
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
 /// Reports written since the user last saw one (oldest first).
 pub fn unseen() -> Vec<PathBuf> {
     let seen = std::fs::metadata(dir().join(".seen")).and_then(|m| m.modified()).ok();

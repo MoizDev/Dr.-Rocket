@@ -1,0 +1,31 @@
+# Launch the release build on Windows and report whether it stays up: exit code, crash
+# reports and Windows' own crash log. Manual only.
+name: Windows smoke test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  launch:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release
+      - name: Launch
+        shell: pwsh
+        run: |
+          $env:RUST_BACKTRACE = "1"
+          $p = Start-Process target/release/drrocket.exe -PassThru -RedirectStandardError err.txt -RedirectStandardOutput out.txt
+          Start-Sleep -Seconds 25
+          if ($p.HasExited) { "EXITED with code $($p.ExitCode)" } else { "STILL RUNNING after 25 s"; Stop-Process $p -Force }
+          "--- stderr"; Get-Content err.txt -ErrorAction SilentlyContinue
+          "--- stdout"; Get-Content out.txt -ErrorAction SilentlyContinue
+          "--- crash reports"
+          Get-ChildItem "$env:APPDATA\dr-rocket\crash-reports" -ErrorAction SilentlyContinue | ForEach-Object { "== $($_.Name)"; Get-Content $_.FullName }
+          "--- Windows Application log"
+          Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-5) } -ErrorAction SilentlyContinue |
+            Where-Object { $_.ProviderName -in 'Application Error', 'Windows Error Reporting', '.NET Runtime' } |
+            ForEach-Object { $_.Message }

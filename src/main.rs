@@ -63,5 +63,9 @@ fn main() -> eframe::Result {
         event_loop_builder: platform::event_loop_hook(),
         ..Default::default()
     };
-    eframe::run_native(ui::welcome::APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, open)))))
+    let result = eframe::run_native(ui::welcome::APP_NAME, options, Box::new(move |cc| Ok(Box::new(app::App::new(cc, open)))));
+    if let Err(e) = &result {
+        crash::startup_failed(&e.to_string());
+    }
+    result
 }
