@@ -853,13 +853,15 @@ impl EditorView {
             self.yank_flash = Some((r, ui.input(|i| i.time)));
         }
         if let Some((r, at)) = self.yank_flash.clone() {
-            const FLASH: f64 = 0.35;
-            let t = (ui.input(|i| i.time) - at) / FLASH;
-            if t >= 1.0 {
+            // Solid for a moment, then fading out.
+            const HOLD: f64 = 0.2;
+            const FADE: f64 = 0.3;
+            let t = ui.input(|i| i.time) - at;
+            if t >= HOLD + FADE {
                 self.yank_flash = None;
             } else {
-                let fade = 1.0 - (t * t) as f32;
-                self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.text_accent, (110.0 * fade) as u8));
+                let fade = if t < HOLD { 1.0 } else { 1.0 - ((t - HOLD) / FADE) as f32 };
+                self.paint_range_bg(&tp, r.start, r.end, first, last, with_alpha(theme.text_accent, (170.0 * fade) as u8));
                 ui.ctx().request_repaint();
             }
         }
