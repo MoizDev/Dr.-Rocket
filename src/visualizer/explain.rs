@@ -125,7 +125,7 @@ pub fn work_done(trace: &Trace, step: &VizStep, code: &dyn Fn(usize, usize) -> S
         .collect()
 }
 
-/// A piece of what a waiting call will do next: `(bst-insert 37 ▢)`.
+/// A piece of what a waiting call will do next: `(bst-insert 37 •••)`.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Seg {
     Code(String),
@@ -144,7 +144,7 @@ const NOT_APPLICATIONS: &[&str] = &[
 
 /// What a call on the stack will do once the call it's waiting on returns: the function
 /// applications around that call, with what's already worked out shown as values and the
-/// call itself as a hole: `(bst-insert 37 ▢)`, `(* 3 ▢)`, `(make-node 34 ▢ (node-right t))`.
+/// call itself as a hole: `(bst-insert 37 •••)`, `(* 3 •••)`, `(make-node 34 ••• (node-right t))`.
 /// `k` is the frame (an index into the step's frames), or `None` for the top level. `None`
 /// when there's nothing left to do (the call's answer is the frame's answer).
 pub fn waiting(trace: &Trace, step: &VizStep, k: Option<usize>) -> Option<Vec<Seg>> {
@@ -215,12 +215,12 @@ fn seg(trace: &Trace, step: usize, n: &Node, site: (usize, usize), done: &[crate
     }
 }
 
-/// Segments as one line of text, the hole as `▢`.
+/// Segments as one line of text, the hole as `•••`.
 pub fn seg_text(segs: &[Seg]) -> String {
     segs.iter()
         .map(|s| match s {
             Seg::Code(t) | Seg::Value(t) => t.as_str(),
-            Seg::Hole => "▢",
+            Seg::Hole => "•••",
         })
         .collect()
 }

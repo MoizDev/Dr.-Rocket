@@ -911,7 +911,7 @@ fn visualizer_records_r5rs_programs() {
 }
 
 /// Every call on the stack shows what it will do with the answer it's waiting for, with what
-/// it already worked out as values: `(cons 37 ▢)`, `(* 3 ▢)`, `(+ 1 ▢)` once the first
+/// it already worked out as values: `(cons 37 •••)`, `(* 3 •••)`, `(+ 1 •••)` once the first
 /// `fib` came back, code still to run left as code, and the top level's own expression.
 #[test]
 fn visualizer_waiting_calls_show_what_they_do_next() {
@@ -955,17 +955,17 @@ fn visualizer_waiting_calls_show_what_they_do_next() {
     let has = |who: &str, what: &str| seen.iter().any(|(w, t)| w == who && t == what);
     let random = seen.iter().find(|(w, _)| w == "rand-list 2").map(|(_, t)| t.clone()).unwrap_or_default();
     assert!(regex_like_cons_number(&random), "rand-list 2 waits with its random number in place: {seen:?}");
-    assert!(has("top", "(+ 1 ▢)"), "the top level's own expression: {seen:?}");
-    assert!(has("fact 2", "(* 2 ▢)"), "{seen:?}");
-    assert!(has("fib 2", "(+ ▢ (fib (- n 2)))"), "the second call hasn't run: still code: {seen:?}");
-    assert!(has("fib 2", "(+ 1 ▢)"), "the first call's answer fills in: {seen:?}");
-    assert!(has("twice (list 5 6)", "(cons 10 ▢)"), "{seen:?}");
+    assert!(has("top", "(+ 1 •••)"), "the top level's own expression: {seen:?}");
+    assert!(has("fact 2", "(* 2 •••)"), "{seen:?}");
+    assert!(has("fib 2", "(+ ••• (fib (- n 2)))"), "the second call hasn't run: still code: {seen:?}");
+    assert!(has("fib 2", "(+ 1 •••)"), "the first call's answer fills in: {seen:?}");
+    assert!(has("twice (list 5 6)", "(cons 10 •••)"), "{seen:?}");
     // Nothing waits where the answer is passed straight on: a top-level call, a `cond`
     // answer, a function given to `map` (its answers go to map, not to (map …)).
-    assert!(!seen.iter().any(|(_, t)| t == "▢" || t.contains("map")), "{seen:?}");
+    assert!(!seen.iter().any(|(_, t)| t == "•••" || t.contains("map")), "{seen:?}");
     assert!(!seen.iter().any(|(w, _)| w.starts_with("twice2")), "{seen:?}");
 }
 
 fn regex_like_cons_number(s: &str) -> bool {
-    s.strip_prefix("(cons ").and_then(|r| r.strip_suffix(" ▢)")).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n < 100))
+    s.strip_prefix("(cons ").and_then(|r| r.strip_suffix(" •••)")).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n < 100))
 }

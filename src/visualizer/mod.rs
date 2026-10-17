@@ -323,7 +323,7 @@ struct FrameBox {
     top: bool,
     /// This call replaced its caller (a tail call): Racket doesn't keep the caller around.
     tail: bool,
-    /// What it will do when the call it's waiting on returns: `then (bst-insert 37 ▢)`.
+    /// What it will do when the call it's waiting on returns: `then (bst-insert 37 •••)`.
     then: Option<Vec<Seg>>,
     /// The awaited value, as it comes back (on the step where the call below returns).
     filled: Option<VizRef>,
@@ -513,7 +513,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
             let ask_w = f.asks.as_ref().map_or(0.0, |(q, _)| text_w(cw, q) + CARD_INSET + 90.0);
             let then_w = f.then.as_ref().map_or(0.0, |t| {
                 let slot = f.filled.as_ref().map_or(SLOT_CHARS, |v| label(trace, v, step_idx).chars().count() as f32 + 1.5);
-                text_w(cw, &seg_text(t)) + (slot - 1.0) * cw + CARD_INSET + 84.0
+                text_w(cw, &seg_text(t)) + (slot - 3.0) * cw + CARD_INSET + 84.0
             });
             let w = title_w.max(row_w).max(ask_w).max(then_w).clamp(FRAME_W, 440.0);
             let rows = f.rows();
