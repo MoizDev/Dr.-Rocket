@@ -1,0 +1,9 @@
+{
+  "version": "1.0.0-beta.1",
+  "repo": "MoizDev/Dr.-Rocket",
+  "downloads": {
+    "mac": { "asset": "Dr.Rocket-{version}.dmg", "file": "DrRocket-mac.dmg" },
+    "windows": { "asset": "Dr.Rocket-{version}-windows-x64.zip", "file": "DrRocket-windows-x64.zip" },
+    "linux": { "asset": "Dr.Rocket-{version}-linux-x64.tar.gz", "file": "DrRocket-linux-x64.tar.gz" }
+  }
+}
