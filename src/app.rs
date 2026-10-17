@@ -1417,7 +1417,7 @@ impl eframe::App for App {
             let fill = ctx.fonts(|f| f.font_atlas_fill_ratio());
             stats.record(started.elapsed(), frame.info().cpu_usage, scrolls, fill);
             // `DRROCKET_FRAME_STATS=paint`: what this frame hands the renderer, every 60 frames.
-            if self.frame_count % 60 == 0 && std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "paint") {
+            if self.frame_count.is_multiple_of(60) && std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "paint") {
                 eprintln!("paint: {}", paint_summary(&ctx));
             }
             if std::env::var("DRROCKET_FRAME_STATS").is_ok_and(|v| v == "causes") {
