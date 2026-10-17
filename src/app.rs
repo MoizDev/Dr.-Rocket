@@ -312,6 +312,8 @@ pub struct App {
     pub ctx: egui::Context,
     styled_for: Option<(String, f32)>,
     pub quit_confirmed: bool,
+    /// The tab whose visualizer was drawn this frame (its step is highlighted in the editor).
+    pub viz_drawn: Option<usize>,
     /// Start the app again once it has closed (applying a new renderer).
     pub restart_on_exit: bool,
     pub automation: Option<crate::automation::Automation>,
@@ -460,6 +462,7 @@ impl App {
             ctx: cc.egui_ctx.clone(),
             styled_for: None,
             quit_confirmed: false,
+            viz_drawn: None,
             restart_on_exit: false,
             automation: crate::automation::Automation::from_env(),
             frame_count: 0,
@@ -1414,7 +1417,20 @@ impl eframe::App for App {
         }
         self.ensure_style(&ctx);
         self.handle_shortcuts(&ctx);
+        self.viz_drawn = None;
         self.layout_and_paint(ui);
+        // The visualizer's highlight and note belong to a visible visualizer: clear them from
+        // every other tab (they come back when it's shown again).
+        for (k, tab) in self.tabs.iter_mut().enumerate() {
+            if Some(k) != self.viz_drawn
+                && let Some(v) = tab.rk.viz.as_mut()
+                && v.highlighted.is_some()
+            {
+                v.highlighted = None;
+                tab.editor.deco.marks.retain(|m| m.kind != crate::editor::view::MarkKind::Viz);
+                tab.editor.deco.viz_note = None;
+            }
+        }
         self.modal_ui(&ctx);
         self.toasts_ui(&ctx);
         self.handle_dropped_files(&ctx);

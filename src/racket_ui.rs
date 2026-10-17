@@ -1971,6 +1971,7 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         }
         return;
     }
+    app.viz_drawn = Some(i);
     let now = ui.input(|inp| inp.time);
     // Toolbar.
     let mut nav: Option<isize> = None;
