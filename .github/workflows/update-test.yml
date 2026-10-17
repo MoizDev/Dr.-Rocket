@@ -66,7 +66,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: System libraries
-        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers xvfb
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers libxkbcommon-x11-0 xvfb
       - name: Build the installed and the new version
         run: |
           cargo build --release
