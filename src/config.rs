@@ -58,6 +58,8 @@ pub struct Settings {
     pub cursor_blink: bool,
     /// Animate the caret gliding to its new position.
     pub smooth_caret: bool,
+    /// Show test results in the editor: a gutter tick per passing test, and failures inline.
+    pub test_results_in_editor: bool,
     /// Width of the bar caret (and height of the underline caret) in points.
     pub cursor_width: f32,
     /// Custom caret color (`#rrggbb`); the theme's cursor color when unset.
@@ -104,6 +106,7 @@ impl Default for Settings {
             cursor_shape: CursorShape::Bar,
             cursor_blink: true,
             smooth_caret: true,
+            test_results_in_editor: true,
             cursor_width: 2.0,
             cursor_color: None,
             rainbow_brackets: true,

@@ -860,27 +860,37 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
     }
 }
 
-/// Put pass/fail chips at the end of each check-expect line.
+/// Attach a result to every test form: failures carry their short message, the rest passed.
+/// Each result is anchored to its test's source range, so it follows (or leaves with) the test.
 fn apply_test_inlays(tab: &mut Tab, report: &TestReport) {
     tab.editor.deco.inlays.clear();
-    let mut failed_lines = HashSet::new();
+    let toks = tab.editor.doc.tokens().to_vec();
+    let tests: Vec<std::ops::Range<usize>> = tab
+        .editor
+        .doc
+        .outline()
+        .iter()
+        .filter(|o| o.kind == crate::editor::document::OutlineKind::Test)
+        .map(|o| crate::editor::sexp::bracket_pair_at(&toks, o.pos).map_or(o.pos..o.pos + 1, |(a, b)| toks[a].start..toks[b].end))
+        .collect();
+    let mut failed = vec![false; tests.len()];
     for f in &report.failures {
         if is_local(tab, &f.srcloc)
             && let Some(pos) = f.srcloc.pos
         {
-            let line = tab.editor.doc.buffer.line_of(pos);
-            let short = short_test_message(&f.message);
-            tab.editor.deco.inlays.push(Inlay { line, text: short, kind: InlayKind::Fail });
-            failed_lines.insert(line);
+            // The test form the failure points into, or just its position (a rackunit check
+            // inside a function, say).
+            let k = tests.iter().position(|r| r.contains(&pos));
+            let range = k.map_or(pos..pos + 1, |k| tests[k].clone());
+            if let Some(k) = k {
+                failed[k] = true;
+            }
+            tab.editor.deco.inlays.push(Inlay { range, text: short_test_message(&f.message), kind: InlayKind::Fail });
         }
     }
-    // Every other test form passed.
-    for item in tab.editor.doc.outline().iter() {
-        if item.kind == crate::editor::document::OutlineKind::Test {
-            let line = tab.editor.doc.buffer.line_of(item.pos);
-            if !failed_lines.contains(&line) {
-                tab.editor.deco.inlays.push(Inlay { line, text: "passed".into(), kind: InlayKind::Pass });
-            }
+    for (range, failed) in tests.into_iter().zip(failed) {
+        if !failed {
+            tab.editor.deco.inlays.push(Inlay { range, text: String::new(), kind: InlayKind::Pass });
         }
     }
 }
@@ -2216,6 +2226,26 @@ fn tests_panel(app: &mut App, ui: &mut Ui) {
         return;
     };
     let mut jump = None;
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        let mut show = app.settings.test_results_in_editor;
+        if crate::ui::settings_view::toggle(ui, &theme, &mut show).changed() {
+            app.settings.test_results_in_editor = show;
+            let _ = app.settings.save();
+        }
+        ui.label(egui::RichText::new("Show in editor").color(theme.text_muted));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Clear").clicked() {
+                clear = true;
+            }
+        });
+    });
+    ui.add_space(6.0);
+    if clear {
+        app.tabs[i].rk.tests = None;
+        app.tabs[i].editor.deco.inlays.clear();
+        return;
+    }
     let w = ui.available_width();
     egui::ScrollArea::vertical().id_salt("tests").auto_shrink([false, false]).show(ui, |ui| {
         test_card(ui, &r, &theme, &mono, &mut jump, w);

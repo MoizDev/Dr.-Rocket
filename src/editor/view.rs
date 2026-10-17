@@ -46,10 +46,11 @@ pub enum InlayKind {
     Fail,
 }
 
-/// A chip rendered after the end of a line (test results, inline errors, hints).
+/// A test result, anchored to the test's source range: a tick or cross in the gutter, and for
+/// failures a chip after the end of the line. Editing inside the test removes it (stale).
 #[derive(Clone, Debug)]
 pub struct Inlay {
-    pub line: usize,
+    pub range: Range<usize>,
     pub text: String,
     pub kind: InlayKind,
 }
@@ -143,6 +144,11 @@ impl Decorations {
             *r = s..e.max(s);
         };
         self.diagnostics.iter_mut().for_each(|d| map(&mut d.range));
+        // A result no longer describes a test that was edited (or deleted); edits elsewhere
+        // just move it along.
+        let touched = |r: &Range<usize>| edit.start < r.end && (edit.end > r.start || edit.start > r.start);
+        self.inlays.retain(|i| !touched(&i.range));
+        self.inlays.iter_mut().for_each(|i| map(&mut i.range));
         self.marks.iter_mut().for_each(|m| map(&mut m.range));
         if let Some(sem) = &mut self.semantic {
             for a in &mut sem.arrows {
@@ -834,10 +840,13 @@ impl EditorView {
             self.paint_squiggle(&tp, d.range.start, d.range.end.max(d.range.start + 1), first, last, c);
         }
 
-        // Inline chips.
-        for inlay in &self.deco.inlays {
-            if (first..=last).contains(&inlay.line) {
-                self.paint_inlay(&tp, inlay, theme, style.font_size);
+        // Failed tests: a chip after the line (passes only get a gutter tick).
+        if style.settings.test_results_in_editor {
+            for inlay in self.deco.inlays.iter().filter(|i| i.kind == InlayKind::Fail) {
+                let line = self.doc.buffer.line_of(inlay.range.start);
+                if (first..=last).contains(&line) {
+                    self.paint_inlay(&tp, line, inlay, theme, style.font_size);
+                }
             }
         }
 
@@ -968,8 +977,7 @@ impl EditorView {
         }
     }
 
-    fn paint_inlay(&self, p: &egui::Painter, inlay: &Inlay, theme: &Theme, font_size: f32) {
-        let line = inlay.line;
+    fn paint_inlay(&self, p: &egui::Painter, line: usize, inlay: &Inlay, theme: &Theme, font_size: f32) {
         let len = self.doc.buffer.line_len(line);
         let x = self.x_of(line, len) + self.geom.char_w * 2.0;
         let y = self.line_y(line);
@@ -1079,6 +1087,16 @@ impl EditorView {
                 *e = Severity::Error;
             }
         }
+        // Test results per line (a failure wins over a pass on the same line).
+        let mut test_lines: HashMap<usize, InlayKind> = HashMap::new();
+        if style.settings.test_results_in_editor {
+            for i in &self.deco.inlays {
+                let e = test_lines.entry(self.doc.buffer.line_of(i.range.start)).or_insert(i.kind);
+                if i.kind == InlayKind::Fail {
+                    *e = InlayKind::Fail;
+                }
+            }
+        }
         for line in first..=last {
             let y = self.line_y(line);
             let row = Rect::from_min_max(pos2(gr.left(), y), pos2(gr.right(), y + self.geom.line_h));
@@ -1092,6 +1110,9 @@ impl EditorView {
                 p.circle_filled(bp_center, 5.0, theme.error);
             } else if hover_line == Some(line) {
                 p.circle_filled(bp_center, 5.0, with_alpha(theme.error, 70));
+            } else if let Some(kind) = test_lines.get(&line) {
+                let (glyph, c) = if *kind == InlayKind::Pass { (ic::CHECK, theme.success) } else { (ic::CLOSE, theme.error) };
+                p.text(bp_center, Align2::CENTER_CENTER, glyph, ui::icon_font((style.font_size * 0.82).round()), c);
             } else if let Some(sev) = diag_lines.get(&line) {
                 let c = if *sev == Severity::Error { theme.error } else { theme.warning };
                 p.circle_filled(bp_center, 3.0, c);
