@@ -30,6 +30,20 @@ After deploying, check that https://doctorocket.com loads and that each
 `/downloads/DrRocket-{mac.dmg,windows-x64.zip,linux-x64.tar.gz}` returns 200 with the
 versioned file name in `Content-Disposition`.
 
+## App updates
+
+The app (`src/update.rs`) reads https://doctorocket.com/version.json every few hours: the
+version plus each download's URL and SHA-256, generated at build time from the files in
+`public/downloads/` (`updateFeed` in `website/lib/release.ts`). A newer version is downloaded in
+the background, checked, and installed when the app quits or the user clicks Restart to Update.
+So a release reaches existing users as soon as the site is deployed and the CDN purged; a stale
+file fails the checksum and is never installed.
+
+Testing: `DRROCKET_UPDATE_FEED=file:///path/feed.json` points the app at a test feed (it also
+enables updates under automation and in development builds, and keeps the download inside
+`DRROCKET_CONFIG_DIR`). On macOS, install a `tools/bundle.sh` app in a scratch folder and serve a
+DMG built with a higher version. Windows and Linux: the manual `update-test.yml` workflow.
+
 ## Download counts
 
 Download links go to `website/app/download/[os]/route.ts`, which records the download in

@@ -321,6 +321,9 @@ pub struct App {
     pub viz_drawn: Option<usize>,
     /// Start the app again once it has closed (applying a new renderer).
     pub restart_on_exit: bool,
+    pub updater: crate::update::Updater,
+    /// The new version last announced in a toast (background checks announce each one once).
+    update_announced: Option<String>,
     pub automation: Option<crate::automation::Automation>,
     pub frame_count: u64,
     pub terminals: Vec<TerminalTab>,
@@ -442,6 +445,7 @@ impl App {
         egui_extras::install_image_loaders(&cc.egui_ctx);
         ui::install_fonts(&cc.egui_ctx);
         let settings = Settings::load();
+        let updater = crate::update::Updater::start(&cc.egui_ctx, settings.check_for_updates);
         let themes = ThemeRegistry::load();
         let theme = themes.get_or_default(&settings.theme);
         let mut recents = Recents::load();
@@ -469,6 +473,8 @@ impl App {
             quit_confirmed: false,
             viz_drawn: None,
             restart_on_exit: false,
+            updater,
+            update_announced: None,
             automation: crate::automation::Automation::from_env(),
             frame_count: 0,
             terminals: Vec::new(),
@@ -480,6 +486,9 @@ impl App {
         app.apply_theme_overrides();
         if !crate::crash::unseen().is_empty() && app.automation.is_none() {
             app.toast(crate::platform::keys("Dr. Rocket quit unexpectedly last time. A report was saved: choose Report a Problem… (☰ menu or ⇧⌘P) to copy it and send it to us."), ToastKind::Error);
+        }
+        if let Some((version, why)) = app.updater.take_failure() {
+            app.toast(format!("Dr. Rocket couldn't install {version}: {why}. Download it from doctorocket.com instead."), ToastKind::Error);
         }
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
         if restore {
@@ -1077,6 +1086,20 @@ impl App {
             }
             Command::Settings => self.modal = Modal::Settings(crate::ui::settings_view::SettingsView::default()),
             Command::About => self.modal = Modal::About,
+            Command::CheckForUpdates => {
+                if self.updater.check_now() {
+                    self.toast("Checking for updates…", ToastKind::Info);
+                } else {
+                    self.toast("Update checks are off in this run.", ToastKind::Info);
+                }
+            }
+            Command::RestartToUpdate => match self.updater.ready() {
+                Some(_) => {
+                    self.restart_on_exit = true;
+                    self.quit();
+                }
+                None => self.toast("No update is ready to install. Choose Check for Updates… to look for one.", ToastKind::Info),
+            },
             Command::KeyboardShortcuts => {
                 self.modal = Modal::Palette(crate::ui::palette::Palette::new(crate::ui::palette::Mode::Commands, ""));
             }
@@ -1350,6 +1373,36 @@ impl App {
         resp.on_hover_text("Next problem (F8)");
     }
 
+    /// Quit, asking first about unsaved changes.
+    pub fn quit(&mut self) {
+        if !self.all_dirty_titles().is_empty() {
+            self.modal = Modal::ConfirmQuit;
+        } else {
+            self.quit_confirmed = true;
+            self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    /// Tell the user about update checks as they finish.
+    fn poll_updates(&mut self) {
+        use crate::update::Status;
+        self.updater.set_enabled(self.settings.check_for_updates);
+        let Some((status, asked)) = self.updater.take_change() else { return };
+        if let Status::Ready { version } | Status::Available { version, .. } = &status {
+            if !asked && self.update_announced.as_ref() == Some(version) {
+                return;
+            }
+            self.update_announced = Some(version.clone());
+        }
+        match status {
+            Status::Ready { version } => self.toast(format!("Dr. Rocket {version} is ready. It installs when you quit, or choose Restart to Update in the status bar."), ToastKind::Success),
+            Status::Available { version, why } => self.toast(format!("Dr. Rocket {version} is available. {why} Click Update in the status bar to download it."), ToastKind::Info),
+            Status::UpToDate if asked => self.toast(format!("Dr. Rocket is up to date ({}).", crate::update::CURRENT), ToastKind::Success),
+            Status::Failed(e) if asked => self.toast(e, ToastKind::Error),
+            _ => {}
+        }
+    }
+
     fn toasts_ui(&mut self, ctx: &egui::Context) {
         let now = ctx.input(|i| i.time);
         self.toasts.retain(|t| t.until > now);
@@ -1408,14 +1461,7 @@ impl eframe::App for App {
         }
         for action in crate::platform::take_menu_actions() {
             match action {
-                crate::platform::MenuAction::Quit => {
-                    if !self.all_dirty_titles().is_empty() {
-                        self.modal = Modal::ConfirmQuit;
-                    } else {
-                        self.quit_confirmed = true;
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-                    }
-                }
+                crate::platform::MenuAction::Quit => self.quit(),
                 crate::platform::MenuAction::Command(i) => {
                     if let Some(c) = COMMANDS.get(i) {
                         // Menus act like their shortcuts: ignored while a dialog is open,
@@ -1442,6 +1488,7 @@ impl eframe::App for App {
         self.autosave(now);
         self.save_session_if_changed(now);
         crate::racket_ui::poll(self, ctx);
+        self.poll_updates();
     }
 
     fn ui(&mut self, ui: &mut Ui, frame: &mut eframe::Frame) {
@@ -1492,6 +1539,10 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        // A downloaded update goes in now; with a restart, the new version is what starts.
+        if self.updater.install(self.restart_on_exit) {
+            return;
+        }
         if self.restart_on_exit {
             crate::startup::spawn_again();
         }

@@ -1,0 +1,107 @@
+# End-to-end test of the updater (src/update.rs) on Windows and Linux: an installed copy of this
+# commit finds a newer build in a local feed, downloads and verifies it, and on Restart to Update
+# replaces itself and starts the new version. (macOS is tested locally; see CLAUDE.md.) Manual only.
+name: Update test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build the installed and the new version
+        shell: pwsh
+        run: |
+          cargo build --release
+          New-Item -ItemType Directory -Force "installed/Dr. Rocket" | Out-Null
+          Copy-Item target/release/drrocket.exe "installed/Dr. Rocket/Dr. Rocket.exe"
+          (Get-Content Cargo.toml) -replace '^version = ".*"', 'version = "99.0.0"' | Set-Content Cargo.toml
+          cargo build --release
+          New-Item -ItemType Directory -Force "new/Dr. Rocket" | Out-Null
+          Copy-Item target/release/drrocket.exe "new/Dr. Rocket/Dr. Rocket.exe"
+          Compress-Archive -Path "new/Dr. Rocket" -DestinationPath new.zip
+          git checkout Cargo.toml
+      - name: Update
+        shell: pwsh
+        run: |
+          $root = (Get-Location).Path -replace '\\', '/'
+          $sum = (Get-FileHash new.zip -Algorithm SHA256).Hash.ToLower()
+          @{ version = "99.0.0"; downloads = @{ windows = @{ url = "file:///$root/new.zip"; sha256 = $sum } } } | ConvertTo-Json -Depth 4 | Set-Content feed.json
+          New-Item -ItemType Directory -Force shots | Out-Null
+          # First run: wait for the download, then quit without installing.
+          @{ steps = @(@{ new_file = $true }, @{ wait_ms = 25000 }, @{ command = "About" }, @{ wait_ms = 800 }, @{ screenshot = "$root/shots/1-ready.png" }, @{ quit = $true }) } | ConvertTo-Json -Depth 4 | Set-Content s1.json
+          # Second run: Restart to Update. The new version runs the same script and takes the screenshot.
+          @{ steps = @(@{ wait_ms = 3000 }, @{ command = "RestartToUpdate" }, @{ wait_ms = 8000 }, @{ command = "About" }, @{ wait_ms = 800 }, @{ screenshot = "$root/shots/2-updated.png" }, @{ quit = $true }) } | ConvertTo-Json -Depth 4 | Set-Content s2.json
+          $env:DRROCKET_CONFIG_DIR = (New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/cfg").FullName
+          $env:DRROCKET_UPDATE_FEED = "file:///$root/feed.json"
+          $exe = "installed/Dr. Rocket/Dr. Rocket.exe"
+          $env:DRROCKET_AUTOMATION = "s1.json"
+          Start-Process $exe -Wait
+          "--- staged"; Get-ChildItem -Recurse "$env:DRROCKET_CONFIG_DIR/update" | Select-Object FullName
+          $env:DRROCKET_AUTOMATION = "s2.json"
+          Start-Process $exe -Wait
+          # The relaunched copy runs on after the first exits.
+          for ($i = 0; $i -lt 60 -and -not (Test-Path shots/2-updated.png); $i++) { Start-Sleep 1 }
+          Start-Sleep 3
+          "--- files"; Get-ChildItem "installed/Dr. Rocket"
+          $v = & $exe --version | Out-String
+          "--- installed version: $v"
+          if ($v.Trim() -ne "99.0.0") { throw "the update wasn't installed" }
+          if (-not (Test-Path shots/2-updated.png)) { throw "the new version didn't start" }
+          if (Test-Path "installed/Dr. Rocket/Dr. Rocket.exe.old") { throw "the old exe wasn't cleaned up" }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-screenshots
+          path: shots/
+
+  linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: System libraries
+        run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libgl1-mesa-dri mesa-vulkan-drivers xvfb
+      - name: Build the installed and the new version
+        run: |
+          cargo build --release
+          mkdir -p "installed/Dr. Rocket" "new/Dr. Rocket"
+          cp target/release/drrocket "installed/Dr. Rocket/drrocket"
+          sed -i 's/^version = ".*"/version = "99.0.0"/' Cargo.toml
+          cargo build --release
+          cp target/release/drrocket "new/Dr. Rocket/drrocket"
+          tar -czf new.tar.gz -C new "Dr. Rocket"
+          git checkout Cargo.toml
+      - name: Update
+        run: |
+          root=$PWD
+          mkdir -p shots
+          echo "{\"version\":\"99.0.0\",\"downloads\":{\"linux\":{\"url\":\"file://$root/new.tar.gz\",\"sha256\":\"$(sha256sum new.tar.gz | cut -d' ' -f1)\"}}}" > feed.json
+          echo "{\"steps\":[{\"new_file\":true},{\"wait_ms\":25000},{\"command\":\"About\"},{\"wait_ms\":800},{\"screenshot\":\"$root/shots/1-ready.png\"},{\"quit\":true}]}" > s1.json
+          echo "{\"steps\":[{\"wait_ms\":3000},{\"command\":\"RestartToUpdate\"},{\"wait_ms\":8000},{\"command\":\"About\"},{\"wait_ms\":800},{\"screenshot\":\"$root/shots/2-updated.png\"},{\"quit\":true}]}" > s2.json
+          export DRROCKET_CONFIG_DIR=$RUNNER_TEMP/cfg DRROCKET_UPDATE_FEED=file://$root/feed.json DRROCKET_RENDERER=software
+          mkdir -p $DRROCKET_CONFIG_DIR
+          Xvfb :99 -screen 0 1600x1000x24 & export DISPLAY=:99
+          sleep 2
+          exe="installed/Dr. Rocket/drrocket"
+          DRROCKET_AUTOMATION=s1.json "$exe"
+          echo "--- staged"; find $DRROCKET_CONFIG_DIR/update
+          DRROCKET_AUTOMATION=s2.json "$exe"
+          for i in $(seq 60); do [ -f shots/2-updated.png ] && break; sleep 1; done
+          sleep 3
+          echo "--- files"; ls -la "installed/Dr. Rocket"
+          v=$("$exe" --version)
+          echo "--- installed version: $v"
+          [ "$v" = "99.0.0" ] || { echo "the update wasn't installed"; exit 1; }
+          [ -f shots/2-updated.png ] || { echo "the new version didn't start"; exit 1; }
+          [ ! -e "installed/Dr. Rocket/drrocket.old" ] || { echo "the old binary wasn't cleaned up"; exit 1; }
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: linux-screenshots
+          path: shots/

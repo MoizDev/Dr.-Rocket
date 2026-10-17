@@ -1,6 +1,7 @@
 //! Settings sheet and the other modal dialogs.
 
 use crate::app::{App, Modal};
+use crate::commands::Command;
 use crate::config::{CursorShape, IndentStyle};
 use crate::theme::{Theme, with_alpha};
 use crate::ui::{self, ic};
@@ -238,7 +239,8 @@ impl App {
                 self.quit_confirmed = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Some(1) => {}
+            // Cancelling a Restart to Update (or a renderer restart) cancels the restart too.
+            Some(1) => self.restart_on_exit = false,
             Some(2) => {
                 if !self.save_all_projects() {
                     return;
@@ -263,11 +265,60 @@ impl App {
             });
             ui.add_space(10.0);
             ui.label(egui::RichText::new("A native Racket IDE written in Rust. Uses Racket's own stepper, check-syntax and debugger.").color(app.theme.text_muted));
-            ui.add_space(12.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(primary_button(&app.theme, "Close")).clicked() {
-                    close = true;
-                }
+            ui.add_space(14.0);
+            ui.separator();
+            ui.add_space(6.0);
+            let theme = app.theme.clone();
+            let mut auto = app.settings.check_for_updates;
+            ui.horizontal(|ui| {
+                ui.vertical(|ui| {
+                    ui.set_width(ui.available_width() - 52.0);
+                    ui.label(egui::RichText::new("Automatic updates").font(ui::medium(14.0)).color(theme.text));
+                    ui.label(egui::RichText::new("Download new versions in the background and install them when you quit.").size(12.5).color(theme.text_placeholder));
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if toggle(ui, &theme, &mut auto).changed() {
+                        app.settings.check_for_updates = auto;
+                        let _ = app.settings.save();
+                    }
+                });
+            });
+            ui.add_space(10.0);
+            use crate::update::Status;
+            let (line, color) = match app.updater.status() {
+                Status::Idle => (String::new(), theme.text_placeholder),
+                Status::Checking => ("Checking for updates…".to_string(), theme.text_placeholder),
+                Status::UpToDate => ("Dr. Rocket is up to date.".to_string(), theme.text_placeholder),
+                Status::Downloading { version } => (format!("Downloading {version}…"), theme.text_placeholder),
+                Status::Ready { version } => (format!("{version} is ready. It installs when you quit."), theme.success),
+                Status::Available { version, why } => (format!("{version} is available. {why}"), theme.text_muted),
+                Status::Failed(e) => (e, theme.error),
+            };
+            if !line.is_empty() {
+                ui.label(egui::RichText::new(line).size(12.5).color(color));
+                ui.add_space(10.0);
+            }
+            ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.add(primary_button(&theme, "Close")).clicked() {
+                        close = true;
+                    }
+                    let (label, cmd) = match app.updater.status() {
+                        Status::Ready { .. } => ("Restart to Update", Command::RestartToUpdate),
+                        _ => ("Check for Updates", Command::CheckForUpdates),
+                    };
+                    if let Status::Available { .. } = app.updater.status()
+                        && ui.button("Download").clicked()
+                    {
+                        let _ = open::that(crate::update::download_page());
+                    }
+                    if ui.button(label).clicked() {
+                        if cmd == Command::RestartToUpdate {
+                            close = true;
+                        }
+                        app.run_command(cmd);
+                    }
+                });
             });
         });
         if !close {

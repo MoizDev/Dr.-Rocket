@@ -96,6 +96,8 @@ pub struct Settings {
     pub racket_path: Option<String>,
     pub shell: Option<String>,
     pub restore_session: bool,
+    /// Look for new releases in the background and install them on quit (update.rs).
+    pub check_for_updates: bool,
     /// Default language for new, unsaved files: `#lang racket` or a teaching language id.
     pub default_language: String,
 }
@@ -135,6 +137,7 @@ impl Default for Settings {
             racket_path: None,
             shell: None,
             restore_session: true,
+            check_for_updates: true,
             default_language: "module".to_string(),
         }
     }

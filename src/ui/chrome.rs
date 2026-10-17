@@ -407,6 +407,7 @@ impl App {
         // Right side.
         let mut rb = bar.new_child(UiBuilder::new().max_rect(rect.shrink2(vec2(14.0, 0.0))).layout(egui::Layout::right_to_left(egui::Align::Center)));
         rb.spacing_mut().item_spacing.x = 14.0;
+        self.update_pill(&mut rb);
         let status = crate::racket_ui::status_text(self);
         if !status.0.is_empty() {
             rb.label(egui::RichText::new(&status.0).font(ui::ui_font(12.5)).color(status.1));
@@ -423,6 +424,38 @@ impl App {
             let pos = rb.add(egui::Label::new(egui::RichText::new(format!("{cursors}Ln {}, Col {}{sel}", line + 1, col + 1)).font(ui::ui_font(12.5)).color(theme.text_muted)).sense(Sense::click()));
             if pos.on_hover_text(crate::platform::keys("Go to Line (⌃G)")).clicked() {
                 self.run_command(Command::GoToLine);
+            }
+        }
+    }
+
+    /// At the right end of the status bar: Restart to Update once a new version is downloaded,
+    /// or Update (to the website) when this copy can't install it itself.
+    fn update_pill(&mut self, ui: &mut Ui) {
+        use crate::update::Status;
+        let theme = self.theme.clone();
+        let (glyph, label, tip) = match self.updater.status() {
+            Status::Ready { version } => (ic::RESTART_ALT, "Restart to Update", format!("Dr. Rocket {version} is downloaded. Restart to start using it (it also installs when you quit).")),
+            Status::Available { version, why } => (ic::DOWNLOAD, "Update", format!("Dr. Rocket {version} is available. {why}")),
+            _ => return,
+        };
+        let font = ui::medium(12.5);
+        let g = ui.painter().layout_no_wrap(label.to_string(), font, egui::Color32::WHITE);
+        let (r, resp) = ui.allocate_exact_size(vec2(8.0 + 16.0 + 4.0 + g.size().x + 10.0, 20.0), Sense::click());
+        let fill = if resp.is_pointer_button_down_on() {
+            crate::theme::mix(theme.text_accent, egui::Color32::BLACK, 0.2)
+        } else if resp.hovered() {
+            crate::theme::mix(theme.text_accent, egui::Color32::WHITE, 0.12)
+        } else {
+            theme.text_accent
+        };
+        ui.painter().rect_filled(r, CornerRadius::same(6), fill);
+        ui.painter().text(pos2(r.left() + 8.0 + 8.0, r.center().y), Align2::CENTER_CENTER, glyph, ui::icon_font(15.0), egui::Color32::WHITE);
+        ui.painter().galley(pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, egui::Color32::WHITE);
+        if resp.on_hover_text(tip).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            if self.updater.ready().is_some() {
+                self.run_command(Command::RestartToUpdate);
+            } else {
+                let _ = open::that(crate::update::download_page());
             }
         }
     }

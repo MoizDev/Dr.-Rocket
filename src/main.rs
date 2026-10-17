@@ -22,11 +22,17 @@ mod terminal;
 mod theme;
 mod visualizer;
 mod ui;
+mod update;
 mod workspace;
 
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
+    // Updates ask a downloaded copy for its version before installing it (update.rs).
+    if std::env::args().nth(1).as_deref() == Some("--version") {
+        println!("{}", update::CURRENT);
+        return Ok(());
+    }
     crash::install();
     let renderer = startup::begin();
     platform::install_open_handler();

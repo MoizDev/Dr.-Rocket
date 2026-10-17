@@ -80,6 +80,8 @@ pub enum Command {
     Settings,
     KeyboardShortcuts,
     About,
+    CheckForUpdates,
+    RestartToUpdate,
 }
 
 pub struct CommandInfo {
@@ -175,6 +177,8 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::Settings, label: "Settings", group: "App", icon: ic::SETTINGS, shortcut: sc(CMD, Key::Comma) },
     CommandInfo { cmd: Command::KeyboardShortcuts, label: "Keyboard Shortcuts", group: "App", icon: ic::KEYBOARD, shortcut: None },
     CommandInfo { cmd: Command::About, label: "About Dr. Rocket", group: "App", icon: ic::INFO, shortcut: None },
+    CommandInfo { cmd: Command::CheckForUpdates, label: "Check for Updates…", group: "App", icon: ic::SYNC, shortcut: None },
+    CommandInfo { cmd: Command::RestartToUpdate, label: "Restart to Update", group: "App", icon: ic::RESTART_ALT, shortcut: None },
 ];
 
 /// The native menu bar: commands grouped into menus (`None` = separator).
@@ -193,7 +197,7 @@ pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
         e
     });
     vec![
-        MenuSpec { title: "App", entries: vec![about, None, settings, entry(Command::SelectTheme), entry(Command::KeyboardShortcuts), None, entry(Command::ReportProblem)] },
+        MenuSpec { title: "App", entries: vec![about, entry(Command::CheckForUpdates), None, settings, entry(Command::SelectTheme), entry(Command::KeyboardShortcuts), None, entry(Command::ReportProblem)] },
         MenuSpec {
             title: "File",
             entries: vec![

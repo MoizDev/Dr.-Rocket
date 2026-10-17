@@ -1,5 +1,6 @@
 // The release the site offers. The version and file names live in release.json (also read by
 // scripts/fetch-downloads.sh and next.config.ts); this module only derives what pages need.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import release from "../release.json";
@@ -57,3 +58,27 @@ export const DOWNLOADS: Record<Os, Download> = Object.fromEntries(
     ];
   }),
 ) as Record<Os, Download>;
+
+const SITE = "https://doctorocket.com";
+
+/** What the app's updater reads (app/version.json): each file present at build time, with its
+ * checksum. The file URLs stay the same across releases (purge the CDN after a release, see
+ * CLAUDE.md); a stale copy fails the app's checksum and is never installed. */
+export function updateFeed() {
+  const downloads: Partial<Record<Os, { url: string; sha256: string; size: number }>> = {};
+  for (const os of OSES) {
+    const file = release.downloads[os].file;
+    let data: Buffer;
+    try {
+      data = fs.readFileSync(path.join(process.cwd(), "public", "downloads", file));
+    } catch {
+      continue;
+    }
+    downloads[os] = {
+      url: `${SITE}/downloads/${file}`,
+      sha256: crypto.createHash("sha256").update(data).digest("hex"),
+      size: data.length,
+    };
+  }
+  return { version: VERSION, downloads };
+}
