@@ -106,6 +106,11 @@ impl RunSession {
         self.send(&RunnerCommand::Breakpoints { positions, path: Some(path) });
     }
 
+    /// Resume a program paused at its memory limit, now allowed `limit_mb` (`None`: no limit).
+    pub fn memory_continue(&mut self, limit_mb: Option<u64>) {
+        self.send(&RunnerCommand::MemoryContinue { limit_mb });
+    }
+
     /// Ask for identifiers in the REPL namespace starting with `prefix`; answered by
     /// `RunEvent::Completions { id, .. }`.
     pub fn complete(&mut self, prefix: &str) -> u64 {

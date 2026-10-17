@@ -156,6 +156,10 @@ pub struct RacketTab {
     pub tests: Option<TestReport>,
     pub profile: Option<ProfileReport>,
     pub paused: Option<PausedState>,
+    /// The program's memory use in MB, while it runs (shown in the status bar).
+    pub memory_mb: Option<u64>,
+    /// Paused at the memory limit: (MB in use, the limit in MB).
+    pub memory_pause: Option<(u64, u64)>,
     pub instrument: Instrument,
     pub stepper: Option<StepperView>,
     pub viz: Option<crate::visualizer::VisualizerView>,
@@ -190,6 +194,8 @@ impl RacketTab {
             tests: None,
             profile: None,
             paused: None,
+            memory_mb: None,
+            memory_pause: None,
             instrument: Instrument::Errortrace,
             stepper: None,
             viz: None,
@@ -612,7 +618,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
         language: tab.language.run_language(),
         options: RunOptions {
             instrument,
-            memory_limit_mb: Some(1024),
+            memory_limit_mb: app.settings.memory_limit_mb,
             breakpoints,
             print_width: 80,
             trace: tab.language.is_teaching() && tab.lang_settings.tracing,
@@ -634,6 +640,8 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             tab.rk.defs_running = true;
             tab.rk.waiting_input = false;
             tab.rk.paused = None;
+            tab.rk.memory_mb = None;
+            tab.rk.memory_pause = None;
             tab.rk.tests = None;
             tab.rk.instrument = instrument;
             if instrument != Instrument::Profile {
@@ -843,6 +851,15 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
                 v.trace.truncated = truncated;
             }
         }
+        // While paused, the status bar keeps the figure the pause reported.
+        RunEvent::Memory { mb } if tab.rk.memory_pause.is_none() => tab.rk.memory_mb = Some(mb),
+        RunEvent::Memory { .. } => {}
+        RunEvent::MemoryLimit { mb, limit } => {
+            tab.rk.memory_mb = Some(mb);
+            tab.rk.memory_pause = Some((mb, limit));
+            tab.rk.scroll_to_bottom = true;
+            app.layout.show(PanelItem::Interactions, Dock::Right);
+        }
         RunEvent::Exit { code } => {
             tab.rk.push(Entry::Info(format!("Program exited with code {code}.")));
             tab.rk.busy = false;
@@ -853,9 +870,16 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
             tab.rk.busy = false;
             tab.rk.waiting_input = false;
             tab.rk.paused = None;
+            tab.rk.memory_mb = None;
+            tab.rk.memory_pause = None;
             let tail: String = stderr.lines().rev().take(6).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n");
-            let msg = if tail.trim().is_empty() { "The program has ended.".to_string() } else { format!("The program has ended.\n{tail}") };
-            tab.rk.push(Entry::Info(msg));
+            // After "Program exited with code N.", saying it ended again adds nothing.
+            let exited = matches!(tab.rk.transcript.last(), Some(Entry::Info(t)) if t.starts_with("Program exited"));
+            if !tail.trim().is_empty() {
+                tab.rk.push(Entry::Info(format!("The program has ended.\n{tail}")));
+            } else if !exited {
+                tab.rk.push(Entry::Info("The program has ended.".into()));
+            }
         }
     }
 }
@@ -1066,6 +1090,8 @@ pub fn run(app: &mut App, cmd: Command) {
                 tab.rk.busy = false;
                 tab.rk.waiting_input = false;
                 tab.rk.paused = None;
+                tab.rk.memory_mb = None;
+                tab.rk.memory_pause = None;
                 tab.rk.push(Entry::Info("Program killed.".into()));
             }
             if let Some(st) = tab.rk.stepper.as_mut() {
@@ -1394,6 +1420,9 @@ pub fn status_text(app: &App) -> (String, Color32) {
         return ("Paused".into(), theme.warning);
     }
     if let Some(t) = app.active_tab() {
+        if t.rk.memory_pause.is_some() {
+            return ("Paused: memory limit".into(), theme.warning);
+        }
         if t.rk.waiting_input {
             return ("Waiting for input".into(), theme.info);
         }
@@ -1471,6 +1500,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
 
     // Transcript.
     let mut jump: Option<Srcloc> = None;
+    let mut memory_action: Option<Option<u64>> = None;
     {
         let tab = &mut app.tabs[i];
         let mut child = ui.new_child(UiBuilder::new().max_rect(transcript_rect.shrink2(vec2(14.0, 4.0))));
@@ -1488,6 +1518,9 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             for e in &tab.rk.transcript {
                 transcript_entry(ui, e, &theme, &tk, &mono, &mut jump);
             }
+            if let Some((mb, limit)) = tab.rk.memory_pause {
+                memory_action = memory_card(ui, &theme, mb, limit);
+            }
             ui.add_space(6.0);
             if stick {
                 ui.scroll_to_cursor(Some(egui::Align::BOTTOM));
@@ -1496,6 +1529,18 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     }
     if let Some(loc) = jump {
         jump_to_srcloc(app, &loc);
+    }
+    match memory_action {
+        // Keep going, with a new limit.
+        Some(Some(limit)) => {
+            let tab = &mut app.tabs[i];
+            tab.rk.memory_pause = None;
+            if let Some(s) = tab.rk.session.as_mut() {
+                s.memory_continue(Some(limit));
+            }
+        }
+        Some(None) => run(app, Command::Kill),
+        None => {}
     }
 
     // Input box.
@@ -1512,7 +1557,11 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         tab.rk.input.show(&mut c, ed_rect, &style);
     }
     if tab.rk.input.doc.buffer.is_empty() {
-        let hint = if waiting { "The program is waiting for input…".to_string() } else if tab.rk.busy { crate::platform::keys("Evaluating…  (⌘. to break)") } else { "Evaluate a Racket expression…".to_string() };
+        let hint = if tab.rk.memory_pause.is_some() {
+            "Paused at the memory limit".to_string()
+        } else if waiting {
+            "The program is waiting for input…".to_string()
+        } else if tab.rk.busy { crate::platform::keys("Evaluating…  (⌘. to break)") } else { "Evaluate a Racket expression…".to_string() };
         ui.painter().text(pos2(ed_rect.left() + 2.0, ed_rect.top() + line_h / 2.0), Align2::LEFT_CENTER, hint, ui::ui_font(font_size), theme.text_placeholder);
     }
     // Bottom row: language chip, history, send.
@@ -1531,7 +1580,7 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     ui.painter().circle_filled(send_r.center(), 14.0, send_bg);
     ui.painter().text(send_r.center(), Align2::CENTER_CENTER, ic::ARROW_UPWARD, ui::icon_font(18.0), if can_send { Color32::WHITE } else { theme.text_placeholder });
     let busy = tab.rk.busy;
-    if busy && !waiting {
+    if busy && !waiting && tab.rk.memory_pause.is_none() {
         // Running indicator + break button.
         let br = Rect::from_center_size(pos2(send_r.left() - 22.0, row.center().y), vec2(28.0, 28.0));
         let b = ui.interact(br, Id::unique("repl-break"), Sense::click()).on_hover_text(crate::platform::keys("Break (⌘.)"));
@@ -1585,6 +1634,45 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     }
     if do_submit {
         submit(app, i);
+    }
+}
+
+/// The program passed its memory limit and is paused: keep going (`Some(new limit)`) or stop
+/// (`None`).
+fn memory_card(ui: &mut Ui, theme: &crate::theme::Theme, mb: u64, limit: u64) -> Option<Option<u64>> {
+    let w = ui.available_width();
+    let next = limit.saturating_mul(2).max(limit + 64);
+    let mut action = None;
+    egui::Frame::NONE.fill(theme.warning_bg).stroke(Stroke::new(1.0, theme.warning_border)).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+        ui.set_width(w - 24.0);
+        ui.horizontal_top(|ui| {
+            ui.label(egui::RichText::new(ic::WARNING).font(ui::icon_font_filled(17.0)).color(theme.warning));
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 4.0;
+                ui.add(egui::Label::new(egui::RichText::new(format!("Paused: the program is using {} of memory, over its {} limit.", mb_text(mb), mb_text(limit))).font(ui::medium(13.5)).color(theme.text)).wrap());
+                ui.add(egui::Label::new(egui::RichText::new("Recursion that never reaches its base case keeps using more memory. If your program really needs more, keep going.").size(12.5).color(theme.text_muted)).wrap());
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add(crate::ui::settings_view::primary_button(theme, &format!("Keep Going (up to {})", mb_text(next)))).clicked() {
+                        action = Some(Some(next));
+                    }
+                    if ui.button("Stop").clicked() {
+                        action = Some(None);
+                    }
+                });
+            });
+        });
+    });
+    action
+}
+
+/// "256 MB", "1 GB", "1.5 GB".
+pub fn mb_text(mb: u64) -> String {
+    if mb >= 1024 {
+        let gb = mb as f64 / 1024.0;
+        if (gb - gb.round()).abs() < 0.05 { format!("{} GB", gb.round()) } else { format!("{gb:.1} GB") }
+    } else {
+        format!("{mb} MB")
     }
 }
 

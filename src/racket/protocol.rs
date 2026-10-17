@@ -64,6 +64,7 @@ pub struct RunOptions {
     pub instrument: Instrument,
     /// Submodules to run after the main module, in order (DrRacket: `main`, `test`).
     pub submodules: Vec<String>,
+    /// Pause the program when it uses more memory than this (it asks to keep going).
     pub memory_limit_mb: Option<u64>,
     /// Initial breakpoints (char positions) for [`Instrument::Debug`].
     pub breakpoints: Vec<usize>,
@@ -146,6 +147,10 @@ pub(crate) enum RunnerCommand<'a> {
     Complete {
         id: u64,
         prefix: &'a str,
+    },
+    /// Resume a program paused at its memory limit, with a new limit (`None`: no limit).
+    MemoryContinue {
+        limit_mb: Option<u64>,
     },
 }
 
@@ -301,6 +306,15 @@ pub enum RunEvent {
     /// Ready for the next interaction. `id` is `None` after the definitions ran.
     Ready {
         id: Option<u64>,
+    },
+    /// The program's memory use changed (megabytes, not counting the runner's own).
+    Memory {
+        mb: u64,
+    },
+    /// The program passed its memory limit and is paused until `MemoryContinue` (or killed).
+    MemoryLimit {
+        mb: u64,
+        limit: u64,
     },
     /// The program called `exit`.
     Exit {

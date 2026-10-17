@@ -412,6 +412,12 @@ impl App {
         if !status.0.is_empty() {
             rb.label(egui::RichText::new(&status.0).font(ui::ui_font(12.5)).color(status.1));
         }
+        // The running program's memory, like DrRacket's bottom-right readout.
+        if let Some(mb) = self.active_tab().and_then(|t| t.rk.session.as_ref().and(t.rk.memory_mb)) {
+            let limit = self.settings.memory_limit_mb.map_or("no limit".to_string(), |l| format!("limit {}", crate::racket_ui::mb_text(l)));
+            rb.label(egui::RichText::new(crate::racket_ui::mb_text(mb)).font(ui::ui_font(12.5)).color(theme.text_muted))
+                .on_hover_text(format!("Memory the running program is using ({limit}, change it in Settings → Racket)"));
+        }
         if let Some(tab) = self.active_tab() {
             let b = &tab.editor.doc.buffer;
             let p = b.selections.primary();

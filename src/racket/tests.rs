@@ -605,13 +605,20 @@ fn exit_reports_code() {
 }
 
 #[test]
-fn memory_limit_stops_the_program() {
+fn memory_limit_pauses_until_told_to_keep_going() {
     let b = need_racket!();
-    let mut config = module_config(None, "#lang racket/base\n(define (grow l) (grow (cons (make-vector 1000) l)))\n(grow '())\n", Instrument::None);
+    // Holds on to about 100 MB, a little at a time, then finishes.
+    let src = "#lang racket/base\n(define v (for/list ([i 100]) (sleep 0.005) (make-bytes (* 1024 1024) 1)))\n(display (length v))\n";
+    let mut config = module_config(None, src, Instrument::None);
     config.options.memory_limit_mb = Some(64);
-    let s = RunSession::start(b, &config).unwrap();
-    let events = run_until(&s, |e| matches!(e, RunEvent::Exit { .. } | RunEvent::Terminated { .. }));
-    assert!(events.iter().any(|e| matches!(e, RunEvent::Error(r) if r.message.contains("out of memory"))), "{events:#?}");
+    let mut s = RunSession::start(b, &config).unwrap();
+    let events = run_until(&s, |e| matches!(e, RunEvent::MemoryLimit { .. } | RunEvent::Ready { .. } | RunEvent::Terminated { .. }));
+    assert!(matches!(events.last(), Some(RunEvent::MemoryLimit { limit: 64, mb }) if *mb > 64), "{events:#?}");
+    assert!(!events.iter().any(|e| matches!(e, RunEvent::Output { .. })), "ran on while paused: {events:#?}");
+    s.memory_continue(Some(512));
+    let events = run_until(&s, |e| matches!(e, RunEvent::Ready { .. } | RunEvent::Terminated { .. }));
+    assert!(events.iter().any(|e| matches!(e, RunEvent::Output { text, .. } if text == "100")), "{events:#?}");
+    assert!(!events.iter().any(|e| matches!(e, RunEvent::MemoryLimit { .. } | RunEvent::Error(_))), "{events:#?}");
 }
 
 #[test]

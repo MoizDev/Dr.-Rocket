@@ -94,6 +94,9 @@ pub struct Settings {
     /// screen as a step, as DrRacket does ("9/9" rather than "8 of 8" plus a note).
     pub stepper_count_finish: bool,
     pub racket_path: Option<String>,
+    /// Pause a running program that uses more memory than this and ask whether to keep going
+    /// (DrRacket's memory limit); `None` for no limit.
+    pub memory_limit_mb: Option<u64>,
     pub shell: Option<String>,
     pub restore_session: bool,
     /// Look for new releases in the background and install them on quit (update.rs).
@@ -135,6 +138,7 @@ impl Default for Settings {
             auto_complete: false,
             stepper_count_finish: true,
             racket_path: None,
+            memory_limit_mb: Some(256),
             shell: None,
             restore_session: true,
             check_for_updates: true,

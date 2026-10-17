@@ -501,6 +501,7 @@
          [("debug") (debug-command! (hash-ref cmd 'action "continue"))]
          [("breakpoints") (set-breakpoints! (hash-ref cmd 'positions '()) (hash-ref cmd 'path #f))]
          [("complete") (complete! cmd)]
+         [("memory-continue") (memory-continue! (hash-ref cmd 'limit_mb #f))]
          [else (void)])
        (loop)])))
 
@@ -937,9 +938,7 @@
   (define user-out (make-user-output-port "out"))
   (define user-err (make-user-output-port "err"))
   (define cust (make-custodian))
-  (define memory-limit (setting options 'memory_limit_mb #f))
-  (when (and (exact-positive-integer? memory-limit) (custodian-memory-accounting-available?))
-    (custodian-limit-memory cust (* memory-limit 1024 1024) cust))
+  (start-memory-monitor! cust (setting options 'memory_limit_mb #f))
 
   (emit* (hasheq 'ev "started" 'racket_version (version)
                  'language (format "~a" (setting language 'kind "module"))))
@@ -963,14 +962,71 @@
                (parameterize-break #t
                  (run-user! source source-name language instrument submodules user-out user-err)))))))
   (thread-wait user-thread)
-  ;; The user thread only ends when its custodian is shut down (memory limit) or after an
+  ;; The user thread only ends when the program shuts down its own custodian, or after an
   ;; internal failure.
   (emit* (hasheq 'ev "error" 'kind "runtime" 'srclocs '() 'stack '()
-                 'message (if (custodian-shut-down? cust)
-                              "The program ran out of memory and was stopped."
-                              "The evaluation thread is no longer running.")))
+                 'message "The evaluation thread is no longer running."))
   (emit* (hasheq 'ev "exit" 'code 1))
   (exit 1))
+
+;; ---------------------------------------------------------------------------
+;; Memory: the program's memory use goes to the IDE as it changes. Past the limit, every thread
+;; the program started is paused until the user raises the limit (and it carries on where it
+;; was) or stops it. Use is measured from just before the program starts, so the runner's own
+;; tooling doesn't count.
+
+(define main-custodian (current-custodian))
+(define memory-limit #f)   ; bytes, or #f for none
+(define memory-baseline 0)
+(define memory-cust #f)
+(define memory-paused '()) ; the threads paused for the limit
+
+(define (program-memory) (max 0 (- (current-memory-use) memory-baseline)))
+(define (bytes->mb n) (quotient n (* 1024 1024)))
+
+(define (custodian-threads c)
+  (for/fold ([acc '()]) ([v (in-list (custodian-managed-list c main-custodian))])
+    (cond [(thread? v) (cons v acc)]
+          [(custodian? v) (append (custodian-threads v) acc)]
+          [else acc])))
+
+(define (start-memory-monitor! cust limit-mb)
+  (set! memory-cust cust)
+  (set! memory-limit (and (exact-positive-integer? limit-mb) (* limit-mb 1024 1024)))
+  (set! memory-baseline (current-memory-use))
+  (thread
+   (λ ()
+     (let loop ([shown -1] [shown-at 0.0])
+       ;; Measuring is cheap; checking often keeps a fast-allocating program from running far
+       ;; past the limit.
+       (sleep 0.025)
+       (cond
+         [(and memory-limit (null? memory-paused) (> (program-memory) memory-limit)
+               ;; Garbage counts until it's collected: only pause for memory still in use.
+               (begin (collect-garbage) (> (program-memory) memory-limit)))
+          (pause-for-memory!)
+          (loop shown shown-at)]
+         [else
+          (define now (current-inexact-milliseconds))
+          (define mb (bytes->mb (program-memory)))
+          (cond
+            [(and (not (= mb shown)) (> (- now shown-at) 400))
+             (emit* (hasheq 'ev "memory" 'mb mb))
+             (loop mb now)]
+            [else (loop shown shown-at)])])))))
+
+(define (pause-for-memory!)
+  ;; Threads the program suspended itself stay suspended when it resumes.
+  (define threads (filter thread-running? (custodian-threads memory-cust)))
+  (for-each thread-suspend threads)
+  (set! memory-paused threads)
+  (emit* (hasheq 'ev "memory-limit" 'mb (bytes->mb (program-memory)) 'limit (bytes->mb memory-limit))))
+
+(define (memory-continue! limit-mb)
+  (set! memory-limit (and (exact-positive-integer? limit-mb) (* limit-mb 1024 1024)))
+  (define threads memory-paused)
+  (set! memory-paused '())
+  (for-each thread-resume threads))
 
 ;; Runs in the user thread.
 (define trace? #f)
