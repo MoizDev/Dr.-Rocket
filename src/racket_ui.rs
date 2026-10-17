@@ -1974,6 +1974,9 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let now = ui.input(|inp| inp.time);
     // Toolbar.
     let mut nav: Option<isize> = None;
+    // Jump straight to a step (step over / out, the cursor's line).
+    let mut goto: Option<usize> = None;
+    let mut to_cursor_line = false;
     let mut rerun = false;
     {
         let v = app.tabs[i].rk.viz.as_mut().unwrap();
@@ -2000,6 +2003,13 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         if icon_button_sized(&mut b, &theme, ic::LAST_PAGE, "Last step", 30.0, 20.0, None, false).clicked() {
             nav = Some(isize::MAX);
         }
+        b.add_space(4.0);
+        if icon_button_sized(&mut b, &theme, ic::STEP_OVER, "Step over: skip what this call does, to where it returns (⇧→)", 30.0, 20.0, None, false).clicked() {
+            goto = Some(v.trace.step_over(v.current));
+        }
+        if icon_button_sized(&mut b, &theme, ic::STEP_OUT, "Step out: to where the running call returns (⇧↑)", 30.0, 20.0, None, false).clicked() {
+            goto = Some(v.trace.step_out(v.current));
+        }
         b.add_space(8.0);
         let label_x = b.cursor().min.x;
         let mut rb = b.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
@@ -2009,6 +2019,9 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         }
         if icon_button_sized(&mut rb, &theme, ic::OPEN_IN_FULL, "Fit diagram", 30.0, 18.0, None, v.auto_fit).clicked() {
             v.auto_fit = true;
+        }
+        if icon_button_sized(&mut rb, &theme, ic::MY_LOCATION, "Jump to the next step on the cursor's line", 30.0, 18.0, None, false).clicked() {
+            to_cursor_line = true;
         }
         let speed_label = match v.speed {
             s if s < 1.5 => "1×",
@@ -2039,25 +2052,71 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         // Keyboard (when no text field has focus).
         if !ui.ctx().memory(|m| m.focused().is_some()) && ui.rect_contains_pointer(rect) {
             ui.input(|inp| {
+                let shift = inp.modifiers.shift;
                 if inp.key_pressed(egui::Key::ArrowRight) {
-                    nav = Some(1);
+                    if shift {
+                        goto = Some(v.trace.step_over(v.current));
+                    } else {
+                        nav = Some(1);
+                    }
                 }
                 if inp.key_pressed(egui::Key::ArrowLeft) {
-                    nav = Some(-1);
+                    if shift {
+                        goto = Some(v.trace.step_back_over(v.current));
+                    } else {
+                        nav = Some(-1);
+                    }
+                }
+                if shift && inp.key_pressed(egui::Key::ArrowUp) {
+                    goto = Some(v.trace.step_out(v.current));
                 }
                 if inp.key_pressed(egui::Key::Space) {
                     v.playing = !v.playing;
                 }
             });
         }
-        // Timeline: click or drag to scrub.
-        let tl = Rect::from_min_size(pos2(rect.left() + 12.0, bar.bottom() + 6.0), vec2(rect.width() - 24.0, 6.0));
-        let hit = tl.expand2(vec2(0.0, 6.0));
-        let tresp = ui.interact(hit, Id::unique("viz-timeline"), Sense::click_and_drag());
-        ui.painter().rect_filled(tl, CornerRadius::same(3), tk.hover);
-        let frac = if n > 1 { v.current as f32 / (n - 1) as f32 } else { 1.0 };
-        ui.painter().rect_filled(Rect::from_min_size(tl.min, vec2(tl.width() * frac, tl.height())), CornerRadius::same(3), theme.text_accent);
-        ui.painter().circle_filled(pos2(tl.left() + tl.width() * frac, tl.center().y), if tresp.hovered() || tresp.dragged() { 6.0 } else { 4.5 }, theme.text_accent);
+        // Timeline: the recursion graph, calls on the stack at each step, so the shape of
+        // the run (diving into recursion and coming back) shows at a glance. Click or drag to
+        // go to a step.
+        let tl = Rect::from_min_size(pos2(rect.left() + 12.0, bar.bottom() + 4.0), vec2(rect.width() - 24.0, 22.0));
+        let tresp = ui.interact(tl.expand2(vec2(0.0, 3.0)), Id::unique("viz-timeline"), Sense::click_and_drag());
+        let depths = v.trace.depths();
+        let max_d = depths.iter().copied().max().unwrap_or(0).max(1) as f32;
+        let x_of = |k: usize| tl.left() + tl.width() * if n > 1 { k as f32 / (n - 1) as f32 } else { 1.0 };
+        let y_of = |d: usize| tl.bottom() - 2.0 - (tl.height() - 4.0) * d as f32 / max_d;
+        ui.painter().rect_filled(tl, CornerRadius::same(4), with_alpha(tk.hover, 120));
+        if n > 1 {
+            // One point per pixel column is plenty, even for long runs.
+            let cols = (tl.width() as usize).max(2);
+            let sample = |c: usize| -> usize {
+                let a = c * n / cols;
+                let b = ((c + 1) * n / cols).max(a + 1).min(n);
+                depths[a.min(n - 1)..b].iter().copied().max().unwrap_or(0)
+            };
+            // A bar per column: steps already shown in the accent colour, the rest muted.
+            let cut = x_of(v.current);
+            let col_w = tl.width() / cols as f32;
+            for c in 0..cols {
+                let x = tl.left() + col_w * c as f32;
+                let d = sample(c);
+                if d == 0 {
+                    continue;
+                }
+                let bar = Rect::from_min_max(pos2(x, y_of(d)), pos2(x + col_w + 0.5, tl.bottom()));
+                let color = if x + col_w * 0.5 <= cut { with_alpha(theme.text_accent, 150) } else { with_alpha(theme.text_muted, 60) };
+                ui.painter().rect_filled(bar, CornerRadius::ZERO, color);
+            }
+        }
+        let cx = x_of(v.current);
+        ui.painter().vline(cx, tl.y_range(), Stroke::new(1.5, theme.text_accent));
+        ui.painter().circle_filled(pos2(cx, y_of(depths.get(v.current).copied().unwrap_or(0))), if tresp.hovered() || tresp.dragged() { 4.5 } else { 3.5 }, theme.text_accent);
+        if tresp.hovered()
+            && let Some(p) = tresp.hover_pos()
+        {
+            let k = (((p.x - tl.left()) / tl.width()).clamp(0.0, 1.0) * (n.saturating_sub(1)) as f32).round() as usize;
+            let d = depths.get(k).copied().unwrap_or(0);
+            tresp.clone().on_hover_text_at_pointer(format!("Step {}: {} call{} deep", k + 1, d, if d == 1 { "" } else { "s" }));
+        }
         if (tresp.clicked() || tresp.dragged())
             && let Some(p) = tresp.interact_pointer_pos()
         {
@@ -2078,6 +2137,10 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             }
             ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(period / 2.0));
         }
+        if let Some(k) = goto {
+            v.playing = false;
+            v.current = k.min(n.saturating_sub(1));
+        }
         if let Some(d) = nav {
             v.playing = false;
             v.current = match d {
@@ -2091,12 +2154,24 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         run(app, Command::Visualize);
         return;
     }
+    if to_cursor_line {
+        let tab = &mut app.tabs[i];
+        let buffer = &tab.editor.doc.buffer;
+        let line = buffer.line_of(buffer.selections.primary().head);
+        let line_of = |p: usize| buffer.line_of(p.min(buffer.len()));
+        if let Some(v) = tab.rk.viz.as_mut()
+            && let Some(k) = v.trace.next_on_line(v.current, &line_of, line)
+        {
+            v.current = k;
+            v.playing = false;
+        }
+    }
     // The diagram, a draggable divider, then the explanation (and the output so far).
     let tab = &mut app.tabs[i];
     let v = tab.rk.viz.as_mut().unwrap();
     v.explain_h = v.explain_h.clamp(90.0, (rect.height() - 200.0).max(90.0));
     let divider_y = rect.bottom() - v.explain_h - 8.0;
-    let canvas = Rect::from_min_max(pos2(rect.left(), rect.top() + 56.0), pos2(rect.right(), divider_y - 4.0));
+    let canvas = Rect::from_min_max(pos2(rect.left(), rect.top() + 68.0), pos2(rect.right(), divider_y - 4.0));
     ui.painter().hline(rect.left()..=rect.right(), canvas.top() - 1.0, Stroke::new(1.0, tk.island_border));
     let grip = Rect::from_center_size(pos2(rect.center().x, divider_y), vec2(rect.width(), 10.0));
     let gresp = ui.interact(grip, Id::unique("viz-divider"), Sense::drag()).on_hover_cursor(egui::CursorIcon::ResizeVertical);
@@ -2171,7 +2246,9 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             use crate::visualizer::Piece;
             let (rt, id) = match p {
                 Piece::Text(t) => (egui::RichText::new(t).font(ui::ui_font(size)).color(base), None),
-                Piece::Name(t) => (egui::RichText::new(t).font(ui::mono(size - 0.5)).color(theme.syntax.variable.color), None),
+                // Names in the sentence's own font (the code font runs small beside it), set
+                // apart by weight and colour.
+                Piece::Name(t) => (egui::RichText::new(t).font(ui::medium(size)).color(theme.syntax.variable.color), None),
                 Piece::Code(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(tk.hover), None),
                 Piece::Value(t) => (egui::RichText::new(format!(" {t} ")).font(ui::mono(size - 1.0)).color(theme.text).background_color(with_alpha(theme.text_accent, 40)), None),
                 Piece::Obj { id, label } => {

@@ -41,6 +41,8 @@ pub struct Trace {
     results: Vec<(usize, VizRef)>,
     /// Struct type -> its field names (for wording `node-key`, `node?`, `make-node`).
     pub shapes: HashMap<String, Vec<String>>,
+    /// Calls on the stack at each step.
+    depths: Vec<usize>,
 }
 
 impl Trace {
@@ -64,7 +66,48 @@ impl Trace {
         {
             self.results.push((idx, v.clone()));
         }
+        self.depths.truncate(idx);
+        self.depths.push(step.live_frames().count());
         self.steps.push(step);
+    }
+
+    /// Calls on the stack at each step (the recursion graph).
+    pub fn depths(&self) -> &[usize] {
+        &self.depths
+    }
+
+    /// Step over: from a call, to where it returns (skipping everything it does); otherwise
+    /// the next step.
+    pub fn step_over(&self, k: usize) -> usize {
+        let last = self.steps.len().saturating_sub(1);
+        let Some(s) = self.steps.get(k) else { return last };
+        if s.kind != "call" {
+            return (k + 1).min(last);
+        }
+        let d = self.depths[k];
+        (k + 1..self.steps.len()).find(|&j| self.depths[j] < d || (self.depths[j] == d && self.steps[j].kind == "return")).unwrap_or(last)
+    }
+
+    /// Step back over: the previous step of this call or its callers, skipping calls it made.
+    pub fn step_back_over(&self, k: usize) -> usize {
+        let d = self.depths.get(k).copied().unwrap_or(0);
+        (0..k).rev().find(|&j| self.depths[j] <= d).unwrap_or(0)
+    }
+
+    /// Step out: to where the running call returns (the end, at the top level).
+    pub fn step_out(&self, k: usize) -> usize {
+        let last = self.steps.len().saturating_sub(1);
+        let d = self.depths.get(k).copied().unwrap_or(0);
+        if d == 0 {
+            return last;
+        }
+        (k + 1..self.steps.len()).find(|&j| self.depths[j] < d || (self.depths[j] == d && self.steps[j].kind == "return")).unwrap_or(last)
+    }
+
+    /// The next step (after `k`, wrapping around) whose code starts on `line`.
+    pub fn next_on_line(&self, k: usize, line_of: &dyn Fn(usize) -> usize, line: usize) -> Option<usize> {
+        let n = self.steps.len();
+        (1..=n).map(|i| (k + i) % n).find(|&j| self.steps[j].pos.is_some_and(|p| line_of(p) == line))
     }
 
     /// Note which fields of a struct type are tree links, empties or data (children are sent
@@ -1138,6 +1181,27 @@ mod tests {
         let frames: Vec<_> = lay.frames.iter().map(|f| (f.name.clone(), f.args.join(" "), f.tail)).collect();
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[1], ("rvrs".into(), "(list 2) (list 1)".into(), true));
+    }
+
+    /// f calls g twice; step over a call lands on its return, step out leaves the call.
+    #[test]
+    fn stepping_over_and_out_of_calls() {
+        let mut view = VisualizerView::default();
+        let f = frame("f", vec![], false);
+        let g = frame("g", vec![], false);
+        let steps = [("call", vec![f.clone()]), ("call", vec![f.clone(), g.clone()]), ("question", vec![f.clone(), g.clone()]), ("return", vec![f.clone(), g.clone()]), ("call", vec![f.clone(), g.clone()]), ("return", vec![f.clone(), g]), ("return", vec![f]), ("end", vec![])];
+        for (kind, frames) in steps {
+            view.trace.push(VizStep { kind: kind.into(), frames, ..Default::default() });
+        }
+        let t = &view.trace;
+        assert_eq!(t.depths(), &[1, 2, 2, 2, 2, 2, 1, 0]);
+        assert_eq!(t.step_over(1), 3, "the first call to g, over to its return");
+        assert_eq!(t.step_over(2), 3, "not a call: just the next step");
+        assert_eq!(t.step_out(2), 3, "out of g: where it returns");
+        assert_eq!(t.step_out(4), 5);
+        assert_eq!(t.step_out(7), 7);
+        assert_eq!(t.step_back_over(4), 3);
+        assert_eq!(t.step_back_over(6), 0, "back over g's calls to f's call");
     }
 
     #[test]
