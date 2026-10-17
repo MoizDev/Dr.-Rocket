@@ -37,6 +37,10 @@ pub enum Step {
     /// Show this step of the visualizer in the active tab.
     #[serde(rename = "show_viz_step")]
     VizGoto(usize),
+    /// Start (true) or pause the visualizer's playback.
+    VizPlay(bool),
+    /// Width of the right-hand panel, in points.
+    RightPanelWidth(f32),
     MouseDown([f32; 2]),
     MouseUp([f32; 2]),
     /// Press at the first point, move to the second over several frames, release.
@@ -335,6 +339,12 @@ impl Automation {
                     v.current = (*n).min(v.trace.steps.len().saturating_sub(1));
                 }
             }
+            Step::VizPlay(on) => {
+                if let Some(v) = app.active_tab_mut().and_then(|t| t.rk.viz.as_mut()) {
+                    v.playing = *on;
+                }
+            }
+            Step::RightPanelWidth(w) => app.layout.right.size = *w,
             Step::Theme(name) => app.set_theme(name, false),
             Step::Log(msg) => eprintln!("automation: {msg}"),
             Step::Quit(yes) => {
