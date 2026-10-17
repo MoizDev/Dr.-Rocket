@@ -2370,6 +2370,11 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 && resp.hovered()
             {
                 text_hover = Some(id);
+                // What it is in Racket: `node 67` is `(make-node 67 empty empty)`.
+                let text = crate::visualizer::show_in(&v.trace, &crate::racket::protocol::VizRef::Object { id }, v.current, 90);
+                resp.on_hover_ui_at_pointer(|ui| {
+                    ui.label(egui::RichText::new(text).font(ui::mono(12.5)).color(theme.text));
+                });
             }
         };
         if let Some(e) = &explanation {

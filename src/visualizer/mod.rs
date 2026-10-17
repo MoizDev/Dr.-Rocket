@@ -315,6 +315,8 @@ struct FrameBox {
     /// For calls: the function name and the argument values, shown as `(name 3 node 4)`.
     name: String,
     args: Vec<String>,
+    /// The argument values behind `args` (hovering one names it in Racket).
+    arg_refs: Vec<VizRef>,
     rows: Vec<(String, VizRef)>,
     returns: Option<VizRef>,
     current: bool,
@@ -546,7 +548,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
             Some((q.split_whitespace().collect::<Vec<_>>().join(" "), answer))
         })
         .flatten();
-    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, then, filled, asks: if live_count == 0 { asks.clone() } else { None }, rect: Rect::NOTHING });
+    push(&mut out, FrameBox { key: 0, name: "Top level".into(), args: Vec::new(), arg_refs: Vec::new(), rows: top_rows, returns: None, current: live_count == 0, top: true, tail: false, then, filled, asks: if live_count == 0 { asks.clone() } else { None }, rect: Rect::NOTHING });
     let args_of = |f: &crate::racket::protocol::VizFrame| -> Vec<String> {
         let n = f.nargs.min(f.vars.len());
         f.vars[..n].iter().map(|(_, v)| label(trace, v, step_idx)).collect()
@@ -563,7 +565,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
         let returns = if newest && step.kind == "return" { step.value.clone() } else { None };
         let then = if newest { None } else { waiting(trace, step, Some(k)) };
         let filled = if newest { None } else { lands(seen_live) };
-        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), rows: f.vars.clone(), returns, current: newest, top: false, tail, then, filled, asks: if newest { asks.clone() } else { None }, rect: Rect::NOTHING });
+        push(&mut out, FrameBox { key: k + 1, name: f.name.clone(), args: args_of(f), arg_refs: f.vars[..f.nargs.min(f.vars.len())].iter().map(|(_, v)| v.clone()).collect(), rows: f.vars.clone(), returns, current: newest, top: false, tail, then, filled, asks: if newest { asks.clone() } else { None }, rect: Rect::NOTHING });
         tail = false;
     }
     // One column, centred on a common axis (the connectors run straight where they can).
@@ -986,6 +988,9 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     // Frames, with connectors from each caller to its callee labelled with the call.
     let z = view.zoom;
     let kind = view.trace.steps.get(step_idx).map(|s| s.kind.clone()).unwrap_or_default();
+    // Objects named in the cards (`node 67`), where they're written: hovering one shows it in
+    // Racket and highlights its box.
+    let mut hits: Vec<(Rect, VizRef)> = Vec::new();
     // The previous card, and its slot for the awaited value (the connector leaves from there).
     let mut prev: Option<(Rect, Option<Rect>)> = None;
     for f in &lay.frames {
@@ -1108,14 +1113,24 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             let fmt = |c: Color32| egui::TextFormat { font_id: font.clone(), color: pp.fade(c), ..Default::default() };
             job.append("(", 0.0, fmt(theme.text_muted));
             job.append(&f.name, 0.0, fmt(theme.syntax.function.color));
-            for a in &f.args {
+            // Where each argument is, for hovering.
+            let mut spans = Vec::new();
+            let mut at = 1 + f.name.chars().count();
+            for (a, v) in f.args.iter().zip(&f.arg_refs) {
                 job.append(" ", 0.0, fmt(theme.text));
                 job.append(a, 0.0, fmt(theme.text));
+                spans.push((at + 1, at + 1 + a.chars().count(), v));
+                at += 1 + a.chars().count();
             }
             job.append(")", 0.0, fmt(theme.text_muted));
             job.wrap = egui::text::TextWrapping::truncate_at_width(title_room);
             let g = painter.layout_job(job);
-            painter.galley(pos2(left, title_y - g.size().y / 2.0), g, theme.text);
+            let gpos = pos2(left, title_y - g.size().y / 2.0);
+            for (a, b, v) in spans {
+                let span = g.pos_from_cursor(egui::text::CCursor::new(a)).union(g.pos_from_cursor(egui::text::CCursor::new(b)));
+                hits.push((span.translate(gpos.to_vec2()).expand2(vec2(2.0, 3.0) * z), v.clone()));
+            }
+            painter.galley(gpos, g, theme.text);
         }
 
         // Rows: `name ····· value`, right under the title.
@@ -1134,6 +1149,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             let nr = painter.text(pos2(left, at_y), Align2::LEFT_CENTER, name, if result { pp.label(12.5) } else { pp.mono() }, pp.fade(color));
             let vl = pp.slot(v, &view.trace, step_idx, pos2(right, at_y), &mut arrows, f.current || result);
             leader(nr.right(), vl, at_y);
+            hits.push((Rect::from_min_max(pos2(vl - 3.0 * z, at_y - CARD_ROW / 2.0 * z), pos2(right + 6.0 * z, at_y + CARD_ROW / 2.0 * z)), v.clone()));
             y += CARD_ROW;
         }
         if let Some(v) = &f.returns {
@@ -1141,6 +1157,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             let nr = painter.text(pos2(left, at_y), Align2::LEFT_CENTER, "returns", pp.label(12.5), pp.fade(theme.success));
             let vl = pp.slot(v, &view.trace, step_idx, pos2(right, at_y), &mut arrows, true);
             leader(nr.right(), vl, at_y);
+            hits.push((Rect::from_min_max(pos2(vl - 3.0 * z, at_y - CARD_ROW / 2.0 * z), pos2(right + 6.0 * z, at_y + CARD_ROW / 2.0 * z)), v.clone()));
         }
         if !f.top && f.rows.is_empty() && f.returns.is_none() {
             painter.text(pos2(left, r.top() + y * z), Align2::LEFT_CENTER, "no arguments", pp.label(12.0), pp.fade(theme.text_placeholder));
@@ -1243,7 +1260,8 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     }
 
     // Objects.
-    let mut hovered: Option<u64> = None;
+    let named = pointer.and_then(|p| hits.iter().find(|(r, v)| r.contains(p) && matches!(v, VizRef::Object { .. }))).map(|(_, v)| v.clone());
+    let mut hovered: Option<u64> = named.as_ref().and_then(obj_id);
     for id in &lay.order {
         let Some(ob) = lay.objects.get(id) else { continue };
         let (min, born) = pos_of(Key::Object(*id), ob.rect.min);
@@ -1373,12 +1391,19 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     }
     child_ui.painter().set(arrows_slot, Shape::Vec(shapes));
 
+    // A value named in a card: what it is in Racket.
+    if let Some(v) = &named {
+        resp.clone().on_hover_ui_at_pointer(|ui| racket_value(ui, &view.trace, v, step_idx, theme));
+    }
     // Hover card: a tree node's full contents.
-    if let Some(id) = hovered
+    if named.is_none()
+        && let Some(id) = hovered
         && let Some(ob) = lay.objects.get(&id)
         && matches!(ob.role, Role::TreeNode { .. })
     {
         resp.clone().on_hover_ui_at_pointer(|ui| {
+            racket_value(ui, &view.trace, &VizRef::Object { id }, step_idx, theme);
+            ui.add_space(4.0);
             ui.label(egui::RichText::new(ob.obj.name.as_deref().unwrap_or("struct")).font(ui::semibold(12.5)).color(theme.syntax.keyword.color));
             for (name, v) in &ob.obj.fields {
                 ui.horizontal(|ui| {
@@ -1395,6 +1420,17 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     io.hovered = hovered;
     io.animating = animating || fitting;
     view.layout = Some((laid_step, lay));
+}
+
+/// A value written in Racket (`(make-node 67 empty empty)`), coloured like code, deeper parts
+/// elided.
+fn racket_value(ui: &mut Ui, trace: &Trace, v: &VizRef, step: usize, theme: &Theme) {
+    let text = show_in(trace, v, step, 90);
+    let mut job = egui::text::LayoutJob::default();
+    let mut open = false;
+    code_job(&mut job, &text, &ui::mono(12.5), &mut open, |c| c, theme, false);
+    job.wrap.max_width = 420.0;
+    ui.label(job);
 }
 
 #[allow(clippy::too_many_arguments)]
