@@ -338,7 +338,7 @@ export default function Home() {
                     <RocketMark size={92} tone="light" />
                   </span>
                   <span className={s.cardTitle}>Install Dr. Rocket</span>
-                  <span className={s.cardBody}>Racket first, then the app. Three short steps on macOS, Windows or Linux.</span>
+                  <span className={s.cardBody}>Racket first, then the app. Three short steps on macOS, Windows or Linux, and a fourth we can&rsquo;t recommend.</span>
                   <span className={s.cardLink}>
                     Read the guide <ArrowRight />
                   </span>
@@ -458,7 +458,7 @@ export default function Home() {
               <h2 id="cta-title" className={s.ctaTitle}>
                 Your next assignment, at rocket speed.
               </h2>
-              <p className={s.ctaLede}>Free for macOS, Windows and Linux.</p>
+              <p className={s.ctaLede}>Free for macOS, Windows and Linux. DrRacket will understand.</p>
               <div className={s.ctaActions}>
                 <Download tone="inverse" menu="up" />
                 <a className={s.ghostInverse} href="#install">
@@ -486,7 +486,7 @@ export default function Home() {
             <span>Dr. Rocket</span>
           </a>
           <p>
-            Made by Moiz and John. Version {VERSION}.
+            Made by Moiz and John. No parentheses were harmed. Version {VERSION}.
           </p>
           <ul>
             <li>
@@ -568,7 +568,15 @@ function OsCard({
           </p>
         </div>
       </div>
-      <ol className={s.steps}>{children}</ol>
+      <ol className={s.steps}>
+        {children}
+        <li className={s.jokeStep}>
+          <s>Uninstall DrRacket.</s>{" "}
+          <span className={s.kidding}>
+            Kidding. Dr. Rocket runs on the Racket that came with it, so keep it. Just stop opening it.
+          </span>
+        </li>
+      </ol>
       <a className={s.osLink} href={download.href} download={download.filename}>
         Download for {download.name} <ArrowRight />
       </a>
@@ -596,6 +604,14 @@ const FAQ: [string, React.ReactNode][] = [
       Yes, including files with pasted images and comment boxes. They run with real images and save back in
       DrRacket&rsquo;s format, so you can reopen them in DrRacket. A few rare boxes (XML boxes, Racket boxes, test-case
       boxes and large letters) make a file open read-only, so it&rsquo;s never damaged.
+    </p>,
+  ],
+  [
+    "Should I uninstall DrRacket?",
+    <p key="a">
+      Emotionally, yes. Technically, no: DrRacket and Racket are installed together, and Dr. Rocket needs that Racket to
+      run your programs. Leave DrRacket where it is. It can sit there and think about what it&rsquo;s
+      done.
     </p>,
   ],
   [

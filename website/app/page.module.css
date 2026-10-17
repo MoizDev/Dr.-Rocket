@@ -1182,6 +1182,22 @@
   font-weight: 600;
 }
 
+.steps .jokeStep s {
+  color: var(--muted);
+  text-decoration-thickness: 2px;
+  text-decoration-color: var(--blue);
+}
+
+.steps .jokeStep::before {
+  background: var(--paper-2);
+  color: var(--muted);
+}
+
+.kidding {
+  color: var(--muted);
+  font-size: 14px;
+}
+
 .steps code {
   padding: 1px 5px;
   border-radius: 5px;
