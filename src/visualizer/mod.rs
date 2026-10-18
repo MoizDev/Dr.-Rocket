@@ -1035,7 +1035,9 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     let mut hits: Vec<(Rect, VizRef)> = Vec::new();
     // The previous card, and its slot for the awaited value (the connector leaves from there).
     let mut prev: Option<(Rect, Option<Rect>)> = None;
-    for f in &lay.frames {
+    // The card a value is coming back to: the one just above the returning card.
+    let receiver = lay.frames.windows(2).position(|w| w[1].returns.is_some());
+    for (i, f) in lay.frames.iter().enumerate() {
         let (at, alpha) = pos_of(Key::Frame(f.key), f.rect);
         // The same card in the previous step (`None`: it's new).
         let old = view.prev.as_ref().and_then(|p| p.frames.iter().find(|o| o.key == f.key));
@@ -1090,11 +1092,21 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             {
                 let k = phase(fx, TRAVEL.0, TRAVEL.1);
                 let at = curve[((1.0 - k) * (curve.len() - 1) as f32).round() as usize];
-                let g = painter.layout_no_wrap(short(&label(&view.trace, v, step_idx), 14), ui::mono(12.0 * z), theme.success);
+                let g = painter.layout_no_wrap(short(&label(&view.trace, v, step_idx), 14), ui::mono(12.0 * z), Color32::PLACEHOLDER);
                 let chip = Rect::from_center_size(at, g.size() + vec2(12.0 * z, 6.0 * z));
                 let a = phase(fx, 0.0, TRAVEL.0 + 0.05);
                 painter.rect(chip, CornerRadius::same((chip.height() / 2.0) as u8), mix(pp.box_bg(), theme.success, 0.18).gamma_multiply(a), Stroke::new(1.0, with_alpha(theme.success, 170).gamma_multiply(a)), StrokeKind::Inside);
                 painter.galley(chip.center() - g.size() / 2.0, g, theme.success.gamma_multiply(a));
+            }
+            // A new call's arguments ride its connector down into the card.
+            if old.is_none() && fx < 1.0 && !f.args.is_empty() {
+                let at = curve[(grow * (curve.len() - 1) as f32).round() as usize];
+                // (It shows once it has left the caller's footer, and fades as the card appears.)
+                let a = phase(grow, 0.15, 0.35) * (1.0 - phase(fx, 0.8, 0.95));
+                let g = painter.layout_no_wrap(short(&f.args.join(" "), 22), ui::mono(12.0 * z), Color32::PLACEHOLDER);
+                let chip = Rect::from_center_size(at, g.size() + vec2(12.0 * z, 6.0 * z));
+                painter.rect(chip, CornerRadius::same((chip.height() / 2.0) as u8), mix(pp.box_bg(), theme.text_accent, 0.18).gamma_multiply(a), Stroke::new(1.0, with_alpha(theme.text_accent, 170).gamma_multiply(a)), StrokeKind::Inside);
+                painter.galley(chip.center() - g.size() / 2.0, g, theme.text_accent.gamma_multiply(a));
             }
             // A tail call says so on its connector, in a pill on the curve (so it never needs
             // room beside it). What a call returns needs no tag: it's in the returning card,
@@ -1120,7 +1132,15 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             egui::epaint::Shadow { offset: [0, (3.0 * z) as i8], blur: (12.0 * z).min(255.0) as u8, spread: 0, color: pp.fade(Color32::from_black_alpha(if theme.dark { 70 } else { 22 })) }
         };
         painter.add(shadow.as_shape(r, radius));
-        let border = if f.current { accent } else { tk.subtle_border };
+        // The card receiving a returned value lights up as the value lands.
+        let receiving = if receiver == Some(i) {
+            let fresh = lay.frames.get(i + 1).and_then(|n| view.prev.as_ref()?.frames.iter().find(|o| o.key == n.key)).is_some_and(|o| o.returns.is_none());
+            if fresh { phase(fx, TRAVEL.0, TRAVEL.1) } else { 1.0 }
+        } else {
+            0.0
+        };
+        let border = if f.current { accent } else { mix(tk.subtle_border, theme.success, receiving) };
+        let border_w = if f.current { 1.6 } else { 1.0 + 0.6 * receiving };
         let bg = if f.top { mix(pp.box_bg(), theme.background, 0.3) } else { pp.box_bg() };
         painter.rect_filled(r, radius, pp.fade(bg));
 
@@ -1158,7 +1178,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             job.wrap = egui::text::TextWrapping::truncate_at_width((tag_left - 8.0 * z - icon.right() - 6.0 * z).max(20.0));
             let g = painter.layout_job(job);
             painter.galley(pos2(icon.right() + 6.0 * z, cy - g.size().y / 2.0), g, theme.text_muted);
-            painter.rect_stroke(r, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
+            painter.rect_stroke(r, radius, Stroke::new(border_w, pp.fade(border)), StrokeKind::Inside);
             prev = Some((r, None));
             continue;
         }
@@ -1285,7 +1305,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             let filled = f.filled.as_ref().filter(|_| !landing || fx >= TRAVEL.1).map(|v| (label(&view.trace, v, step_idx), if landing { phase(fx, TRAVEL.1, 1.0) } else { 1.0 }));
             slot_rect = draw_then(&pp, &card, foot, left, right, segs, filled, reveal);
         }
-        painter.rect_stroke(r, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
+        painter.rect_stroke(r, radius, Stroke::new(border_w, pp.fade(border)), StrokeKind::Inside);
         prev = Some((r, slot_rect));
     }
 
