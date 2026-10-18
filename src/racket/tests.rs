@@ -989,3 +989,44 @@ fn calling_a_function_argument_is_allowed_from_intermediate_on() {
         assert!(errors.iter().any(|m| m.contains("expected a function after the open parenthesis, but found a variable")), "{errors:?}");
     }
 }
+
+/// What DrRacket 9.3 writes for a new file in each HtDP language with its default settings
+/// (`default-settings` in htdp-lib/lang/htdp-langs.rkt), byte for byte: course tools such as
+/// Marmoset read these files.
+#[test]
+fn default_headers_are_what_drracket_writes() {
+    // Only Advanced shows sharing by default.
+    for (language, reader, sharing) in [
+        (Language::Beginner, "htdp-beginner-reader.ss", "#f"),
+        (Language::BeginnerAbbr, "htdp-beginner-abbr-reader.ss", "#f"),
+        (Language::Intermediate, "htdp-intermediate-reader.ss", "#f"),
+        (Language::IntermediateLambda, "htdp-intermediate-lambda-reader.ss", "#f"),
+        (Language::Advanced, "htdp-advanced-reader.ss", "#t"),
+    ] {
+        let expected = format!(
+            ";; The first three lines of this file were inserted by DrRacket. They record metadata\n\
+             ;; about the language level of this file in a form that our tools can easily process.\n\
+             #reader(lib \"{reader}\" \"lang\")((modname a01q1) (read-case-sensitive #t) (teachpacks ()) (htdp-settings #(#t constructor repeating-decimal {sharing} #t none #f () #f)))\n"
+        );
+        assert_eq!(lang::save(language, &language.default_settings(), Some(std::path::Path::new("/x/a01q1.rkt")), ""), expected, "{language:?}");
+    }
+}
+
+/// A saved teaching-language file is a module that plain Racket loads, and whose definitions
+/// a grader can reach (teaching modules export nothing; graders look inside the module).
+#[test]
+fn saved_teaching_files_load_in_plain_racket_like_a_grader() {
+    let Some(install) = discover(std::env::var("RACKETEER_RACKET").ok().as_deref()) else { return };
+    let dir = std::env::temp_dir().join(format!("drrocket-grader-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("a01q1.rkt");
+    let body = "(define (double n) (* 2 n))\n(check-expect (double 4) 8)\n";
+    std::fs::write(&path, lang::save(Language::Beginner, &Language::Beginner.default_settings(), Some(&path), body)).unwrap();
+    let expr = format!(
+        "(define m '(file {:?})) (dynamic-require m #f) (parameterize ([current-namespace (module->namespace m)]) (write (eval '(double 21))))",
+        path.to_string_lossy()
+    );
+    let out = std::process::Command::new(&install.racket).args(["-e", &expr]).output().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(String::from_utf8_lossy(&out.stdout), "42", "{}", String::from_utf8_lossy(&out.stderr));
+}
