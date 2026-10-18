@@ -110,6 +110,8 @@ pub struct StepperView {
     pub error: Option<String>,
     /// Each step's images, by placeholder character.
     pub images: Vec<std::sync::Arc<crate::editor::highlight::ImageMap>>,
+    /// Whether the current step is marked in the editor (only while the Stepper is shown).
+    pub highlighted: bool,
 }
 
 impl StepperView {
@@ -1022,7 +1024,7 @@ fn start_stepper(app: &mut App, i: usize) {
     match StepperSession::start(backend, &req) {
         Ok(s) => {
             let tab = &mut app.tabs[i];
-            tab.rk.stepper = Some(StepperView { session: Some(s), steps: Vec::new(), current: 0, finished: false, paused: false, error: None, images: Vec::new() });
+            tab.rk.stepper = Some(StepperView { session: Some(s), steps: Vec::new(), current: 0, finished: false, paused: false, error: None, images: Vec::new(), highlighted: false });
             tab.editor.deco.marks.retain(|m| m.kind != MarkKind::StepBefore);
             app.layout.show(PanelItem::Stepper, Dock::Right);
         }
@@ -1067,7 +1069,9 @@ fn poll_stepper(app: &mut App, i: usize) {
 }
 
 fn show_step_marks(tab: &mut Tab) {
-    let Some(st) = &tab.rk.stepper else { return };
+    let Some(st) = tab.rk.stepper.as_mut() else { return };
+    st.highlighted = true;
+    let st = &*st;
     tab.editor.deco.marks.retain(|m| m.kind != MarkKind::StepBefore);
     let (b, a) = match st.steps.get(st.current) {
         Some(StepItem::Step(s)) => (s.before_src, s.after_src),
@@ -1906,6 +1910,10 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             start_stepper(app, i);
         }
         return;
+    }
+    app.stepper_drawn = Some(i);
+    if app.tabs[i].rk.stepper.as_ref().is_some_and(|st| !st.highlighted) {
+        show_step_marks(&mut app.tabs[i]);
     }
     // Toolbar.
     let mut nav: Option<isize> = None;

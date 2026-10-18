@@ -319,6 +319,8 @@ pub struct App {
     pub quit_confirmed: bool,
     /// The tab whose visualizer was drawn this frame (its step is highlighted in the editor).
     pub viz_drawn: Option<usize>,
+    /// The tab whose Stepper panel was drawn this frame.
+    pub stepper_drawn: Option<usize>,
     /// Start the app again once it has closed (applying a new renderer).
     pub restart_on_exit: bool,
     pub updater: crate::update::Updater,
@@ -472,6 +474,7 @@ impl App {
             styled_for: None,
             quit_confirmed: false,
             viz_drawn: None,
+            stepper_drawn: None,
             restart_on_exit: false,
             updater,
             update_announced: None,
@@ -1504,6 +1507,7 @@ impl eframe::App for App {
         self.ensure_style(&ctx);
         self.handle_shortcuts(&ctx);
         self.viz_drawn = None;
+        self.stepper_drawn = None;
         self.layout_and_paint(ui);
         // The visualizer's highlight and note belong to a visible visualizer: clear them from
         // every other tab (they come back when it's shown again).
@@ -1515,6 +1519,14 @@ impl eframe::App for App {
                 v.highlighted = None;
                 tab.editor.deco.marks.retain(|m| !matches!(m.kind, crate::editor::view::MarkKind::Viz | crate::editor::view::MarkKind::VizWork));
                 tab.editor.deco.viz_notes.clear();
+            }
+            // Likewise the stepper's highlight of the current step.
+            if Some(k) != self.stepper_drawn
+                && let Some(st) = tab.rk.stepper.as_mut()
+                && st.highlighted
+            {
+                st.highlighted = false;
+                tab.editor.deco.marks.retain(|m| m.kind != crate::editor::view::MarkKind::StepBefore);
             }
         }
         self.modal_ui(&ctx);
