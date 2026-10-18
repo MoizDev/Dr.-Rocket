@@ -135,6 +135,9 @@ impl App {
                 {
                     ws.invalidate();
                 }
+                if icon_button_sized(ui, &theme, ic::CREATE_NEW_FOLDER, "New Folder", 26.0, 17.0, None, false).clicked() {
+                    self.new_folder_in_project();
+                }
                 if icon_button_sized(ui, &theme, ic::NOTE_ADD, "New File", 26.0, 17.0, None, false).clicked() {
                     self.new_file_in_project();
                 }

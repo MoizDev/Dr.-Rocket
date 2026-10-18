@@ -17,6 +17,28 @@ pub struct SidebarState {
     pub focus_search: bool,
 }
 
+/// The menu for the project itself (its header, and the empty space below the files).
+fn root_menu(ui: &mut Ui, root: &std::path::Path, action: &mut Option<TreeAction>) {
+    ui.set_min_width(220.0);
+    if ui.button("New File…").clicked() {
+        *action = Some(TreeAction::NewFile(root.to_path_buf()));
+        ui.close();
+    }
+    if ui.button("New Folder…").clicked() {
+        *action = Some(TreeAction::NewFolder(root.to_path_buf()));
+        ui.close();
+    }
+    ui.separator();
+    if ui.button(crate::platform::REVEAL_LABEL).clicked() {
+        crate::platform::reveal(root);
+        ui.close();
+    }
+    if ui.button("Open Terminal Here").clicked() {
+        *action = Some(TreeAction::Terminal(root.to_path_buf()));
+        ui.close();
+    }
+}
+
 enum TreeAction {
     NewFile(PathBuf),
     NewFolder(PathBuf),
@@ -54,6 +76,22 @@ impl App {
         self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::new_file(dir));
     }
 
+    /// New folder in the project, next to the file being edited (or at the top).
+    pub(crate) fn new_folder_in_project(&mut self) {
+        let Some(ws) = &self.workspace else {
+            self.toast("Open a folder first, then make folders in it", crate::app::ToastKind::Info);
+            return;
+        };
+        let dir = self
+            .active_tab()
+            .and_then(|t| t.path.as_ref())
+            .and_then(|p| p.parent())
+            .filter(|d| d.starts_with(&ws.root))
+            .map(|d| d.to_path_buf())
+            .unwrap_or_else(|| ws.root.clone());
+        self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::new_folder(dir));
+    }
+
     pub(crate) fn files_view(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
         let tk = self.tokens();
@@ -70,7 +108,8 @@ impl App {
             return;
         };
         let project = ws.name.to_uppercase();
-        let (hr, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+        let (hr, header) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+        let root = ws.root.clone();
         ui.painter().text(pos2(hr.left() + 8.0, hr.center().y), Align2::LEFT_CENTER, project, ui::semibold(11.5), theme.text_placeholder);
         let rows = ws.rows().to_vec();
         let active_path = self.tabs.get(self.active).and_then(|t| t.path.clone());
@@ -81,7 +120,8 @@ impl App {
         let width = ui.available_width();
         let spacing = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;
-        egui::ScrollArea::vertical().id_salt("files").auto_shrink([false, false]).show_rows(ui, FILE_ROW_H, rows.len(), |ui, range| {
+        header.context_menu(|ui| root_menu(ui, &root, &mut action));
+        let scrolled = egui::ScrollArea::vertical().id_salt("files").auto_shrink([false, false]).show_rows(ui, FILE_ROW_H, rows.len(), |ui, range| {
             for row in &rows[range] {
                 let (r, resp) = ui.allocate_exact_size(vec2(width, FILE_ROW_H), Sense::click());
                 let selected = active_path.as_ref() == Some(&row.entry.path);
@@ -159,6 +199,12 @@ impl App {
                 });
             }
         });
+        // The space below the last row: right-click to add things at the top of the project.
+        let below = scrolled.inner_rect.top() + scrolled.content_size.y - scrolled.state.clamped_offset().y;
+        if below < scrolled.inner_rect.bottom() - 4.0 {
+            let empty = Rect::from_min_max(pos2(scrolled.inner_rect.left(), below), scrolled.inner_rect.max);
+            ui.interact(empty, Id::unique("files-empty"), Sense::click()).context_menu(|ui| root_menu(ui, &root, &mut action));
+        }
         ui.spacing_mut().item_spacing.y = spacing;
         if let Some(p) = toggle
             && let Some(ws) = &mut self.workspace

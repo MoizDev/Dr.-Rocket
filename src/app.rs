@@ -908,6 +908,7 @@ impl App {
             // In a project, name the file up front (in the app); otherwise an untitled tab.
             Command::NewFile if self.workspace.is_some() => self.new_file_in_project(),
             Command::NewFile => self.new_file(),
+            Command::NewFolder => self.new_folder_in_project(),
             Command::OpenFile => {
                 let mut dlg = rfd::FileDialog::new().add_filter("Racket", &["rkt", "rktl", "rktd", "scrbl", "ss", "scm"]).add_filter("All files", &["*"]);
                 if let Some(ws) = &self.workspace {

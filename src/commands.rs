@@ -8,6 +8,7 @@ use egui::{Key, KeyboardShortcut, Modifiers};
 pub enum Command {
     // File
     NewFile,
+    NewFolder,
     OpenFile,
     OpenFolder,
     Save,
@@ -138,6 +139,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::SaveInteractions, label: "Save Interactions As…", group: "File", icon: ic::SAVE, shortcut: None },
     CommandInfo { cmd: Command::Print, label: "Print…", group: "File", icon: ic::DESCRIPTION, shortcut: None },
     CommandInfo { cmd: Command::NewFile, label: "New File", group: "File", icon: ic::NOTE_ADD, shortcut: sc(CMD, Key::N) },
+    CommandInfo { cmd: Command::NewFolder, label: "New Folder…", group: "File", icon: ic::CREATE_NEW_FOLDER, shortcut: None },
     CommandInfo { cmd: Command::OpenFile, label: "Open File…", group: "File", icon: ic::FILE_OPEN, shortcut: sc(CMD, Key::O) },
     CommandInfo { cmd: Command::OpenFolder, label: "Open Folder…", group: "File", icon: ic::FOLDER_OPEN, shortcut: sc(cmd_shift(), Key::O) },
     CommandInfo { cmd: Command::Save, label: "Save", group: "File", icon: ic::SAVE, shortcut: sc(CMD, Key::S) },
@@ -202,6 +204,7 @@ pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
             title: "File",
             entries: vec![
                 entry(Command::NewFile),
+                entry(Command::NewFolder),
                 entry(Command::OpenFile),
                 entry(Command::OpenFolder),
                 None,

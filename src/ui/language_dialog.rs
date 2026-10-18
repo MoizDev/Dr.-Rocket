@@ -150,6 +150,10 @@ impl App {
                     let default = crate::racket::lang::Language::from_id(&self.settings.default_language).unwrap_or(crate::racket::lang::Language::Module);
                     let racket = path.extension().is_some_and(|e| e == "rkt");
                     let initial = if racket && default == crate::racket::lang::Language::Module { "#lang racket\n\n" } else { "" };
+                    if path.exists() {
+                        self.toast(format!("“{name}” already exists here"), crate::app::ToastKind::Error);
+                        return;
+                    }
                     match std::fs::OpenOptions::new().write(true).create_new(true).open(&path).and_then(|mut f| std::io::Write::write_all(&mut f, initial.as_bytes())) {
                         Ok(()) => {
                             self.refresh_tree();
@@ -168,9 +172,21 @@ impl App {
                     if name.is_empty() {
                         return;
                     }
-                    match std::fs::create_dir_all(dir.join(name)) {
-                        Ok(()) => self.refresh_tree(),
-                        Err(e) => self.toast(format!("Could not create folder: {e}"), crate::app::ToastKind::Error),
+                    // `a/b` makes both, as in other editors; an existing folder is an error.
+                    let path = dir.join(name);
+                    if path.exists() {
+                        self.toast(format!("“{name}” already exists here"), crate::app::ToastKind::Error);
+                        return;
+                    }
+                    match std::fs::create_dir_all(&path) {
+                        Ok(()) => {
+                            self.refresh_tree();
+                            if let Some(ws) = &mut self.workspace {
+                                // Show it: open the folders it is in.
+                                ws.expand_to(&path);
+                            }
+                        }
+                        Err(e) => self.toast(format!("Could not create “{name}”: {e}"), crate::app::ToastKind::Error),
                     }
                 }
                 PromptKind::RenamePath { path } => {
