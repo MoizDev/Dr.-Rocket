@@ -324,6 +324,8 @@ pub struct App {
     /// Start the app again once it has closed (applying a new renderer).
     pub restart_on_exit: bool,
     pub updater: crate::update::Updater,
+    /// The release notes' tab beside the project tabs.
+    pub whats_new: crate::ui::whats_new::WhatsNew,
     /// The new version last announced in a toast (background checks announce each one once).
     update_announced: Option<String>,
     pub automation: Option<crate::automation::Automation>,
@@ -446,6 +448,8 @@ impl App {
         crate::platform::install_menu(crate::ui::brand::APP_NAME, &crate::commands::menu_specs());
         egui_extras::install_image_loaders(&cc.egui_ctx);
         ui::install_fonts(&cc.egui_ctx);
+        // (Before anything writes the settings file.)
+        let updated = crate::ui::whats_new::first_run_after_update();
         let settings = Settings::load();
         let updater = crate::update::Updater::start(&cc.egui_ctx, settings.check_for_updates);
         let themes = ThemeRegistry::load();
@@ -477,6 +481,7 @@ impl App {
             stepper_drawn: None,
             restart_on_exit: false,
             updater,
+            whats_new: Default::default(),
             update_announced: None,
             automation: crate::automation::Automation::from_env(),
             frame_count: 0,
@@ -531,12 +536,18 @@ impl App {
             }
             app.switch_project(s.current.min(app.projects.len().saturating_sub(1)));
         }
+        let opening = !open.is_empty();
         for p in open {
             if p.is_dir() {
                 app.open_folder(&p);
             } else {
                 app.open_file(&p);
             }
+        }
+        // The first launch after an update shows what changed (behind what was asked to open).
+        if updated {
+            app.show_whats_new();
+            app.whats_new.front = !opening;
         }
         app
     }
@@ -641,6 +652,7 @@ impl App {
     }
 
     pub fn new_file(&mut self) {
+        self.whats_new.front = false;
         let (lang, settings) = self.default_language();
         let initial = if lang == crate::racket::lang::Language::Module { "#lang racket\n\n".to_string() } else { String::new() };
         let i = self.new_tab(None, &initial);
@@ -657,6 +669,7 @@ impl App {
     }
 
     pub fn open_file(&mut self, path: &Path) {
+        self.whats_new.front = false;
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
         if let Some(i) = self.tabs.iter().position(|t| t.path.as_deref() == Some(&path)) {
             self.active = i;
@@ -907,7 +920,21 @@ impl App {
     // ------------------------------------------------------------------ commands
 
     pub fn run_command(&mut self, cmd: Command) {
+        // Commands about the project act on the one behind the What's New tab: show it.
+        if self.whats_new.front
+            && !matches!(
+                cmd,
+                Command::Palette | Command::CloseTab | Command::Settings | Command::About | Command::CheckForUpdates | Command::RestartToUpdate | Command::KeyboardShortcuts | Command::SelectTheme | Command::ReportProblem | Command::WhatsNew
+            )
+        {
+            self.whats_new.front = false;
+        }
         match cmd {
+            Command::WhatsNew => self.show_whats_new(),
+            Command::CloseTab if self.whats_new.front => {
+                self.whats_new.open = false;
+                self.whats_new.front = false;
+            }
             Command::NextProject | Command::PrevProject => {
                 let n = self.projects.len();
                 if n > 1 {
@@ -1239,6 +1266,10 @@ impl App {
         self.status_bar(ui, status);
 
         let body = Rect::from_min_max(pos2(full.left() + GAP, title.bottom()), pos2(full.right() - GAP, status.top()));
+        if self.whats_new.front {
+            self.island(ui, body, body, |app, ui, rect| app.whats_new_ui(ui, rect));
+            return;
+        }
         let ctx = ui.ctx().clone();
         let has = |d: &DockState| d.open && !d.items.is_empty();
         let left_t = ctx.animate_bool_with_time(Id::unique("left-anim"), has(&self.layout.left), 0.16);

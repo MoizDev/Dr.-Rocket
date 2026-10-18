@@ -17,6 +17,11 @@ vercel deploy --prebuilt --prod
 
 Don't use a plain `vercel deploy` or git-triggered builds: they can't fetch the downloads.
 
+Release notes live in `release-notes/<version>.md` (a little Markdown: headings, paragraphs,
+lists, bold, code, links). The app embeds them all and shows them in its What's New tab on the
+first launch after an update (`src/ui/whats_new.rs`); use the same file for the GitHub release
+(`gh release create ... --notes-file release-notes/<version>.md`).
+
 For a new app release, attach the files to the GitHub release (macOS DMG via
 `tools/bundle.sh --universal --dmg`, Windows and Linux via the Release workflow), then deploy as
 above. The build takes its version from GitHub: the newest release with the macOS and Windows

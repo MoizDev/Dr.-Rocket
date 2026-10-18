@@ -83,7 +83,10 @@ impl App {
         let theme = self.theme.clone();
         let tk = self.tokens();
         let infos = self.project_tabs();
-        let n = infos.len().max(1) as f32;
+        // The What's New tab, when open, comes after the projects.
+        let notes = self.whats_new.open;
+        let count = infos.len() + notes as usize;
+        let n = count.max(1) as f32;
         let plus_w = 28.0;
         let avail = (area.width() - plus_w - 6.0).max(0.0);
         let tab_w = (avail / n).clamp(60.0, 200.0).min(avail / n);
@@ -97,7 +100,7 @@ impl App {
         let mut reveal = None;
         let mut reorder = None;
         let hovered_tab = ui.ctx().pointer_hover_pos().and_then(|p| {
-            (0..infos.len()).find(|&k| Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).contains(p))
+            (0..count).find(|&k| Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).contains(p))
         });
         for (k, info) in infos.iter().enumerate() {
             let r = Rect::from_min_size(pos2(area.left() + k as f32 * tab_w, top), vec2(tab_w, h)).shrink2(vec2(1.0, 0.0));
@@ -111,7 +114,7 @@ impl App {
                     reorder = Some((k, target));
                 }
             }
-            let selected = k == self.current_project;
+            let selected = k == self.current_project && !self.whats_new.front;
             let hovered = hovered_tab == Some(k);
             if selected {
                 ui.painter().rect_filled(r, CornerRadius::same(7), selected_bg);
@@ -119,7 +122,8 @@ impl App {
                 ui.painter().rect_filled(r, CornerRadius::same(7), hover_bg);
             }
             // Hairline separators between plain tabs, like Finder and Safari.
-            let next_plain = k + 1 < infos.len() && k + 1 != self.current_project && hovered_tab != Some(k + 1);
+            let next_selected = if notes && k + 1 == infos.len() { self.whats_new.front } else { k + 1 == self.current_project && !self.whats_new.front };
+            let next_plain = k + 1 < count && !next_selected && hovered_tab != Some(k + 1);
             if !selected && !hovered && next_plain {
                 ui.painter().vline(r.right() + 1.0, (r.top() + 7.0)..=(r.bottom() - 7.0), Stroke::new(1.0, tk.subtle_border));
             }
@@ -171,8 +175,13 @@ impl App {
                 }
             });
         }
+        let mut notes_action = (false, false);
+        if notes {
+            let r = Rect::from_min_size(pos2(area.left() + infos.len() as f32 * tab_w, top), vec2(tab_w, h)).shrink2(vec2(1.0, 0.0));
+            notes_action = self.whats_new_tab(ui, r, hovered_tab == Some(infos.len()), selected_bg, hover_bg);
+        }
         // New project: recent folders and Open Folder.
-        let plus = Rect::from_min_size(pos2(area.left() + infos.len() as f32 * tab_w + 4.0, area.center().y - 14.0), vec2(plus_w, 28.0));
+        let plus = Rect::from_min_size(pos2(area.left() + count as f32 * tab_w + 4.0, area.center().y - 14.0), vec2(plus_w, 28.0));
         let plus_resp = ui.interact(plus, Id::unique("project-tab-new"), Sense::click()).on_hover_text("Open a project in a new tab");
         if plus_resp.hovered() {
             ui.painter().rect_filled(plus, CornerRadius::same(7), hover_bg);
@@ -181,6 +190,14 @@ impl App {
         egui::Popup::menu(&plus_resp).width(300.0).show(|ui| self.project_menu(ui));
         if let Some(k) = switch {
             self.switch_project(k);
+        }
+        match notes_action {
+            (_, true) => {
+                self.whats_new.open = false;
+                self.whats_new.front = false;
+            }
+            (true, _) => self.whats_new.front = true,
+            _ => {}
         }
         if let Some((from, to)) = reorder {
             self.move_project(from, to);

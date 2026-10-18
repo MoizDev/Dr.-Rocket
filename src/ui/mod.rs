@@ -9,6 +9,7 @@ pub mod palette;
 pub mod settings_view;
 pub mod sidebar;
 pub mod welcome;
+pub mod whats_new;
 pub mod widgets;
 
 use crate::theme::{Theme, mix, with_alpha};

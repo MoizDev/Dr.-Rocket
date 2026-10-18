@@ -58,6 +58,7 @@ impl App {
 
     /// Bring project `k` to the front.
     pub fn switch_project(&mut self, k: usize) {
+        self.whats_new.front = false;
         if k == self.current_project || k >= self.projects.len() {
             return;
         }
@@ -99,6 +100,7 @@ impl App {
     /// Show `path` as a project: switch to its tab if it is open, use the current tab if it is
     /// empty, otherwise open a new tab.
     pub fn open_project(&mut self, path: &Path) {
+        self.whats_new.front = false;
         if let Some(k) = self.projects.iter().enumerate().position(|(k, p)| {
             let root = if k == self.current_project { self.workspace.as_ref().map(|w| w.root.as_path()) } else { p.root.as_deref() };
             root.is_some_and(|r| r == path)
