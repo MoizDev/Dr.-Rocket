@@ -52,7 +52,8 @@ pub enum Step {
     WaitUntil(String),
     Screenshot(PathBuf),
     /// `{"record": {"path": "out.mp4", "seconds": 20}}`: film the window for that long and
-    /// encode it with ffmpeg (on PATH) at 30 fps, in real time.
+    /// encode it with ffmpeg (on PATH) at 30 fps. The app's clock runs one frame per video
+    /// frame while filming, so the video is smooth however long each capture takes.
     Record { path: PathBuf, seconds: f64 },
     Theme(String),
     Log(String),
@@ -81,8 +82,10 @@ pub struct Automation {
 
 /// An in-progress `record` step: every frame's screenshot goes to an encoder thread.
 struct Recording {
+    /// The app's time when filming started; frame `k` is shown at `start + k / RECORD_FPS`.
     start: f64,
-    until: f64,
+    frame: u64,
+    frames_total: u64,
     /// Dropped when filming ends; the encoder finishes once in-flight screenshots land.
     frames: Option<SyncSender<(f64, Arc<egui::ColorImage>)>>,
     encoder: JoinHandle<()>,
@@ -179,14 +182,22 @@ impl Automation {
             self.reset_modifiers = false;
         }
         if let Some(rec) = &mut self.recording {
-            if now < rec.until
+            if rec.frame < rec.frames_total
                 && let Some(frames) = &rec.frames
             {
-                let (frames, t) = (frames.clone(), now - rec.start);
-                // Drop a frame rather than stall the app when the encoder falls behind.
+                // A virtual clock: this frame is drawn at its video time, not the wall clock,
+                // and every frame is captured (waiting for the encoder rather than dropping).
+                let t = rec.frame as f64 / RECORD_FPS;
+                raw.time = Some(rec.start + t);
+                raw.predicted_dt = (1.0 / RECORD_FPS) as f32;
+                rec.frame += 1;
+                let frames = frames.clone();
+                // Stamped mid-frame so the encoder's rounding puts it in exactly one slot.
+                let stamp = t + 0.5 / RECORD_FPS;
                 ctx.request_screenshot(move |img| {
-                    let _ = frames.try_send((t, img));
+                    let _ = frames.send((stamp, img));
                 });
+                ctx.request_repaint();
                 return;
             }
             // Keep rendering (so pending screenshot callbacks run and release the channel)
@@ -331,7 +342,7 @@ impl Automation {
                 let (frames, rx) = sync_channel(4);
                 let path = path.clone();
                 let encoder = std::thread::spawn(move || encode(path, rx));
-                self.recording = Some(Recording { start: now, until: now + seconds, frames: Some(frames), encoder });
+                self.recording = Some(Recording { start: now, frame: 0, frames_total: (seconds * RECORD_FPS).round() as u64, frames: Some(frames), encoder });
             }
             Step::VizGoto(n) => {
                 if let Some(v) = app.active_tab_mut().and_then(|t| t.rk.viz.as_mut()) {
