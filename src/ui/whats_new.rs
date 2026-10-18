@@ -44,7 +44,13 @@ pub fn notes() -> Vec<(&'static str, &'static str)> {
 
 /// Whether this is the first launch of a newer version than the last one run, and notes that
 /// this version has run. Call before anything writes the settings file.
+///
+/// A development build leaves the record alone (unless it runs with a test config): it would
+/// otherwise use up the installed app's first launch of the version it's being built as.
 pub fn first_run_after_update() -> bool {
+    if crate::update::running_dev_build() && std::env::var_os("DRROCKET_CONFIG_DIR").is_none() {
+        return false;
+    }
     let dir = crate::config::config_dir();
     let marker = dir.join("last-version");
     let current = env!("CARGO_PKG_VERSION");

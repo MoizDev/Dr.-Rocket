@@ -334,6 +334,11 @@ fn target() -> Result<Target, String> {
     Ok(t)
 }
 
+/// Whether this is a development build (see `is_dev_build`).
+pub fn running_dev_build() -> bool {
+    std::env::current_exe().and_then(|p| p.canonicalize()).is_ok_and(|exe| is_dev_build(&exe))
+}
+
 /// A binary in a Cargo target directory (it holds a CACHEDIR.TAG).
 fn is_dev_build(exe: &Path) -> bool {
     exe.ancestors().any(|p| p.file_name().is_some_and(|n| n == "target") && p.join("CACHEDIR.TAG").is_file())
