@@ -367,7 +367,7 @@ impl Automation {
                 None => eprintln!("automation: unknown language {id}"),
             },
             Step::LogDiagnostics(on) if *on => {
-                let d: Vec<String> = app.tabs.get(app.active).map(|t| t.editor.deco.diagnostics.iter().map(|d| format!("{}..{} {}", d.range.start, d.range.end, d.message)).collect()).unwrap_or_default();
+                let d: Vec<String> = app.tabs.get(app.active).map(|t| t.editor.deco.diagnostics.iter().map(|d| format!("{}..{} {}{}", d.range.start, d.range.end, if t.editor.deco.shown(d) { "" } else { "(held) " }, d.message)).collect()).unwrap_or_default();
                 eprintln!("automation: diagnostics {d:?}");
             }
             Step::LogDiagnostics(_) => {}

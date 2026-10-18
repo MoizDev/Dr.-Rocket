@@ -38,6 +38,17 @@ pub struct Diagnostic {
     pub range: Range<usize>,
     pub severity: Severity,
     pub message: String,
+    /// From the background check (rather than a run): held back while the user is still
+    /// typing the code it is about (see [`Decorations::editing`]).
+    pub from_check: bool,
+    /// When its squiggle first showed (it fades in from then).
+    pub shown_at: Option<f64>,
+}
+
+impl Diagnostic {
+    pub fn new(range: Range<usize>, severity: Severity, message: impl Into<String>, from_check: bool) -> Self {
+        Diagnostic { range, severity, message: message.into(), from_check, shown_at: None }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -134,6 +145,10 @@ pub struct Decorations {
     /// The visualizer's notes, written after the end of their lines: the values of the code
     /// it is showing (`k is 12 → Yes`) and of work done on the way (`(random 100) → 37`).
     pub viz_notes: Vec<VizNote>,
+    /// Where the user is typing: the caret after their last edit, until it leaves that
+    /// top-level form. The background check's errors that touch it are held back meanwhile,
+    /// since half-typed code (`(define (f x)`, `(cond`) is always "wrong" for a moment.
+    pub editing: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -145,6 +160,16 @@ pub struct VizNote {
 }
 
 impl Decorations {
+    /// Whether a diagnostic is shown now (not held back while the user types it).
+    pub fn shown(&self, d: &Diagnostic) -> bool {
+        !(d.from_check && self.editing.is_some_and(|p| d.range.start <= p && p <= d.range.end))
+    }
+
+    /// The diagnostics shown now.
+    pub fn shown_diagnostics(&self) -> impl Iterator<Item = &Diagnostic> {
+        self.diagnostics.iter().filter(|d| self.shown(d))
+    }
+
     /// Shift all ranges through an edit (range in pre-edit coordinates, inserted length).
     pub fn shift(&mut self, edit: &Range<usize>, inserted: usize) {
         let map = |r: &mut Range<usize>| {
@@ -152,10 +177,12 @@ impl Decorations {
             let e = super::buffer::map_pos(r.end, edit, inserted, true);
             *r = s..e.max(s);
         };
-        self.diagnostics.iter_mut().for_each(|d| map(&mut d.range));
-        // A result no longer describes a test that was edited (or deleted); edits elsewhere
-        // just move it along.
+        // A result no longer describes a test that was edited (or deleted), nor a run's error
+        // the code it points at; edits elsewhere just move them along. (The background check
+        // replaces its own errors as soon as it has looked again.)
         let touched = |r: &Range<usize>| edit.start < r.end && (edit.end > r.start || edit.start > r.start);
+        self.diagnostics.retain(|d| d.from_check || !touched(&d.range));
+        self.diagnostics.iter_mut().for_each(|d| map(&mut d.range));
         self.inlays.retain(|i| !touched(&i.range));
         self.inlays.iter_mut().for_each(|i| map(&mut i.range));
         self.marks.iter_mut().for_each(|m| map(&mut m.range));
@@ -173,6 +200,9 @@ impl Decorations {
         }
         for n in &mut self.viz_notes {
             n.pos = super::buffer::map_pos(n.pos, edit, inserted, false);
+        }
+        if let Some(p) = &mut self.editing {
+            *p = super::buffer::map_pos(*p, edit, inserted, true);
         }
     }
 }
@@ -327,6 +357,41 @@ pub struct EditorView {
 
 const SCROLLBAR_W: f32 = 12.0;
 
+/// Which modifiers move by word and by line: Option and Cmd on macOS, Ctrl (and Home/End)
+/// elsewhere, as in every other editor on each.
+#[derive(Clone, Copy)]
+enum Platform {
+    Mac,
+    Other,
+}
+
+impl Platform {
+    fn current() -> Self {
+        if cfg!(target_os = "macos") { Platform::Mac } else { Platform::Other }
+    }
+
+    fn word(self, m: Modifiers) -> bool {
+        match self {
+            Platform::Mac => m.alt && !m.ctrl && !m.mac_cmd,
+            Platform::Other => m.ctrl && !m.alt,
+        }
+    }
+
+    fn line(self, m: Modifiers) -> bool {
+        matches!(self, Platform::Mac) && m.mac_cmd && !m.ctrl && !m.alt
+    }
+
+    /// Expand / shrink selection: Ctrl+Shift+Cmd+arrows on macOS, Shift+Alt+arrows elsewhere.
+    fn expand(self, m: Modifiers) -> bool {
+        match self {
+            Platform::Mac => m.shift && m.ctrl && m.mac_cmd && !m.alt,
+            Platform::Other => m.shift && m.alt && !m.ctrl,
+        }
+    }
+}
+/// Seconds a new squiggle takes to fade in.
+const SQUIGGLE_FADE: f64 = 0.18;
+
 impl EditorView {
     pub fn new(text: &str, id: Id) -> Self {
         Self {
@@ -400,6 +465,24 @@ impl EditorView {
         self.doc.buffer.set_text(text);
         self.doc.buffer.selections = Selections::single(Selection::caret(self.doc.buffer.len()));
         self.scroll_to_cursor = true;
+    }
+
+    /// Follow where the user is typing ([`Decorations::editing`]): an edit puts it at the
+    /// caret; it ends when the caret leaves that top-level form or the editor loses focus.
+    fn track_editing(&mut self, version_before: u64, sel_before: &Selections, focused: bool) {
+        let head = self.doc.buffer.selections.primary().head;
+        if self.doc.version() != version_before {
+            self.deco.editing = Some(head);
+        } else if let Some(p) = self.deco.editing {
+            if !focused {
+                self.deco.editing = None;
+            } else if head != p && self.doc.buffer.selections != *sel_before {
+                let inside = sexp::top_level_form(self.doc.tokens(), p).is_some_and(|r| r.start < head && head < r.end);
+                if !inside {
+                    self.deco.editing = None;
+                }
+            }
+        }
     }
 
     /// Keep decorations aligned with edits made since the last frame.
@@ -672,6 +755,7 @@ impl EditorView {
         self.shift_decorations();
         // Input may have added or removed lines; everything below lays out the edited text.
         let line_count = self.doc.buffer.line_count();
+        self.track_editing(version_before, &sel_before, focused);
         if self.doc.version() != version_before || self.doc.buffer.selections != sel_before {
             self.last_activity = now;
             self.scroll_to_cursor = true;
@@ -928,13 +1012,23 @@ impl EditorView {
             self.paint_images(&iui, first, last);
         }
 
-        // Diagnostics squiggles.
-        for d in &self.deco.diagnostics {
+        // Diagnostics squiggles, fading in when they first show.
+        let editing = self.deco.editing;
+        for d in &mut self.deco.diagnostics {
+            let shown = !(d.from_check && editing.is_some_and(|p| d.range.start <= p && p <= d.range.end));
+            d.shown_at = if shown { Some(d.shown_at.unwrap_or(now)) } else { None };
+        }
+        for d in self.deco.shown_diagnostics() {
             let c = match d.severity {
                 Severity::Error => theme.error,
                 Severity::Warning => theme.warning,
             };
-            self.paint_squiggle(&tp, d.range.start, d.range.end.max(d.range.start + 1), first, last, c);
+            let t = ((now - d.shown_at.unwrap_or(now)) / SQUIGGLE_FADE) as f32;
+            if t < 1.0 {
+                ctx.request_repaint();
+            }
+            let r = self.squiggle_range(d);
+            self.paint_squiggle(&tp, r.start, r.end, first, last, c.gamma_multiply(t.clamp(0.0, 1.0)));
         }
 
         // The visualizer's notes, after the lines they are about (one line's notes side by side).
@@ -1054,6 +1148,15 @@ impl EditorView {
         }
     }
 
+    /// A faint tint over all of a diagnostic's range, while its hover card is up.
+    fn paint_extent(&self, ui: &Ui, range: Range<usize>, color: Color32) {
+        let g = &self.geom;
+        let clip = Rect::from_min_max(pos2(g.text_left, g.rect.top()), pos2(g.rect.right() - SCROLLBAR_W, g.rect.bottom()));
+        let first = (self.scroll.y / g.line_h).floor().max(0.0) as usize;
+        let last = (first + (g.rect.height() / g.line_h) as usize + 1).min(self.doc.buffer.line_count().saturating_sub(1));
+        self.paint_range_bg(&ui.painter_at(clip), range.start, range.end, first, last, with_alpha(color, 26));
+    }
+
     fn paint_range_underline(&self, p: &egui::Painter, s: usize, e: usize, first: usize, last: usize, color: Color32) {
         let b = &self.doc.buffer;
         let (l0, l1) = (b.line_of(s), b.line_of(e));
@@ -1079,6 +1182,23 @@ impl EditorView {
             let y = self.line_y(line);
             p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + self.geom.line_h)), CornerRadius::same(3), color);
         }
+    }
+
+    /// The part of a diagnostic that gets the squiggle: all of it on one line, or the first
+    /// line of one that spans several (a whole `define` would be red from top to bottom).
+    /// Hovering the squiggle shows the rest.
+    fn squiggle_range(&self, d: &Diagnostic) -> Range<usize> {
+        let b = &self.doc.buffer;
+        let (s, e) = (d.range.start, d.range.end.max(d.range.start + 1).min(b.len().max(d.range.start + 1)));
+        let line = b.line_of(s);
+        if b.line_of(e.saturating_sub(1).max(s)) == line {
+            return s..e;
+        }
+        let mut end = b.line_end(line);
+        while end > s + 1 && b.char_at(end - 1).is_some_and(char::is_whitespace) {
+            end -= 1;
+        }
+        s..end
     }
 
     fn paint_squiggle(&self, p: &egui::Painter, s: usize, e: usize, first: usize, last: usize, color: Color32) {
@@ -1218,7 +1338,7 @@ impl EditorView {
         let hover_line = resp.hover_pos().filter(|h| gr.contains(*h)).map(|h| ((h.y - self.geom.top + self.scroll.y) / self.geom.line_h) as usize);
         // Diagnostics per line for the gutter dot.
         let mut diag_lines: HashMap<usize, Severity> = HashMap::new();
-        for d in &self.deco.diagnostics {
+        for d in self.deco.shown_diagnostics() {
             let l = self.doc.buffer.line_of(d.range.start);
             let e = diag_lines.entry(l).or_insert(d.severity);
             if d.severity == Severity::Error {
@@ -1426,7 +1546,7 @@ impl EditorView {
                 p.rect_filled(Rect::from_min_size(pos2(track.left() + 2.0, y), vec2(4.0, 2.0)), CornerRadius::ZERO, with_alpha(theme.text_accent, 180));
             }
         }
-        for d in &self.deco.diagnostics {
+        for d in self.deco.shown_diagnostics() {
             let y = to_y(self.doc.buffer.line_of(d.range.start));
             let c = if d.severity == Severity::Error { theme.error } else { theme.warning };
             p.rect_filled(Rect::from_min_size(pos2(track.right() - 6.0, y), vec2(4.0, 3.0)), CornerRadius::same(1), c);
@@ -1530,10 +1650,15 @@ impl EditorView {
         }
         // Gather card contents.
         let mut sections: Vec<(Color32, String)> = Vec::new();
-        for d in &self.deco.diagnostics {
-            if d.range.start <= t.end && t.start <= d.range.end.max(d.range.start + 1) {
+        for d in self.deco.shown_diagnostics() {
+            let r = self.squiggle_range(d);
+            if r.start <= t.end && t.start <= r.end {
                 let c = if d.severity == Severity::Error { theme.error } else { theme.warning };
                 sections.push((c, d.message.clone()));
+                // Show what it is about, when the squiggle covers only its first line.
+                if r.end < d.range.end {
+                    self.paint_extent(ui, d.range.clone(), c);
+                }
             }
         }
         let mut doc_lines: Vec<String> = Vec::new();
@@ -2071,22 +2196,24 @@ impl EditorView {
         let alt = m.alt;
         let ctrl = m.ctrl && !m.mac_cmd;
         let page = ((self.geom.rect.height() / self.geom.line_h) as isize - 2).max(1);
+        let keys = Platform::current();
         let keep_goal = matches!(key, Key::ArrowUp | Key::ArrowDown | Key::PageUp | Key::PageDown);
         match key {
             Key::ArrowLeft | Key::ArrowRight => {
                 let left = key == Key::ArrowLeft;
-                let motion = if cmd {
-                    if left { Motion::LineStart } else { Motion::LineEnd }
-                } else if alt && ctrl {
-                    if left { Motion::SexpLeft } else { Motion::SexpRight }
-                } else if alt && shift && !ctrl {
+                let motion = if keys.expand(m) {
+                    // Expand / shrink selection by s-expression (VS Code's keys).
                     if left {
                         self.doc.shrink_selection();
                     } else {
                         self.doc.expand_selection();
                     }
                     return;
-                } else if alt {
+                } else if alt && ctrl {
+                    if left { Motion::SexpLeft } else { Motion::SexpRight }
+                } else if keys.line(m) {
+                    if left { Motion::LineStart } else { Motion::LineEnd }
+                } else if keys.word(m) {
                     if left { Motion::WordLeft } else { Motion::WordRight }
                 } else if left {
                     Motion::Left
@@ -2126,12 +2253,12 @@ impl EditorView {
             Key::Home => self.doc.move_selections(if cmd { Motion::DocStart } else { Motion::LineStart }, shift),
             Key::End => self.doc.move_selections(if cmd { Motion::DocEnd } else { Motion::LineEnd }, shift),
             Key::Backspace => {
-                let unit = if cmd { Motion::LineStart } else if alt && ctrl { Motion::SexpLeft } else if alt { Motion::WordLeft } else { Motion::Left };
+                let unit = if alt && ctrl { Motion::SexpLeft } else if keys.line(m) { Motion::LineStart } else if keys.word(m) { Motion::WordLeft } else { Motion::Left };
                 self.doc.backspace(unit);
                 self.refresh_completion();
             }
             Key::Delete => {
-                let unit = if alt && ctrl { Motion::SexpRight } else if alt { Motion::WordRight } else if cmd { Motion::LineEnd } else { Motion::Right };
+                let unit = if alt && ctrl { Motion::SexpRight } else if keys.line(m) { Motion::LineEnd } else if keys.word(m) { Motion::WordRight } else { Motion::Right };
                 self.doc.delete_forward(unit);
             }
             Key::Enter => {
@@ -2621,5 +2748,49 @@ mod tests {
             frame(&ctx, &mut ed, &style, vec![key(Key::Backspace)]);
         }
         assert!(ed.doc.buffer.line_count() < 5, "{:?}", ed.doc.text());
+    }
+
+    #[test]
+    fn check_errors_wait_until_the_caret_leaves_the_form_being_typed() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap().clone();
+        let settings = crate::config::Settings::default();
+        let style = EditorStyle { theme: &theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        let ctx = egui::Context::default();
+        let mut ed = EditorView::new("(define x 1)\n", Id::unique("t"));
+        ed.request_focus();
+        frame(&ctx, &mut ed, &style, vec![]);
+        let end = ed.doc.buffer.len();
+        ed.doc.buffer.selections = crate::editor::buffer::Selections::single(crate::editor::buffer::Selection::caret(end));
+        let typed = "(define (f l) ";
+        frame(&ctx, &mut ed, &style, typed.chars().map(|c| Event::Text(c.to_string())).collect());
+        let form = end..ed.doc.buffer.len();
+        // What the background check says about the unfinished form, and about earlier code.
+        ed.deco.diagnostics = vec![
+            Diagnostic::new(form.clone(), Severity::Error, "define: expected an expression for the function body", true),
+            Diagnostic::new(1..7, Severity::Error, "elsewhere", true),
+        ];
+        let shown = |ed: &EditorView| ed.deco.shown_diagnostics().map(|d| d.message.clone()).collect::<Vec<_>>();
+        assert_eq!(shown(&ed), ["elsewhere"]);
+        // Moving around inside the form keeps it held; leaving the form shows it.
+        frame(&ctx, &mut ed, &style, vec![key(Key::ArrowLeft), key(Key::ArrowLeft)]);
+        assert_eq!(shown(&ed), ["elsewhere"]);
+        frame(&ctx, &mut ed, &style, vec![key(Key::ArrowUp)]);
+        assert_eq!(shown(&ed).len(), 2);
+        // Editing inside it again holds it again.
+        frame(&ctx, &mut ed, &style, vec![key(Key::ArrowDown), Event::Text("x".into())]);
+        assert_eq!(shown(&ed), ["elsewhere"]);
+    }
+
+    #[test]
+    fn editing_the_code_a_run_error_points_at_removes_it() {
+        let mut deco = Decorations {
+            diagnostics: vec![Diagnostic::new(10..20, Severity::Error, "run", false), Diagnostic::new(10..20, Severity::Error, "check", true)],
+            ..Default::default()
+        };
+        deco.shift(&(30..30), 1); // elsewhere: both stay
+        assert_eq!(deco.diagnostics.len(), 2);
+        deco.shift(&(12..13), 0); // inside: the run's error goes, the check replaces its own
+        assert_eq!(deco.diagnostics.iter().map(|d| d.message.as_str()).collect::<Vec<_>>(), ["check"]);
     }
 }

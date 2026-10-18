@@ -525,6 +525,17 @@ fn start_check(app: &mut App, i: usize, explicit: bool) {
     app.tabs[i].rk.check_req = rid;
 }
 
+/// A message without the `file:line:col: ` the reader puts in front (it is about the text sent
+/// to Racket, which can have a language line added, so the line can be off; the squiggle shows
+/// where it is anyway).
+fn without_srcloc(message: &str) -> &str {
+    let Some((head, rest)) = message.split_once(": ") else { return message };
+    let mut parts = head.rsplitn(3, ':');
+    let (col, line) = (parts.next(), parts.next());
+    let num = |p: Option<&str>| p.is_some_and(|p| !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()));
+    if num(col) && num(line) && parts.next().is_some_and(|f| !f.is_empty()) { rest } else { message }
+}
+
 fn apply_check(app: &mut App, tab_id: u64, version: u64, explicit: bool, r: CheckSyntaxResult) {
     let Some(i) = tab_index(app, tab_id) else { return };
     let tab = &mut app.tabs[i];
@@ -553,22 +564,32 @@ fn apply_check(app: &mut App, tab_id: u64, version: u64, explicit: bool, r: Chec
         docs: r.docs.iter().filter_map(|d| d.url().map(|u| (d.start..d.end, u))).collect(),
     };
     tab.editor.deco.semantic = Some(sem);
-    // Syntax errors become diagnostics; keep runtime-error diagnostics from Run.
-    tab.editor.deco.diagnostics.retain(|d| d.severity != Severity::Warning && !d.message.starts_with('\u{200b}'));
+    // Syntax errors become diagnostics; keep runtime-error diagnostics from Run. Ones that
+    // were already showing keep their place in the fade-in.
+    let old: Vec<Diagnostic> = tab.editor.deco.diagnostics.extract_if(.., |d| d.from_check).collect();
+    let add = |tab: &mut Tab, d: Diagnostic| {
+        let shown_at = old.iter().find(|o| o.range == d.range && o.message == d.message).and_then(|o| o.shown_at);
+        tab.editor.deco.diagnostics.push(Diagnostic { shown_at, ..d });
+    };
     let mut first_error = None;
     for e in &r.errors {
+        let message = without_srcloc(&e.message);
         let locs: Vec<(usize, usize)> = e.srclocs.iter().filter(|l| l.path.is_none() || is_local(tab, l)).filter_map(|l| l.range()).collect();
         for (s, end) in locs {
             let range = s..end.max(s + 1);
             first_error.get_or_insert(range.clone());
-            tab.editor.deco.diagnostics.push(Diagnostic { range, severity: Severity::Error, message: format!("\u{200b}{}", e.message) });
+            add(tab, Diagnostic::new(range, Severity::Error, message, true));
         }
         if e.srclocs.is_empty() && explicit {
-            app.toasts.push(crate::app::Toast { text: e.message.clone(), kind: ToastKind::Error, until: app.ctx.input(|i| i.time) + 6.0 });
+            app.toasts.push(crate::app::Toast { text: message.to_string(), kind: ToastKind::Error, until: app.ctx.input(|i| i.time) + 6.0 });
         }
     }
     for r in &r.unused_requires {
-        tab.editor.deco.diagnostics.push(Diagnostic { range: r.0..r.1, severity: Severity::Warning, message: "\u{200b}Unused require".into() });
+        add(tab, Diagnostic::new(r.0..r.1, Severity::Warning, "Unused require", true));
+    }
+    if explicit {
+        // Asked for: show everything, including what is being typed.
+        tab.editor.deco.editing = None;
     }
     if std::env::var_os("DRROCKET_TRACE").is_some() {
         for d in &tab.editor.deco.diagnostics {
@@ -656,7 +677,8 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             tab.editor.deco.marks.retain(|m| m.kind == MarkKind::StepBefore);
             tab.editor.deco.inlays.clear();
             tab.editor.deco.viz_notes.clear();
-            tab.editor.deco.diagnostics.retain(|d| d.message.starts_with('\u{200b}'));
+            tab.editor.deco.diagnostics.retain(|d| d.from_check);
+            tab.editor.deco.editing = None;
             app.layout.show(PanelItem::Interactions, Dock::Right);
             if instrument == Instrument::Debug {
                 app.layout.show(PanelItem::Debugger, Dock::Right);
@@ -779,7 +801,7 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
                 if let Some((s, e)) = loc.range() {
                     let range = s..e.max(s + 1);
                     tab.editor.deco.marks.push(Mark { range: range.clone(), kind: MarkKind::Error });
-                    tab.editor.deco.diagnostics.push(Diagnostic { range: range.clone(), severity: Severity::Error, message: report.message.clone() });
+                    tab.editor.deco.diagnostics.push(Diagnostic::new(range.clone(), Severity::Error, report.message.clone(), false));
                     tab.editor.reveal(range.start..range.start);
                     break;
                 }
@@ -1231,11 +1253,18 @@ pub fn set_language(app: &mut App, language: Language, settings: TeachingSetting
     let has_lang = lang::hash_lang(&text).is_some();
     if language == Language::Module && !has_lang {
         let b = &mut tab.editor.doc.buffer;
-        b.apply(vec![crate::editor::buffer::Replace { range: 0..0, text: "#lang racket\n".into() }], None, crate::editor::buffer::EditKind::Other);
+        // With a blank line after it, as in a new file.
+        let gap = if text.starts_with('\n') { "\n" } else { "\n\n" };
+        b.apply(vec![crate::editor::buffer::Replace { range: 0..0, text: format!("#lang racket{gap}") }], None, crate::editor::buffer::EditKind::Other);
     } else if language != Language::Module && has_lang {
-        // Teaching languages don't use a #lang line; drop it (DrRacket would reject it).
+        // Teaching languages don't use a #lang line; drop it (DrRacket would reject it), and
+        // the blank lines after it, so the code doesn't start with an empty line.
         let b = &mut tab.editor.doc.buffer;
-        let end = if b.line_count() > 1 { b.line_start(1) } else { b.len() };
+        let mut line = 1;
+        while line < b.line_count() - 1 && b.line_text(line).trim().is_empty() {
+            line += 1;
+        }
+        let end = if b.line_count() > 1 { b.line_start(line) } else { b.len() };
         b.apply(vec![crate::editor::buffer::Replace { range: 0..end, text: String::new() }], None, crate::editor::buffer::EditKind::Other);
     }
     tab.language = language;
@@ -3016,7 +3045,16 @@ pub fn call_box(app: &mut App, ui: &Ui, ed_rect: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::short_test_message;
+    use super::{short_test_message, without_srcloc};
+
+    #[test]
+    fn reader_messages_lose_their_srcloc() {
+        assert_eq!(without_srcloc("unsaved-editor:5:2: read-syntax: expected a `)` to close `(`"), "read-syntax: expected a `)` to close `(`");
+        assert_eq!(without_srcloc("/Users/a b/x.rkt:12:0: read-syntax: unexpected `)`"), "read-syntax: unexpected `)`");
+        assert_eq!(without_srcloc("C:\\Users\\x.rkt:3:1: read-syntax: bad"), "read-syntax: bad");
+        assert_eq!(without_srcloc("define: expected a variable name"), "define: expected a variable name");
+        assert_eq!(without_srcloc("cond: x:1:2 is odd"), "cond: x:1:2 is odd");
+    }
 
     #[test]
     fn condenses_check_expect_messages() {

@@ -28,6 +28,17 @@ pub fn enclosing_open(toks: &[Token], pos: usize) -> Option<usize> {
     None
 }
 
+/// The outermost list containing `pos` (strictly after its open bracket, at or before its
+/// close), from its open bracket to after its close (or `usize::MAX` while it is unclosed).
+pub fn top_level_form(toks: &[Token], pos: usize) -> Option<std::ops::Range<usize>> {
+    let mut open = enclosing_open(toks, pos)?;
+    while let Some(o) = enclosing_open(toks, toks[open].start) {
+        open = o;
+    }
+    let end = toks[open].partner.map_or(usize::MAX, |p| toks[p as usize].end);
+    Some(toks[open].start..end)
+}
+
 /// The matching bracket pair adjacent to the cursor: the cursor is right after a close
 /// bracket or right before an open bracket. Returns (open token idx, close token idx).
 pub fn bracket_pair_at(toks: &[Token], pos: usize) -> Option<(usize, usize)> {
@@ -346,6 +357,16 @@ mod tests {
         fn col_of(&self, pos: usize) -> usize {
             pos - self.0[self.line_of(pos)]
         }
+    }
+
+    #[test]
+    fn top_level_form_is_the_outermost_list() {
+        let src: Vec<char> = "(define (f x)\n  (cond [x 1]))\n(g".chars().collect();
+        let toks = lex_chars(&src);
+        assert_eq!(top_level_form(&toks, 23), Some(0..29)); // inside [x 1]
+        assert_eq!(top_level_form(&toks, 29), None); // after the close
+        assert_eq!(top_level_form(&toks, 0), None); // before the open
+        assert_eq!(top_level_form(&toks, 32), Some(30..usize::MAX)); // unclosed
     }
 
     /// Reindent every line of `src` and return the result.

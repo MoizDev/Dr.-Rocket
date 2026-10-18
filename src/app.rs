@@ -971,6 +971,7 @@ impl App {
             Command::NextProblem => {
                 if let Some(t) = self.active_tab_mut() {
                     let head = t.editor.doc.buffer.selections.primary().head;
+                    t.editor.deco.editing = None; // asked for: include what is being typed
                     let mut ds: Vec<_> = t.editor.deco.diagnostics.iter().map(|d| d.range.clone()).collect();
                     ds.sort_by_key(|r| r.start);
                     if let Some(r) = ds.iter().find(|r| r.start > head).or(ds.first()).cloned() {
@@ -1329,8 +1330,8 @@ impl App {
     /// Error / warning / test counters in the editor's top-right corner (as in the mockup).
     fn diagnostics_counter(&mut self, ui: &mut Ui, ed_rect: Rect) {
         let Some(tab) = self.active_tab() else { return };
-        let errors = tab.editor.deco.diagnostics.iter().filter(|d| d.severity == crate::editor::view::Severity::Error).count();
-        let warnings = tab.editor.deco.diagnostics.iter().filter(|d| d.severity == crate::editor::view::Severity::Warning).count();
+        let errors = tab.editor.deco.shown_diagnostics().filter(|d| d.severity == crate::editor::view::Severity::Error).count();
+        let warnings = tab.editor.deco.shown_diagnostics().filter(|d| d.severity == crate::editor::view::Severity::Warning).count();
         let passed = tab.editor.deco.inlays.iter().filter(|i| i.kind == crate::editor::view::InlayKind::Pass).count();
         let failed = tab.editor.deco.inlays.iter().filter(|i| i.kind == crate::editor::view::InlayKind::Fail).count();
         if errors + warnings + passed + failed == 0 || tab.editor.find.open {

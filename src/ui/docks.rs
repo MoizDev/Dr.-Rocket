@@ -167,7 +167,7 @@ impl App {
         // (tab index, diagnostic index, file title, severity, line, message)
         let mut items: Vec<(usize, usize, String, crate::editor::view::Severity, usize, String)> = Vec::new();
         for (ti, t) in self.tabs.iter().enumerate() {
-            for (di, d) in t.editor.deco.diagnostics.iter().enumerate() {
+            for (di, d) in t.editor.deco.diagnostics.iter().enumerate().filter(|(_, d)| t.editor.deco.shown(d)) {
                 let line = t.editor.doc.buffer.line_of(d.range.start);
                 items.push((ti, di, t.title(), d.severity, line, d.message.clone()));
             }

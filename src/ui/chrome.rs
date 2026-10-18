@@ -358,8 +358,8 @@ impl App {
         let (errors, warnings) = self
             .active_tab()
             .map(|t| {
-                let d = &t.editor.deco.diagnostics;
-                (d.iter().filter(|x| x.severity == crate::editor::view::Severity::Error).count(), d.iter().filter(|x| x.severity == crate::editor::view::Severity::Warning).count())
+                let d = &t.editor.deco;
+                (d.shown_diagnostics().filter(|x| x.severity == crate::editor::view::Severity::Error).count(), d.shown_diagnostics().filter(|x| x.severity == crate::editor::view::Severity::Warning).count())
             })
             .unwrap_or((0, 0));
         let problems_color = if errors > 0 { Some(theme.error) } else { None };
