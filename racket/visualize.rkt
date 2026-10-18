@@ -59,7 +59,24 @@
 
 ;; An identifier the user wrote (not one generated from their code, like `make-node`).
 (define (user-syntax? id)
-  (equal? (user-text id) (symbol->string (syntax-e id))))
+  (or (equal? (user-text id) (symbol->string (syntax-e id)))
+      (for/or ([u (in-list user-locals)]) (free-identifier=? u id))))
+
+;; Names the user defined in a `local`: the teaching languages rename them and drop their
+;; source location, but what they're bound to is still the user's `(define (go i) …)`, or
+;; the expression right after `(define start `.
+(define user-locals '())
+(define (note-user-locals! idss rhss)
+  (for ([ids (in-list idss)] [rhs (in-list rhss)])
+    (when (and (= 1 (length ids)) (not (syntax-position (car ids))))
+      (define name (regexp-quote (symbol->string (syntax-e (car ids)))))
+      (define text (user-text rhs))
+      (define before
+        (and text (let ([start (sub1 (syntax-position rhs))]) (substring source-text (max 0 (- start 200)) start))))
+      (when (and text
+                 (or (regexp-match? (pregexp (string-append "^[(\\[]define\\s+[(\\[]?" name "[\\s)\\]]")) text)
+                     (regexp-match? (pregexp (string-append "[(\\[]define\\s+" name "\\s+$")) before)))
+        (set! user-locals (cons (car ids) user-locals))))))
 
 (define (pos-of stx) (adjust-pos (syntax-source stx) (syntax-position stx)))
 (define (span-of stx) (or (syntax-span stx) 0))
@@ -83,6 +100,7 @@
 (define (viz-annotate expanded src orig text)
   (set! source src)
   (set! source-text text)
+  (set! user-locals '())
   (collect-struct-fields! orig)
   (syntax-case expanded ()
     [(mod name lang mb)
@@ -96,6 +114,7 @@
 (define (viz-annotate-top expanded src orig text)
   (set! source src)
   (set! source-text text)
+  (set! user-locals '())
   (collect-struct-fields! orig)
   (annotate-top expanded))
 
@@ -122,27 +141,54 @@
     [_ (annotate-expr form #f)]))
 
 ;; Functions worth showing as frames: ones bound to a name the user wrote, and `lambda`s the
-;; user wrote. (Teaching languages also generate lambdas, e.g. for check-expect.)
+;; user wrote. (Teaching languages also generate lambdas, e.g. for check-expect.) A `lambda`
+;; inside a function body can lose its source location in the teaching languages' expansion
+;; (ISL+), but its origin still names the `lambda` keyword the user wrote.
 (define (user-function? whole name)
   (or (and name (user-syntax? name))
       (let ([t (user-text whole)])
-        (and t (regexp-match? #rx"^[(\\[](lambda|λ)[ \n\t\r]" t)))))
+        (and t (regexp-match? #rx"^[(\\[](lambda|λ)[ \n\t\r]" t)))
+      (for/or ([o (in-list (flatten (or (syntax-property whole 'origin) '())))])
+        (and (identifier? o) (memq (syntax-e o) '(lambda λ)) (user-syntax? o)))))
 
 (define (annotate-body body tail?)
   ;; The last expression of a body inherits the body's tail position.
   (for/list ([b (in-list body)] [k (in-naturals 1)])
     (annotate-expr b #f (and tail? (= k (length body))))))
 
+;; The user's local names in scope where we are (parameters and `local` / `let` names of the
+;; functions around): a function made in there can use them, and its frames show the ones it
+;; does (`n` in the `λ` that `make-adder` returns).
+(define scope (make-parameter '()))
+
+;; Does `stx` refer to the binding of `id`?
+(define (refers? stx id)
+  (let loop ([x stx])
+    (cond
+      [(identifier? x) (free-identifier=? x id)]
+      [(syntax? x) (loop (syntax-e x))]
+      [(pair? x) (or (loop (car x)) (loop (cdr x)))]
+      [else #f])))
+
 (define (annotate-lambda-clause formals body name whole)
-  (define bodies (annotate-body body #t))
+  (define bodies
+    (parameterize ([scope (append (filter user-syntax? (formals-ids formals)) (scope))])
+      (annotate-body body #t)))
   (cond
     [(and (user-function? whole name) (pair? body))
      (define first-body (last body))
      (define fname (if name (syntax-e name) 'λ))
+     ;; What it uses from around it (not itself: a local function calling itself).
+     (define captured
+       (for/list ([id (in-list (scope))]
+                  #:unless (and name (free-identifier=? id name))
+                  #:when (refers? body id))
+         id))
      (list formals
            #`(#%plain-app '#,viz-call
                           '#,(format "~a" fname)
                           #,(getters (formals-ids formals))
+                          #,(getters captured)
                           '#,(pos-of first-body) '#,(span-of first-body)
                           (#%plain-lambda () #,@bodies)))]
     [else (cons formals bodies)]))
@@ -150,7 +196,7 @@
 (define (annotate-bindings stx ids-list body tail?)
   ;; let-values / letrec-values: record user-visible local names in the current frame.
   (define shown (filter user-syntax? (append* ids-list)))
-  (define bodies (annotate-body body tail?))
+  (define bodies (parameterize ([scope (append shown (scope))]) (annotate-body body tail?)))
   (if (null? shown)
       bodies
       (cons #`(#%plain-app '#,viz-bind! #,(getters shown)) bodies)))
@@ -188,14 +234,18 @@
        (rebuild e (cons (car (syntax-e e)) (for/list ([x (in-list xs)]) (annotate-expr x #f (and tail? (= 1 (length xs))))))))]
     [(let-values ([(id ...) rhs] ...) body ...)
      (let ([idss (map syntax->list (syntax->list #'((id ...) ...)))])
+       (note-user-locals! idss (syntax->list #'(rhs ...)))
        (rebuild e (list* (car (syntax-e e))
                          (rebind #'([(id ...) rhs] ...) idss)
                          (annotate-bindings e idss (syntax->list #'(body ...)) tail?))))]
     [(letrec-values ([(id ...) rhs] ...) body ...)
      (let ([idss (map syntax->list (syntax->list #'((id ...) ...)))])
-       (rebuild e (list* (car (syntax-e e))
+       (note-user-locals! idss (syntax->list #'(rhs ...)))
+       ;; The right-hand sides see the names too (local functions using each other).
+       (parameterize ([scope (append (filter user-syntax? (append* idss)) (scope))])
+        (rebuild e (list* (car (syntax-e e))
                          (rebind #'([(id ...) rhs] ...) idss)
-                         (annotate-bindings e idss (syntax->list #'(body ...)) tail?))))]
+                         (annotate-bindings e idss (syntax->list #'(body ...)) tail?)))))]
     [(set! id rhs)
      (let ([set (rebuild e (list (car (syntax-e e)) #'id (annotate-expr #'rhs #f)))])
        (if (user-syntax? #'id)
@@ -355,14 +405,14 @@
     (set! recording? #f)
     (emitter (hasheq 'ev "viz-end" 'steps step-count 'truncated truncated?))))
 
-(define (viz-call name args pos span thunk)
+(define (viz-call name args captured pos span thunk)
   (cond
     [(not recording?) (thunk)]
     [else
      (define site (or current-site (list pos span #f)))
      (define current-site-fresh? (and current-site #t))
      (set! current-site #f)
-     (define f (frame name args '() (car site) (cadr site)))
+     (define f (frame name args captured (car site) (cadr site)))
      ;; The caller gets this call's value at its call site (unless a primitive operation
      ;; made the call, or it's a tail call: then the caller is gone).
      (define answers (and current-site-fresh? (not (caddr site)) (not (and (pair? running-prims) (equal? (car running-prims) (car site))))))

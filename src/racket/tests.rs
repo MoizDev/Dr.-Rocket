@@ -1030,3 +1030,25 @@ fn saved_teaching_files_load_in_plain_racket_like_a_grader() {
     let _ = std::fs::remove_dir_all(&dir);
     assert_eq!(String::from_utf8_lossy(&out.stdout), "42", "{}", String::from_utf8_lossy(&out.stderr));
 }
+
+/// A function made inside another (`make-adder`'s `lambda`) is shown when it's called, with
+/// what it uses from around it (`n`), though ISL+ drops the `lambda`'s source location.
+#[test]
+fn visualizer_shows_closures_with_what_they_capture() {
+    let b = need_racket!();
+    let src = "#lang htdp/isl+\n(define (make-adder n)\n  (lambda (x) (+ x n)))\n(define add5 (make-adder 5))\n(add5 10)\n(define (count-up k)\n  (local [(define start 1)\n          (define (go i) (if (> i k) empty (cons i (go (+ i start)))))]\n    (go 1)))\n(count-up 1)\n";
+    let s = RunSession::start(b, &module_config(None, src, Instrument::Visualize)).unwrap();
+    let events = run_until(&s, ready(None));
+    let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
+    let num = |v: &str| VizRef::Prim { v: v.into(), k: "num".into() };
+    let call = steps.iter().find(|s| s.kind == "call" && s.pos.is_some_and(|p| src[p..].starts_with("(add5 10)"))).expect("the closure's call is a step");
+    let f = call.frames.last().unwrap();
+    assert_eq!(f.name, "λ");
+    assert_eq!(f.nargs, 1, "only x is an argument");
+    assert_eq!(f.vars, vec![("x".to_string(), num("10")), ("n".to_string(), num("5"))]);
+    // A local function shows the locals it uses (k, start), but not itself.
+    let go = steps.iter().filter(|s| s.kind == "call").filter_map(|s| s.frames.last()).find(|f| f.name == "go").expect("go is called");
+    let names: Vec<&str> = go.vars.iter().map(|v| v.0.as_str()).collect();
+    assert_eq!(names[0], "i");
+    assert!(names.contains(&"k") && names.contains(&"start") && !names.contains(&"go"), "{names:?}");
+}
