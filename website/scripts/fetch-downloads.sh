@@ -40,11 +40,36 @@ node -e '
   const [manifest, list] = process.argv.slice(1);
   const r = JSON.parse(fs.readFileSync(manifest, "utf8"));
   const releases = JSON.parse(fs.readFileSync(list, "utf8")).filter((x) => !x.draft);
-  const ready = releases.find((x) => {
-    const v = x.tag_name.replace(/^v/, "");
-    const names = new Set(x.assets.map((a) => a.name));
-    return ["mac", "windows"].every((os) => names.has(r.downloads[os].asset.replaceAll("{version}", v)));
-  });
+  // Semver order (GitHub lists 1.0.0-beta.9 before 1.0.0-beta.10): numbers compare as numbers,
+  // and a release comes after its prereleases.
+  const key = (tag) => {
+    const [core, pre] = tag.replace(/^v/, "").split("+")[0].split(/-(.*)/s);
+    return [core.split(".").map(Number), pre ? pre.split(".") : []];
+  };
+  const part = (a, b) => {
+    const [na, nb] = [/^\d+$/.test(a), /^\d+$/.test(b)];
+    if (na && nb) return Number(a) - Number(b);
+    if (na !== nb) return na ? -1 : 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  };
+  const cmp = (x, y) => {
+    const [[ca, pa], [cb, pb]] = [key(x.tag_name), key(y.tag_name)];
+    for (let i = 0; i < 3; i++) if (ca[i] !== cb[i]) return ca[i] - cb[i];
+    if (!pa.length || !pb.length) return pb.length - pa.length;
+    for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+      const c = part(pa[i], pb[i]);
+      if (c) return c;
+    }
+    return pa.length - pb.length;
+  };
+  const ready = releases
+    .filter((x) => {
+      const v = x.tag_name.replace(/^v/, "");
+      const names = new Set(x.assets.map((a) => a.name));
+      return ["mac", "windows"].every((os) => names.has(r.downloads[os].asset.replaceAll("{version}", v)));
+    })
+    .sort(cmp)
+    .pop();
   if (!ready) { console.error("fetch-downloads: no release has the macOS and Windows files yet"); process.exit(1); }
   const v = ready.tag_name.replace(/^v/, "");
   if (v !== r.version) {
