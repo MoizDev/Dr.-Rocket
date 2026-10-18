@@ -189,8 +189,8 @@ enum Key {
 
 #[derive(Clone, Copy)]
 struct Anim {
-    from: Pos2,
-    to: Pos2,
+    from: Rect,
+    to: Rect,
     start: f64,
     born: f64,
 }
@@ -208,6 +208,10 @@ pub struct VisualizerView {
     pub auto_fit: bool,
     anim: HashMap<Key, Anim>,
     layout: Option<(usize, Layout)>,
+    /// The layout shown before this one, and when it changed: what changed in a card between
+    /// the two is animated (a band fading out, the footer drawing in, a value travelling up).
+    prev: Option<Layout>,
+    changed: f64,
     images: HashMap<u64, Arc<[u8]>>,
     /// The step the editor highlight was last set for.
     pub highlighted: Option<usize>,
@@ -244,6 +248,8 @@ impl Default for VisualizerView {
             auto_fit: true,
             anim: HashMap::new(),
             layout: None,
+            prev: None,
+            changed: 0.0,
             images: HashMap::new(),
             highlighted: None,
             explain_h: 170.0,
@@ -729,6 +735,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
 
 // ------------------------------------------------------------------------------- drawing
 
+#[derive(Clone, Copy)]
 struct Pen<'a> {
     ui: &'a Ui,
     cw: f32,
@@ -852,7 +859,38 @@ fn ease(t: f32) -> f32 {
     1.0 - (1.0 - t).powi(3)
 }
 
+/// The eased progress of a part of a transition that runs from `a` to `b` (fractions of it).
+fn phase(t: f32, a: f32, b: f32) -> f32 {
+    ease((t - a) / (b - a))
+}
+
+fn lerp_rect(a: Rect, b: Rect, t: f32) -> Rect {
+    Rect::from_min_max(a.min + (b.min - a.min) * t, a.max + (b.max - a.max) * t)
+}
+
 const ANIM_SECS: f64 = 0.35;
+/// How long what changed inside the cards takes to animate (shorter while playing fast).
+const FX_SECS: f64 = 0.6;
+
+/// When a returned value sets off up the connector, and when it lands in the slot (fractions
+/// of the transition).
+const TRAVEL: (f32, f32) = (0.2, 0.75);
+
+/// The first `t` (0 to 1) of a polyline.
+fn partial(points: &[Pos2], t: f32) -> Vec<Pos2> {
+    if t >= 1.0 || points.len() < 2 {
+        return points.to_vec();
+    }
+    let at = t.max(0.0) * (points.len() - 1) as f32;
+    let i = at.floor() as usize;
+    let mut out = points[..=i].to_vec();
+    out.push(points[i] + (points[i + 1] - points[i]) * (at - i as f32));
+    out
+}
+
+fn short(s: &str, n: usize) -> String {
+    if s.chars().count() > n { format!("{}…", s.chars().take(n - 1).collect::<String>()) } else { s.to_string() }
+}
 
 /// What the panel tells the diagram, and what the diagram reports back.
 #[derive(Default)]
@@ -877,24 +915,25 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
         let new = layout(&view.trace, step_idx, cw);
         // Start animations from wherever things are drawn right now.
         let mut anim = HashMap::new();
-        let mut set = |key: Key, to: Pos2| {
+        let mut set = |key: Key, to: Rect| {
             let a = match view.anim.get(&key) {
                 Some(a) => {
                     let t = ease(((now - a.start) / ANIM_SECS) as f32);
-                    Anim { from: a.from + (a.to - a.from) * t, to, start: now, born: a.born }
+                    Anim { from: lerp_rect(a.from, a.to, t), to, start: now, born: a.born }
                 }
                 None => Anim { from: to, to, start: now, born: now },
             };
             anim.insert(key, a);
         };
         for f in &new.frames {
-            set(Key::Frame(f.key), f.rect.min);
+            set(Key::Frame(f.key), f.rect);
         }
         for (id, o) in &new.objects {
-            set(Key::Object(*id), o.rect.min);
+            set(Key::Object(*id), o.rect);
         }
         view.anim = anim;
-        view.layout = Some((step_idx, new));
+        view.prev = view.layout.replace((step_idx, new)).map(|l| l.1);
+        view.changed = now;
     }
     let Some((laid_step, lay)) = view.layout.take() else { return };
 
@@ -965,17 +1004,20 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
         }
     }
 
-    let pos_of = |key: Key, fallback: Pos2| -> (Pos2, f32) {
+    let pos_of = |key: Key, fallback: Rect| -> (Rect, f32) {
         match view.anim.get(&key) {
             Some(a) => {
                 let t = ease(((now - a.start) / ANIM_SECS) as f32);
                 let alpha = ((now - a.born) / ANIM_SECS).clamp(0.0, 1.0) as f32;
-                (a.from + (a.to - a.from) * t, alpha)
+                (lerp_rect(a.from, a.to, t), alpha)
             }
             None => (fallback, 1.0),
         }
     };
-    let animating = view.anim.values().any(|a| now - a.start < ANIM_SECS || now - a.born < ANIM_SECS);
+    // How far the change from the previous step has played out (1: done, or nothing to show).
+    let fx_secs = if view.playing { FX_SECS.min(0.85 / view.speed.max(0.1) as f64) } else { FX_SECS };
+    let fx = if view.prev.is_some() { ((now - view.changed) / fx_secs).clamp(0.0, 1.0) as f32 } else { 1.0 };
+    let animating = fx < 1.0 || view.anim.values().any(|a| now - a.start < ANIM_SECS || now - a.born < ANIM_SECS);
     let origin = rect.min + view.pan;
     let mut child_ui = ui.new_child(egui::UiBuilder::new().max_rect(rect));
     child_ui.set_clip_rect(rect);
@@ -994,18 +1036,24 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     // The previous card, and its slot for the awaited value (the connector leaves from there).
     let mut prev: Option<(Rect, Option<Rect>)> = None;
     for f in &lay.frames {
-        let (min, alpha) = pos_of(Key::Frame(f.key), f.rect.min);
+        let (at, alpha) = pos_of(Key::Frame(f.key), f.rect);
+        // The same card in the previous step (`None`: it's new).
+        let old = view.prev.as_ref().and_then(|p| p.frames.iter().find(|o| o.key == f.key));
+        // A new call comes in order: the caller's footer, the connector, then the card.
+        let alpha = if old.is_none() && fx < 1.0 { phase(fx, 0.5, 0.95) } else { alpha };
         // Callers waiting on the running call recede a little.
         let alpha = if f.current || f.top { alpha } else { alpha * 0.75 };
         let pp = Pen { ui: &child_ui, cw, theme, tk, origin, zoom: z, alpha };
-        let r = pp.r(Rect::from_min_size(min, f.rect.size()));
+        let r = pp.r(at);
         let painter = child_ui.painter();
         let state = f.state(&kind);
         if let Some((p, slot)) = prev {
             // From the caller's slot (or its bottom) to this card; a value coming back
             // points up into the slot.
             let returning = f.returns.is_some();
-            let color = pp.fade(if returning { theme.success } else { mix(tk.subtle_border, theme.text_accent, 0.6) });
+            // (A new card's connector shows while the card is still to come.)
+            let line = if old.is_none() { Pen { alpha: if f.current || f.top { 1.0 } else { 0.75 }, ..pp } } else { pp };
+            let color = line.fade(if returning { theme.success } else { mix(tk.subtle_border, theme.text_accent, 0.6) });
             let head = 6.0 * z;
             let from = slot.map_or(pos2(p.center().x, p.bottom()), |s| pos2(s.center().x, s.bottom() + 2.0 * z));
             let to = pos2(r.center().x, r.top());
@@ -1022,13 +1070,32 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
                     )
                 })
                 .collect();
+            // A new call's connector draws itself from the caller down to it.
+            let grow = if old.is_none() { phase(fx, 0.3, 0.8) } else { 1.0 };
+            let shown = partial(&curve, grow);
             if f.tail {
-                painter.extend(Shape::dashed_line(&curve, Stroke::new(1.3, color), 5.0 * z, 4.0 * z));
+                painter.extend(Shape::dashed_line(&shown, Stroke::new(1.3, color), 5.0 * z, 4.0 * z));
             } else {
-                painter.add(Shape::line(curve.clone(), Stroke::new(1.3, color)));
+                painter.add(Shape::line(shown, Stroke::new(1.3, color)));
             }
-            let tip = if returning { vec![from, from + vec2(-head * 0.6, head), from + vec2(head * 0.6, head)] } else { vec![to, to + vec2(-head * 0.6, -head), to + vec2(head * 0.6, -head)] };
-            painter.add(Shape::convex_polygon(tip, color, Stroke::NONE));
+            if grow >= 1.0 {
+                let tip = if returning { vec![from, from + vec2(-head * 0.6, head), from + vec2(head * 0.6, head)] } else { vec![to, to + vec2(-head * 0.6, -head), to + vec2(head * 0.6, -head)] };
+                painter.add(Shape::convex_polygon(tip, color, Stroke::NONE));
+            }
+            // The value it just returned travels up the connector into the caller's slot.
+            if returning
+                && old.is_some_and(|o| o.returns.is_none())
+                && let Some(v) = &f.returns
+                && fx < TRAVEL.1
+            {
+                let k = phase(fx, TRAVEL.0, TRAVEL.1);
+                let at = curve[((1.0 - k) * (curve.len() - 1) as f32).round() as usize];
+                let g = painter.layout_no_wrap(short(&label(&view.trace, v, step_idx), 14), ui::mono(12.0 * z), theme.success);
+                let chip = Rect::from_center_size(at, g.size() + vec2(12.0 * z, 6.0 * z));
+                let a = phase(fx, 0.0, TRAVEL.0 + 0.05);
+                painter.rect(chip, CornerRadius::same((chip.height() / 2.0) as u8), mix(pp.box_bg(), theme.success, 0.18).gamma_multiply(a), Stroke::new(1.0, with_alpha(theme.success, 170).gamma_multiply(a)), StrokeKind::Inside);
+                painter.galley(chip.center() - g.size() / 2.0, g, theme.success.gamma_multiply(a));
+            }
             // A tail call says so on its connector, in a pill on the curve (so it never needs
             // room beside it). What a call returns needs no tag: it's in the returning card,
             // and lands in the caller's slot.
@@ -1142,10 +1209,20 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             }
         };
         let right = r.right() - 14.0 * z;
+        // A row that's new fades in, and a value that changed glows for a moment.
+        let row_fx = |at_y: f32, fresh: bool, changed: bool, color: Color32| -> Pen {
+            if (fresh || changed) && fx < 1.0 {
+                let glow = Rect::from_min_max(pos2(r.left() + 6.0 * z, at_y - CARD_ROW / 2.0 * z + 1.0), pos2(r.right() - 6.0 * z, at_y + CARD_ROW / 2.0 * z - 1.0));
+                painter.rect_filled(glow, CornerRadius::same((6.0 * z) as u8), pp.fade(with_alpha(color, (40.0 * (1.0 - phase(fx, 0.3, 1.0))) as u8)));
+            }
+            Pen { alpha: pp.alpha * if fresh { phase(fx, 0.2, 0.55) } else { 1.0 }, ..pp }
+        };
         for (name, v) in &f.rows {
             let result = f.top && name == "result" && Some(v) == view.trace.result_at(step_idx);
             let color = if result { theme.success } else { theme.syntax.variable.color };
             let at_y = r.top() + y * z;
+            let before = old.map(|o| o.rows.iter().find(|(n, _)| n == name).map(|(_, w)| w));
+            let pp = row_fx(at_y, before == Some(None), before.flatten().is_some_and(|w| w != v), if result { theme.success } else { theme.text_accent });
             let nr = painter.text(pos2(left, at_y), Align2::LEFT_CENTER, name, if result { pp.label(12.5) } else { pp.mono() }, pp.fade(color));
             let vl = pp.slot(v, &view.trace, step_idx, pos2(right, at_y), &mut arrows, f.current || result);
             leader(nr.right(), vl, at_y);
@@ -1154,6 +1231,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
         }
         if let Some(v) = &f.returns {
             let at_y = r.top() + y * z;
+            let pp = row_fx(at_y, old.is_some_and(|o| o.returns.is_none()), false, theme.success);
             let nr = painter.text(pos2(left, at_y), Align2::LEFT_CENTER, "returns", pp.label(12.5), pp.fade(theme.success));
             let vl = pp.slot(v, &view.trace, step_idx, pos2(right, at_y), &mut arrows, true);
             leader(nr.right(), vl, at_y);
@@ -1163,97 +1241,49 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             painter.text(pos2(left, r.top() + y * z), Align2::LEFT_CENTER, "no arguments", pp.label(12.0), pp.fade(theme.text_placeholder));
         }
 
-        // The question being asked: a decision diamond, the question, and its answer.
+        // The question being asked (a decision diamond, the question, its answer) and the
+        // footer (what it does once the call below returns, with a slot for that value), both
+        // along the bottom. Between steps, one that goes fades out while one that comes draws
+        // itself in, left to right.
+        let card = painter.with_clip_rect(r.intersect(painter.clip_rect()));
         let footer_h = if f.then.is_some() { FOOTER_H * z } else { 0.0 };
-        if let Some((q, answer)) = &f.asks {
-            let band = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h - ASK_H * z), pos2(r.right(), r.bottom() - footer_h));
-            let cy = band.center().y - 2.0 * z;
-            let kc = theme.syntax.keyword.color;
-            let d = 8.0 * z;
-            let c = pos2(left + d, cy);
-            let diamond = vec![pos2(c.x, c.y - d), pos2(c.x + d, c.y), pos2(c.x, c.y + d), pos2(c.x - d, c.y)];
-            painter.add(Shape::convex_polygon(diamond, pp.fade(with_alpha(kc, 45)), Stroke::new(1.2, pp.fade(kc))));
-            painter.text(c, Align2::CENTER_CENTER, "?", ui::semibold(9.5 * z), pp.fade(kc));
-            let (ans, ac) = match answer {
-                Some(true) => ("Yes", theme.success),
-                Some(false) => ("No", theme.error),
-                None => ("", theme.text_muted),
-            };
-            let ar = painter.text(pos2(right, cy), Align2::RIGHT_CENTER, ans, ui::semibold(12.5 * z), pp.fade(ac));
-            let mut job = egui::text::LayoutJob::default();
-            let mut open = false;
-            code_job(&mut job, q, &ui::mono(FONT * z), &mut open, |c| pp.fade(c), theme, false);
-            let x = c.x + d + 8.0 * z;
-            job.wrap = egui::text::TextWrapping::truncate_at_width((ar.left() - 10.0 * z - x).max(20.0));
-            let g = painter.layout_job(job);
-            painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text);
+        let old_footer_h = if old.is_some_and(|o| o.then.is_some()) { FOOTER_H * z } else { 0.0 };
+        let out = Pen { alpha: pp.alpha * (1.0 - phase(fx, 0.0, 0.25)), ..pp };
+        if let Some(o) = old
+            && fx < 1.0
+        {
+            if let Some(asks) = &o.asks
+                && f.asks.as_ref().is_none_or(|a| a.0 != asks.0)
+            {
+                let band = Rect::from_min_max(pos2(r.left(), r.bottom() - old_footer_h - ASK_H * z), pos2(r.right(), r.bottom() - old_footer_h));
+                draw_ask(&out, &card, band, left, right, asks, 1.0);
+            }
+            if let Some(segs) = &o.then
+                && f.then.is_none()
+            {
+                let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - FOOTER_H * z), r.max);
+                draw_then(&out, &card, foot, left, right, segs, o.filled.as_ref().map(|v| (label(&view.trace, v, step_idx), 1.0)), 1.0);
+            }
         }
-
-        // Footer: what it does once the call below returns, with a slot for that value.
+        if let Some(asks) = &f.asks {
+            let band = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h - ASK_H * z), pos2(r.right(), r.bottom() - footer_h));
+            let before = old.and_then(|o| o.asks.as_ref());
+            let (show, pop) = match before {
+                Some(b) if b.0 == asks.0 => (1.0, if b.1.is_none() && asks.1.is_some() { phase(fx, 0.0, 0.6) } else { 1.0 }),
+                _ if old.is_some() => (phase(fx, 0.0, 0.4), phase(fx, 0.35, 0.85)),
+                _ => (1.0, 1.0),
+            };
+            draw_ask(&Pen { alpha: pp.alpha * show, ..pp }, &card, band, left, right, asks, pop);
+        }
         let mut slot_rect = None;
         if let Some(segs) = &f.then {
             let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h), r.max);
-            let rr = (12.0 * z) as u8;
-            painter.rect_filled(foot, CornerRadius { nw: 0, ne: 0, sw: rr, se: rr }, pp.fade(mix(pp.box_bg(), theme.background, 0.6)));
-            painter.hline(r.x_range(), foot.top(), Stroke::new(1.0, pp.fade(tk.subtle_border)));
-            let cy = foot.center().y;
-            let then = painter.text(pos2(left, cy), Align2::LEFT_CENTER, "THEN", ui::semibold(9.5 * z), pp.fade(theme.text_muted));
-            let mut x = then.right() + 10.0 * z;
-            let font = ui::mono(FONT * z);
-            let mut after_hole = false;
-            let mut prev_open = false;
-            for sg in segs {
-                if x >= right {
-                    break;
-                }
-                match sg {
-                    Seg::Code(t) => {
-                        let mut job = egui::text::LayoutJob::default();
-                        code_job(&mut job, t, &font, &mut prev_open, |c| pp.fade(c), theme, after_hole);
-                        job.wrap = egui::text::TextWrapping::truncate_at_width(right - x);
-                        let g = painter.layout_job(job);
-                        let w = g.size().x;
-                        painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text);
-                        x += w;
-                    }
-                    Seg::Value(t) => {
-                        let mut job = egui::text::LayoutJob::simple_singleline(t.clone(), font.clone(), pp.fade(theme.text));
-                        job.wrap = egui::text::TextWrapping::truncate_at_width(right - x - 8.0 * z);
-                        let g = painter.layout_job(job);
-                        let chip = Rect::from_min_size(pos2(x, cy - 10.0 * z), vec2(g.size().x + 8.0 * z, 20.0 * z));
-                        painter.rect_filled(chip, CornerRadius::same((5.0 * z) as u8), pp.fade(with_alpha(theme.text, 16)));
-                        painter.galley(pos2(x + 4.0 * z, cy - g.size().y / 2.0), g, theme.text);
-                        x = chip.right();
-                        prev_open = false;
-                    }
-                    Seg::Hole => {
-                        after_hole = true;
-                        prev_open = false;
-                        let text = f.filled.as_ref().map(|v| self::label(&view.trace, v, step_idx));
-                        let g = text.map(|t| painter.layout_no_wrap(t, font.clone(), pp.fade(theme.success)));
-                        let w = g.as_ref().map_or(SLOT_CHARS * cw * z, |g| g.size().x + 14.0 * z).min((right - x).max(16.0 * z));
-                        let sr = Rect::from_min_size(pos2(x + 1.0 * z, cy - 10.0 * z), vec2(w, 20.0 * z));
-                        let round = CornerRadius::same((10.0 * z) as u8);
-                        match g {
-                            // The answer, landing where it's used.
-                            Some(g) => {
-                                painter.rect(sr, round, pp.fade(with_alpha(theme.success, 46)), Stroke::new(1.0, pp.fade(with_alpha(theme.success, 160))), StrokeKind::Inside);
-                                painter.galley(pos2(sr.left() + 7.0 * z, cy - g.size().y / 2.0), g, theme.success);
-                            }
-                            // Still waiting: an empty slot.
-                            None => {
-                                let c = theme.text_accent;
-                                painter.rect(sr, round, pp.fade(with_alpha(c, 40)), Stroke::new(1.0, pp.fade(with_alpha(c, 110))), StrokeKind::Inside);
-                                for d in [-1.0, 0.0, 1.0] {
-                                    painter.circle_filled(pos2(sr.center().x + d * 5.0 * z, cy), 1.5 * z, pp.fade(c));
-                                }
-                            }
-                        }
-                        slot_rect = Some(sr);
-                        x = sr.right() + 1.0 * z;
-                    }
-                }
-            }
+            let fresh = old.is_some_and(|o| o.then.as_ref() != Some(segs));
+            let reveal = if fresh { phase(fx, 0.1, 0.5) } else { 1.0 };
+            // The returned value lands in the slot once it has travelled up the connector.
+            let landing = old.is_some_and(|o| o.filled.is_none());
+            let filled = f.filled.as_ref().filter(|_| !landing || fx >= TRAVEL.1).map(|v| (label(&view.trace, v, step_idx), if landing { phase(fx, TRAVEL.1, 1.0) } else { 1.0 }));
+            slot_rect = draw_then(&pp, &card, foot, left, right, segs, filled, reveal);
         }
         painter.rect_stroke(r, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
         prev = Some((r, slot_rect));
@@ -1264,12 +1294,12 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     let mut hovered: Option<u64> = named.as_ref().and_then(obj_id);
     for id in &lay.order {
         let Some(ob) = lay.objects.get(id) else { continue };
-        let (min, born) = pos_of(Key::Object(*id), ob.rect.min);
+        let (at, born) = pos_of(Key::Object(*id), ob.rect);
         let dim = lay.focus.as_ref().is_some_and(|f| !f.contains(id));
         let alpha = born * if dim { 0.45 } else { 1.0 };
         let pp = Pen { ui: &child_ui, cw, theme, tk, origin, zoom: view.zoom, alpha };
         // New objects pop in: they grow from slightly smaller as they fade in.
-        let r = pp.r(Rect::from_min_size(min, ob.rect.size()));
+        let r = pp.r(at);
         let r = Rect::from_center_size(r.center(), r.size() * (0.82 + 0.18 * ease(born)));
         boxes.insert(*id, r);
         if pointer.is_some_and(|p| r.contains(p)) {
@@ -1420,6 +1450,110 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
     io.hovered = hovered;
     io.animating = animating || fitting;
     view.layout = Some((laid_step, lay));
+}
+
+/// A card's question band: a decision diamond, the question, and its answer. `pop` (0 to 1):
+/// the answer stamping in.
+fn draw_ask(pp: &Pen, painter: &egui::Painter, band: Rect, left: f32, right: f32, (q, answer): &(String, Option<bool>), pop: f32) {
+    let (z, theme) = (pp.zoom, pp.theme);
+    let cy = band.center().y - 2.0 * z;
+    let kc = theme.syntax.keyword.color;
+    let d = 8.0 * z;
+    let c = pos2(left + d, cy);
+    let diamond = vec![pos2(c.x, c.y - d), pos2(c.x + d, c.y), pos2(c.x, c.y + d), pos2(c.x - d, c.y)];
+    painter.add(Shape::convex_polygon(diamond, pp.fade(with_alpha(kc, 45)), Stroke::new(1.2, pp.fade(kc))));
+    painter.text(c, Align2::CENTER_CENTER, "?", ui::semibold(9.5 * z), pp.fade(kc));
+    let (ans, ac) = match answer {
+        Some(true) => ("Yes", theme.success),
+        Some(false) => ("No", theme.error),
+        None => ("", theme.text_muted),
+    };
+    let ar = painter.text(pos2(right, cy), Align2::RIGHT_CENTER, ans, ui::semibold(12.5 * z * (1.0 + 0.35 * (1.0 - pop))), pp.fade(ac.gamma_multiply(pop)));
+    let mut job = egui::text::LayoutJob::default();
+    let mut open = false;
+    code_job(&mut job, q, &ui::mono(FONT * z), &mut open, |c| pp.fade(c), theme, false);
+    let x = c.x + d + 8.0 * z;
+    job.wrap = egui::text::TextWrapping::truncate_at_width((ar.left() - 10.0 * z - x).max(20.0));
+    let g = painter.layout_job(job);
+    painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text);
+}
+
+/// A card's footer: THEN, what it does once the call below returns, and the slot for that
+/// value, with the value once it's back (and how far it has landed, 0 to 1). `reveal` (0 to
+/// 1): the footer drawing itself in from the left. Returns the slot.
+#[allow(clippy::too_many_arguments)]
+fn draw_then(pp: &Pen, painter: &egui::Painter, foot: Rect, left: f32, right: f32, segs: &[Seg], filled: Option<(String, f32)>, reveal: f32) -> Option<Rect> {
+    let (z, theme, cw) = (pp.zoom, pp.theme, pp.cw);
+    let bg = Pen { alpha: pp.alpha * reveal.min(1.0), ..*pp };
+    let rr = (12.0 * z) as u8;
+    painter.rect_filled(foot, CornerRadius { nw: 0, ne: 0, sw: rr, se: rr }, bg.fade(mix(pp.box_bg(), theme.background, 0.6)));
+    painter.hline(foot.x_range(), foot.top(), Stroke::new(1.0, bg.fade(pp.tk.subtle_border)));
+    let painter = &painter.with_clip_rect(Rect::from_min_max(foot.min, pos2(foot.left() + foot.width() * reveal, foot.bottom())).intersect(painter.clip_rect()));
+    let mut slot_rect = None;
+    let cy = foot.center().y;
+    let then = painter.text(pos2(left, cy), Align2::LEFT_CENTER, "THEN", ui::semibold(9.5 * z), pp.fade(theme.text_muted));
+    let mut x = then.right() + 10.0 * z;
+    let font = ui::mono(FONT * z);
+    let mut after_hole = false;
+    let mut prev_open = false;
+    for sg in segs {
+        if x >= right {
+            break;
+        }
+        match sg {
+            Seg::Code(t) => {
+                let mut job = egui::text::LayoutJob::default();
+                code_job(&mut job, t, &font, &mut prev_open, |c| pp.fade(c), theme, after_hole);
+                job.wrap = egui::text::TextWrapping::truncate_at_width(right - x);
+                let g = painter.layout_job(job);
+                let w = g.size().x;
+                painter.galley(pos2(x, cy - g.size().y / 2.0), g, theme.text);
+                x += w;
+            }
+            Seg::Value(t) => {
+                let mut job = egui::text::LayoutJob::simple_singleline(t.clone(), font.clone(), pp.fade(theme.text));
+                job.wrap = egui::text::TextWrapping::truncate_at_width(right - x - 8.0 * z);
+                let g = painter.layout_job(job);
+                let chip = Rect::from_min_size(pos2(x, cy - 10.0 * z), vec2(g.size().x + 8.0 * z, 20.0 * z));
+                painter.rect_filled(chip, CornerRadius::same((5.0 * z) as u8), pp.fade(with_alpha(theme.text, 16)));
+                painter.galley(pos2(x + 4.0 * z, cy - g.size().y / 2.0), g, theme.text);
+                x = chip.right();
+                prev_open = false;
+            }
+            Seg::Hole => {
+                after_hole = true;
+                prev_open = false;
+                let pop = filled.as_ref().map_or(1.0, |f| f.1);
+                let g = filled.as_ref().map(|(t, _)| painter.layout_no_wrap(t.clone(), font.clone(), pp.fade(theme.success)));
+                let w = g.as_ref().map_or(SLOT_CHARS * cw * z, |g| g.size().x + 14.0 * z).min((right - x).max(16.0 * z));
+                let sr = Rect::from_min_size(pos2(x + 1.0 * z, cy - 10.0 * z), vec2(w, 20.0 * z));
+                let round = CornerRadius::same((10.0 * z) as u8);
+                match g {
+                    // The answer, landing where it's used.
+                    Some(g) => {
+                        // Just landed: brighter, with a ring rippling out.
+                        painter.rect(sr, round, pp.fade(with_alpha(theme.success, (46.0 + 90.0 * (1.0 - pop)) as u8)), Stroke::new(1.0, pp.fade(with_alpha(theme.success, 160))), StrokeKind::Inside);
+                        if pop < 1.0 {
+                            let ring = sr.expand(7.0 * z * pop);
+                            painter.rect_stroke(ring, CornerRadius::same((ring.height() / 2.0) as u8), Stroke::new(1.5, pp.fade(with_alpha(theme.success, (200.0 * (1.0 - pop)) as u8))), StrokeKind::Inside);
+                        }
+                        painter.galley(pos2(sr.left() + 7.0 * z, cy - g.size().y / 2.0), g, theme.success);
+                    }
+                    // Still waiting: an empty slot.
+                    None => {
+                        let c = theme.text_accent;
+                        painter.rect(sr, round, pp.fade(with_alpha(c, 40)), Stroke::new(1.0, pp.fade(with_alpha(c, 110))), StrokeKind::Inside);
+                        for d in [-1.0, 0.0, 1.0] {
+                            painter.circle_filled(pos2(sr.center().x + d * 5.0 * z, cy), 1.5 * z, pp.fade(c));
+                        }
+                    }
+                }
+                slot_rect = Some(sr);
+                x = sr.right() + 1.0 * z;
+            }
+        }
+    }
+    slot_rect
 }
 
 /// A value written in Racket (`(make-node 67 empty empty)`), coloured like code, deeper parts
