@@ -290,8 +290,6 @@ const CARD_ROW: f32 = 24.0;
 const CARD_PAD: f32 = 10.0;
 const ASK_H: f32 = 32.0;
 const FOOTER_H: f32 = 36.0;
-/// Between a card and its THEN card below, room for the arrow joining them.
-const THEN_GAP: f32 = 26.0;
 /// Content's inset from the card's left edge.
 const CARD_INSET: f32 = 16.0;
 /// The top level without data of its own: a capsule.
@@ -520,8 +518,8 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
             let w = title_w.max(row_w).max(ask_w).max(then_w).clamp(FRAME_W, 440.0);
             let rows = f.rows();
             let body = if rows == 0 { 0.0 } else { rows as f32 * CARD_ROW + CARD_PAD };
-            let h = (CARD_HEAD + body + if f.asks.is_some() { ASK_H } else { 0.0 }).max(CARD_HEAD + CARD_PAD);
-            (w, h + if f.then.is_some() { THEN_GAP + FOOTER_H } else { 0.0 })
+            let h = CARD_HEAD + body + if f.asks.is_some() { ASK_H } else { 0.0 } + if f.then.is_some() { FOOTER_H } else { 0.0 };
+            (w, h.max(CARD_HEAD + CARD_PAD))
         };
         f.rect = Rect::from_min_size(pos2(0.0, y), vec2(w, h));
         y += h + FRAME_GAP;
@@ -1054,26 +1052,10 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
         } else {
             egui::epaint::Shadow { offset: [0, (3.0 * z) as i8], blur: (12.0 * z).min(255.0) as u8, spread: 0, color: pp.fade(Color32::from_black_alpha(if theme.dark { 70 } else { 22 })) }
         };
-        // What the call does once the one below returns is a card of its own under it, joined
-        // by an arrow, so each step of the work is easy to follow.
-        let then_card = (f.then.is_some() && !f.capsule()).then(|| Rect::from_min_max(pos2(r.left(), r.bottom() - FOOTER_H * z), r.max));
-        let full = r;
-        let r = if then_card.is_some() { Rect::from_min_max(r.min, pos2(r.right(), r.bottom() - (FOOTER_H + THEN_GAP) * z)) } else { r };
         painter.add(shadow.as_shape(r, radius));
-        if let Some(tc) = then_card {
-            painter.add(shadow.as_shape(tc, radius));
-        }
         let border = if f.current { accent } else { tk.subtle_border };
         let bg = if f.top { mix(pp.box_bg(), theme.background, 0.3) } else { pp.box_bg() };
         painter.rect_filled(r, radius, pp.fade(bg));
-        if let Some(tc) = then_card {
-            painter.rect_filled(tc, radius, pp.fade(bg));
-            let color = pp.fade(mix(tk.subtle_border, theme.text_accent, 0.6));
-            let head = 6.0 * z;
-            let (from, to) = (pos2(r.center().x, r.bottom()), pos2(r.center().x, tc.top()));
-            painter.line_segment([from, to - vec2(0.0, head)], Stroke::new(1.3, color));
-            painter.add(Shape::convex_polygon(vec![to, to + vec2(-head * 0.6, -head), to + vec2(head * 0.6, -head)], color, Stroke::NONE));
-        }
 
         // State: a pill for running / returning / done; waiting is quieter (an hourglass).
         let tag_at = |cy: f32| -> f32 {
@@ -1182,8 +1164,9 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
         }
 
         // The question being asked: a decision diamond, the question, and its answer.
+        let footer_h = if f.then.is_some() { FOOTER_H * z } else { 0.0 };
         if let Some((q, answer)) = &f.asks {
-            let band = Rect::from_min_max(pos2(r.left(), r.bottom() - ASK_H * z), r.max);
+            let band = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h - ASK_H * z), pos2(r.right(), r.bottom() - footer_h));
             let cy = band.center().y - 2.0 * z;
             let kc = theme.syntax.keyword.color;
             let d = 8.0 * z;
@@ -1208,7 +1191,11 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
 
         // Footer: what it does once the call below returns, with a slot for that value.
         let mut slot_rect = None;
-        if let (Some(segs), Some(foot)) = (&f.then, then_card) {
+        if let Some(segs) = &f.then {
+            let foot = Rect::from_min_max(pos2(r.left(), r.bottom() - footer_h), r.max);
+            let rr = (12.0 * z) as u8;
+            painter.rect_filled(foot, CornerRadius { nw: 0, ne: 0, sw: rr, se: rr }, pp.fade(mix(pp.box_bg(), theme.background, 0.6)));
+            painter.hline(r.x_range(), foot.top(), Stroke::new(1.0, pp.fade(tk.subtle_border)));
             let cy = foot.center().y;
             let then = painter.text(pos2(left, cy), Align2::LEFT_CENTER, "THEN", ui::semibold(9.5 * z), pp.fade(theme.text_muted));
             let mut x = then.right() + 10.0 * z;
@@ -1269,10 +1256,7 @@ pub fn draw(view: &mut VisualizerView, ui: &mut Ui, rect: Rect, theme: &Theme, i
             }
         }
         painter.rect_stroke(r, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
-        if let Some(tc) = then_card {
-            painter.rect_stroke(tc, radius, Stroke::new(if f.current { 1.6 } else { 1.0 }, pp.fade(border)), StrokeKind::Inside);
-        }
-        prev = Some((full, slot_rect));
+        prev = Some((r, slot_rect));
     }
 
     // Objects.
