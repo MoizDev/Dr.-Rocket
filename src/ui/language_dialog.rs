@@ -147,7 +147,7 @@ impl App {
                     // `foo` means `foo.rkt`.
                     let path = if std::path::Path::new(name).extension().is_none() { dir.join(format!("{name}.rkt")) } else { dir.join(name) };
                     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-                    let default = crate::racket::lang::Language::from_id(&self.settings.default_language).unwrap_or(crate::racket::lang::Language::Module);
+                    let (default, default_settings) = self.default_language();
                     let racket = path.extension().is_some_and(|e| e == "rkt");
                     let initial = if racket && default == crate::racket::lang::Language::Module { "#lang racket\n\n" } else { "" };
                     if path.exists() {
@@ -161,7 +161,7 @@ impl App {
                             // A teaching-language default: the file is in that language (DrRacket
                             // writes its header on the first save).
                             if racket && default != crate::racket::lang::Language::Module {
-                                crate::racket_ui::set_language(self, default, default.default_settings());
+                                crate::racket_ui::set_language(self, default, default_settings);
                             }
                         }
                         Err(e) => self.toast(format!("Could not create {name}: {e}"), crate::app::ToastKind::Error),
@@ -320,7 +320,13 @@ impl App {
         match result {
             None => self.modal = Modal::Language(d),
             Some(false) => {}
-            Some(true) => crate::racket_ui::set_language(self, d.language, d.settings),
+            Some(true) => {
+                // New files start in the language last chosen.
+                self.settings.default_language = d.language.id().to_string();
+                self.settings.default_language_settings = Some(d.settings.clone());
+                let _ = self.settings.save();
+                crate::racket_ui::set_language(self, d.language, d.settings);
+            }
         }
     }
 }

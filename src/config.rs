@@ -101,8 +101,11 @@ pub struct Settings {
     pub restore_session: bool,
     /// Look for new releases in the background and install them on quit (update.rs).
     pub check_for_updates: bool,
-    /// Default language for new, unsaved files: `#lang racket` or a teaching language id.
+    /// Language for new files: the one last chosen in the Language dialog (`module` for
+    /// `#lang racket`, or a teaching language id).
     pub default_language: String,
+    /// The teaching-language options chosen with it.
+    pub default_language_settings: Option<crate::racket::lang::TeachingSettings>,
 }
 
 impl Default for Settings {
@@ -143,6 +146,7 @@ impl Default for Settings {
             restore_session: true,
             check_for_updates: true,
             default_language: "module".to_string(),
+            default_language_settings: None,
         }
     }
 }

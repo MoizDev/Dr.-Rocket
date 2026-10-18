@@ -633,13 +633,20 @@ impl App {
         self.tabs.len() - 1
     }
 
-    pub fn new_file(&mut self) {
+    /// The language new files start in: the one last chosen, with its options.
+    pub fn default_language(&self) -> (crate::racket::lang::Language, crate::racket::lang::TeachingSettings) {
         let lang = crate::racket::lang::Language::from_id(&self.settings.default_language).unwrap_or(crate::racket::lang::Language::Module);
+        let settings = self.settings.default_language_settings.clone().unwrap_or_else(|| lang.default_settings());
+        (lang, settings)
+    }
+
+    pub fn new_file(&mut self) {
+        let (lang, settings) = self.default_language();
         let initial = if lang == crate::racket::lang::Language::Module { "#lang racket\n\n".to_string() } else { String::new() };
         let i = self.new_tab(None, &initial);
         if lang != crate::racket::lang::Language::Module {
             self.tabs[i].language = lang;
-            self.tabs[i].lang_settings = lang.default_settings();
+            self.tabs[i].lang_settings = settings;
         }
         let tab = &mut self.tabs[i];
         let n = tab.editor.doc.buffer.len();
