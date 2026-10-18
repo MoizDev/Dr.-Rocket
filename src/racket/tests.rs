@@ -969,3 +969,23 @@ fn visualizer_waiting_calls_show_what_they_do_next() {
 fn regex_like_cons_number(s: &str) -> bool {
     s.strip_prefix("(cons ").and_then(|r| r.strip_suffix(" •••)")).is_some_and(|n| n.parse::<u32>().is_ok_and(|n| n < 100))
 }
+
+/// A function passed in as an argument can be called from Intermediate Student on, but not
+/// in Beginning Student, where the background check flags the call.
+#[test]
+fn calling_a_function_argument_is_allowed_from_intermediate_on() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let body = "(define (my-map f l acc)\n  (cond\n    [(empty? l) (reverse acc)]\n    [else (my-map f (rest l) (cons (f (first l)) acc))]))\n\n(my-map sqr (list 1 2 3) empty)\n";
+    let check = |server: &mut Server, language: Language| {
+        let (source, offset) = lang::program_text(language, &Default::default(), None, body);
+        let ServerResponse::CheckSyntax(cs) = server_result(server, ServerRequest::CheckSyntax { path: None, source, offset, images: Default::default() }) else { panic!() };
+        cs.errors.iter().map(|e| e.message.clone()).collect::<Vec<_>>()
+    };
+    assert_eq!(check(&mut server, Language::IntermediateLambda), Vec::<String>::new());
+    assert_eq!(check(&mut server, Language::Intermediate), Vec::<String>::new());
+    for language in [Language::Beginner, Language::BeginnerAbbr] {
+        let errors = check(&mut server, language);
+        assert!(errors.iter().any(|m| m.contains("expected a function after the open parenthesis, but found a variable")), "{errors:?}");
+    }
+}

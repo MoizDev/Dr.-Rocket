@@ -56,6 +56,11 @@ pub enum Step {
     /// frame while filming, so the video is smooth however long each capture takes.
     Record { path: PathBuf, seconds: f64 },
     Theme(String),
+    /// Switch the active tab's language, as the Choose Language dialog does (by id:
+    /// "beginner", "intermediate-lambda"...).
+    Language(String),
+    /// Print the active tab's error squiggles (`automation: diagnostics [...]`).
+    LogDiagnostics(bool),
     Log(String),
     Quit(bool),
 }
@@ -357,6 +362,15 @@ impl Automation {
             }
             Step::RightPanelWidth(w) => app.layout.right.size = *w,
             Step::Theme(name) => app.set_theme(name, false),
+            Step::Language(id) => match crate::racket::lang::Language::from_id(id) {
+                Some(l) => crate::racket_ui::set_language(app, l, l.default_settings()),
+                None => eprintln!("automation: unknown language {id}"),
+            },
+            Step::LogDiagnostics(on) if *on => {
+                let d: Vec<String> = app.tabs.get(app.active).map(|t| t.editor.deco.diagnostics.iter().map(|d| format!("{}..{} {}", d.range.start, d.range.end, d.message)).collect()).unwrap_or_default();
+                eprintln!("automation: diagnostics {d:?}");
+            }
+            Step::LogDiagnostics(_) => {}
             Step::Log(msg) => eprintln!("automation: {msg}"),
             Step::Quit(yes) => {
                 if *yes {
