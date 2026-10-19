@@ -37,6 +37,7 @@ enum Pending {
 /// App-wide Racket state.
 #[derive(Default)]
 pub struct RacketState {
+    pub trusted_wxme: HashSet<PathBuf>,
     pub install: Option<RacketInstall>,
     pub backend: Option<Backend>,
     pub server: Option<Server>,
@@ -379,6 +380,10 @@ fn is_local(tab: &Tab, loc: &Srcloc) -> bool {
 // =====================================================================================
 // Per-frame polling
 
+pub(crate) fn completion_key(tab: &Tab) -> Option<String> {
+    tab.trusted.then(|| tab.language.completions_language(&tab.editor.doc.head(400)))
+}
+
 pub fn poll(app: &mut App, ctx: &egui::Context) {
     ensure_backend(app);
     if let Some(rx) = &app.racket.version_rx
@@ -388,7 +393,7 @@ pub fn poll(app: &mut App, ctx: &egui::Context) {
         app.racket.version_rx = None;
     }
     // Language completions for open tabs.
-    let keys: Vec<String> = app.tabs.iter().map(|t| t.language.completions_language(&t.editor.doc.head(400))).collect();
+    let keys: Vec<String> = app.tabs.iter().filter_map(completion_key).collect();
     for key in keys {
         if !app.racket.completions_requested.contains(&key) {
             app.racket.completions_requested.insert(key.clone());
@@ -492,6 +497,7 @@ pub fn resume_tabs(app: &mut App) {
 }
 
 fn schedule_check(app: &mut App, i: usize, ctx: &egui::Context) {
+    if !app.tabs[i].trusted { return; }
     let now = ctx.input(|inp| inp.time);
     let online = app.settings.online_check_syntax;
     let tab = &mut app.tabs[i];
@@ -513,6 +519,10 @@ fn schedule_check(app: &mut App, i: usize, ctx: &egui::Context) {
 }
 
 fn start_check(app: &mut App, i: usize, explicit: bool) {
+    if !app.tabs[i].trusted {
+        if explicit { require_trust(app, i, Some(Command::CheckSyntax)); }
+        return;
+    }
     let tab = &app.tabs[i];
     let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
     let images = tab.editor.doc.images.for_text(&source);
@@ -610,6 +620,7 @@ fn apply_check(app: &mut App, tab_id: u64, version: u64, explicit: bool, r: Chec
 // ---------------------------------------------------------------------------------- run
 
 fn start_run(app: &mut App, i: usize, instrument: Instrument) {
+    if !require_trust(app, i, None) { return; }
     ensure_backend(app);
     let Some(backend) = app.racket.backend.as_ref() else {
         app.toast("Racket was not found. Install Racket or set its path in Settings.", ToastKind::Error);
@@ -971,6 +982,7 @@ fn eval(tab: &mut Tab, text: &str) {
 
 /// Submit the REPL input.
 fn submit(app: &mut App, i: usize) {
+    if !require_trust(app, i, None) { return; }
     let tab = &mut app.tabs[i];
     let text = tab.rk.input.doc.text();
     if tab.rk.waiting_input {
@@ -1005,6 +1017,7 @@ fn submit(app: &mut App, i: usize) {
 // ---------------------------------------------------------------------------------- stepper
 
 fn start_stepper(app: &mut App, i: usize) {
+    if !require_trust(app, i, Some(Command::Stepper)) { return; }
     ensure_backend(app);
     let Some(backend) = app.racket.backend.as_ref() else { return };
     let tab = &app.tabs[i];
@@ -1092,12 +1105,20 @@ fn show_step_marks(tab: &mut Tab) {
 // =====================================================================================
 // Commands
 
+fn require_trust(app: &mut App, i: usize, command: Option<Command>) -> bool {
+    if app.tabs[i].trusted { return true; }
+    app.modal = Modal::TrustFile { tab: app.tabs[i].id, command };
+    false
+}
+
 pub fn run(app: &mut App, cmd: Command) {
     if app.tabs.is_empty() && !matches!(cmd, Command::SearchDocs | Command::InstallPackage | Command::UpdatePackage | Command::RemovePackage | Command::ShowPackages) {
         app.toast("Open a Racket file first", ToastKind::Info);
         return;
     }
     let i = app.active;
+    if matches!(cmd, Command::Run | Command::Debug | Command::Visualize | Command::Profile | Command::RunWithCoverage | Command::RunTests | Command::Stepper | Command::CheckSyntax | Command::MacroStepper | Command::CreateExecutable)
+        && !require_trust(app, i, Some(cmd)) { return; }
     match cmd {
         Command::Run => start_run(app, i, Instrument::Errortrace),
         Command::Debug => start_run(app, i, Instrument::Debug),
@@ -1184,6 +1205,7 @@ pub fn run(app: &mut App, cmd: Command) {
 }
 
 fn request_modules(app: &mut App, i: usize, include_libs: bool) {
+    if !require_trust(app, i, None) { return; }
     let tab = &app.tabs[i];
     let Some(path) = path_string(tab) else {
         app.toast("Save the file to browse its modules", ToastKind::Info);
@@ -1301,6 +1323,7 @@ pub fn after_editor(app: &mut App) {
 }
 
 fn editor_action(app: &mut App, i: usize, a: EditorAction) {
+    if !app.tabs[i].trusted && matches!(a, EditorAction::Hover(_) | EditorAction::CallContext(_)) { return; }
     match a {
         EditorAction::Vim(e) => {
             use crate::editor::vim::Effect;
@@ -1415,7 +1438,11 @@ fn goto_definition(app: &mut App, i: usize, pos: usize) {
     if let Some(j) = check.jumps.iter().find(|j| j.start <= pos && pos <= j.end).cloned()
         && let Some(p) = j.path.clone() {
             let path = PathBuf::from(&p);
-            // Ask the server where the name is defined in that file, then open it.
+            app.open_file(&path);
+            if !app.active_tab().is_some_and(|t| t.path.as_deref() == Some(path.as_path()) && t.trusted) {
+                return;
+            }
+            // Only parse the destination after its execution has been approved.
             let req = ServerRequest::JumpTarget { path: p.clone(), name: j.id.clone() };
             ensure_backend(app);
             let target = app.racket.server.as_mut().and_then(|s| {
