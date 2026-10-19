@@ -220,15 +220,65 @@ impl Settings {
 
 /// Write a file atomically (temp file + rename) so a crash never leaves a truncated file.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static NEXT: AtomicU64 = AtomicU64::new(0);
     let dir = path.parent().unwrap_or(Path::new("."));
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let tmp = dir.join(format!(".{name}.drrocket-tmp"));
-    std::fs::write(&tmp, bytes)?;
-    // Preserve permissions of an existing file.
-    if let Ok(meta) = std::fs::metadata(path) {
-        let _ = std::fs::set_permissions(&tmp, meta.permissions());
+    let (tmp, mut file) = loop {
+        let tmp = dir.join(format!(".{name}.drrocket-{}-{}.tmp", std::process::id(), NEXT.fetch_add(1, Ordering::Relaxed)));
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&tmp) {
+            Ok(file) => break (tmp, file),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(e) => return Err(e),
+        }
+    };
+    let result = (|| {
+        file.write_all(bytes)?;
+        if let Ok(meta) = std::fs::metadata(path) {
+            file.set_permissions(meta.permissions())?;
+        }
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&tmp, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&tmp);
     }
-    std::fs::rename(&tmp, path)
+    result
+}
+
+#[cfg(test)]
+mod atomic_write_tests {
+    #[test]
+    fn concurrent_writes_do_not_follow_old_temporary_symlink() {
+        let dir = std::env::temp_dir().join(format!("drrocket-save-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("source.rkt");
+        let victim = dir.join("victim");
+        std::fs::write(&victim, b"keep").unwrap();
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(&victim, dir.join(".source.rkt.drrocket-tmp")).unwrap();
+            std::os::unix::fs::symlink(&victim, &path).unwrap();
+        }
+        std::thread::scope(|s| {
+            for _ in 0..8 {
+                let path = &path;
+                s.spawn(move || super::atomic_write(path, b"complete").unwrap());
+            }
+        });
+        assert_eq!(std::fs::read(&path).unwrap(), b"complete");
+        assert_eq!(std::fs::read(&victim).unwrap(), b"keep");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

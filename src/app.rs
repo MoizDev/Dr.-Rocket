@@ -1097,7 +1097,7 @@ impl App {
                 let title = t.title();
                 let page = crate::print::html(&title, &mut t.editor.doc, &light);
                 let path = std::env::temp_dir().join(format!("dr-rocket-print-{}.html", t.id));
-                match std::fs::write(&path, page) {
+                match crate::config::atomic_write(&path, page.as_bytes()) {
                     Ok(()) => {
                         let _ = open::that(&path);
                     }
