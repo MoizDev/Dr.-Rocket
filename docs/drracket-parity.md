@@ -12,6 +12,12 @@ How Dr. Rocket compares with DrRacket 9.3, checked by running both against the s
 - **Stepper:** step for step identical to DrRacket's (including cons chains shown as lists
   and the closing "finished" step), with images drawn in the steps. Like DrRacket, Advanced
   Student, the advanced DeinProgramm level, R5RS and Pretty Big have no stepper.
+- **Indentation:** Tab, Enter and Reindent All (⌘I) use a port of DrRacket's indenter and
+  its keyword table, so code comes out exactly as DrRacket would indent it. Checked against
+  DrRacket on 38 course files and 137 files from Racket's own source; `tests/indent` keeps
+  it that way. One deliberate difference: blank lines are left empty instead of keeping
+  spaces. A line length guide (column 102 by default, DrRacket's maximum width) shows where
+  long lines start.
 - **Check syntax:** arrows, unused bindings and requires, tooltips, rename, jump to
   definition across files, semantic colouring.
 - **Debugger:** breakpoints, step into/over/out, locals, call stack, and required modules

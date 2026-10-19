@@ -1,8 +1,7 @@
 //! S-expression structure over the token stream: bracket matching, sexp navigation,
-//! selection expansion, and Racket indentation (DrRacket's rules: begin-like, define-like,
-//! lambda-like forms with distinguished arguments, function-call alignment).
+//! selection expansion, and Racket indentation (a port of DrRacket's).
 
-use super::lexer::{Class, Kind, Token, datum_end, token_index_at};
+use super::lexer::{Kind, Token, datum_end, token_index_at};
 
 /// Index of the innermost Open token whose list contains `pos` (strictly after the open
 /// bracket and at or before its close).
@@ -213,67 +212,75 @@ pub fn expand_selection(toks: &[Token], start: usize, end: usize) -> Option<(usi
 }
 
 // ---------------------------------------------------------------------------------------
-// Indentation
+// Indentation: a port of DrRacket's `racket-amount-to-indent`
+// (syntax-color/racket-indentation.rkt) and its default keyword table
+// (syntax-color/private/racket-tabify.rkt), so Tab and Reindent All agree with DrRacket.
 
+/// How DrRacket indents the body of a form, by the form's head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Style {
-    /// `begin`, `cond`, `require`...: align with the first argument if it is on the head's
-    /// line, else indent 2.
+enum HeadType {
+    /// `begin`, `cond`, `require`...: a first argument on its own line indents 2, later
+    /// lines align with the line above.
     Begin,
-    /// Forms with `n` distinguished arguments followed by a body (define, lambda, let...):
-    /// distinguished arguments on their own line indent 4, body indents 2.
-    Body(usize),
+    /// `define`, `local`, `struct`...: every line after the head indents 2.
+    Define,
+    /// `lambda`, `let`, `when`...: a first argument on its own line indents 4, the rest 2.
+    Lambda,
+    /// `for/fold`, `for/lists`: the second argument aligns with the first, the rest indent 2.
+    ForFold,
 }
 
-fn style_for(head: &str) -> Option<Style> {
-    use Style::*;
-    let s = match head {
-        "begin" | "begin0" | "begin-for-syntax" | "cond" | "delay" | "case-lambda" | "match-lambda" | "match-lambda*"
-        | "match-lambda**" | "require" | "provide" | "unit" | "compound-unit" | "public" | "private" | "override"
-        | "inherit" | "sequence" | "λ*" | "local-require" | "dynamic-wind" | "thunk" | "thunk*" | "inherit-field"
-        | "field" | "init" | "init-field" | "super-new" | "all-defined-out" => Begin,
-        "define" | "define-values" | "define-syntax" | "define-syntaxes" | "define-syntax-rule" | "define-struct" | "struct"
-        | "define-for-syntax" | "define/contract" | "define-type" | "define-record-procedures" | "local" | "lambda" | "λ"
-        | "let" | "let*" | "letrec" | "letrec*" | "let-values" | "let*-values" | "letrec-values" | "let-syntax"
-        | "letrec-syntax" | "let-syntaxes" | "letrec-syntaxes" | "when" | "unless" | "parameterize" | "parameterize*"
-        | "with-handlers" | "with-handlers*" | "with-syntax" | "with-syntax*" | "syntax-rules" | "syntax-parse" | "match"
-        | "match*" | "match-define" | "match-let" | "match-let*" | "match-letrec" | "case" | "shared" | "class" | "class*"
-        | "mixin" | "interface" | "module+" | "test-case" | "test-suite" | "big-bang" | "opt-lambda" | "let/ec" | "let/cc"
-        | "splicing-let" | "splicing-let-values" | "splicing-letrec" | "splicing-parameterize" | "place" | "instantiate"
-        | "for" | "for*" | "for/list" | "for*/list" | "for/vector" | "for*/vector" | "for/hash" | "for*/hash"
-        | "for/hasheq" | "for*/hasheq" | "for/and" | "for*/and" | "for/or" | "for*/or" | "for/sum" | "for*/sum"
-        | "for/product" | "for*/product" | "for/first" | "for*/first" | "for/last" | "for*/last" | "for/set"
-        | "for*/set" | "for/stream" | "for*/stream" | "with-output-to-string" | "call-with-output-string"
-        | "call-with-input-file" | "call-with-output-file" | "with-input-from-file" | "with-output-to-file"
-        | "define-signature" | "signature" | "contract" | "match-lambda-define" | "λ/kw" | "define-logger"
-        | "define-simple-macro" | "define-syntax-parser" | "syntax-parser" | "time" | "delay/thread" => Body(1),
-        "syntax-case" | "syntax-case*" | "for/fold" | "for*/fold" | "for/foldr" | "for*/foldr" | "for/lists"
-        | "for*/lists" | "do" | "module" | "module*" | "type-case" | "cases" | "define-datatype" => Body(2),
-        _ => {
-            let define_like = head.starts_with("define") || head.starts_with("def") && head.len() > 3 && head.as_bytes()[3] == b'-';
-            if define_like || head.starts_with("with-") || head.starts_with("call-with-") || head.starts_with("let-") {
-                Body(1)
-            } else if head.starts_with("begin") {
-                Begin
-            } else if head.starts_with("for/") || head.starts_with("for*/") {
-                Body(1)
-            } else {
-                return None;
-            }
+/// DrRacket's default table, then its regexps: `^begin`, `^def`, `^(for\*?(/|$)|with-)`.
+fn head_type(head: &str) -> Option<HeadType> {
+    use HeadType::*;
+    let t = match head {
+        "for/fold" | "for/fold:" | "for*/fold" | "for*/fold:" | "for/lists" | "for/lists:" | "for*/lists"
+        | "for*/lists:" => ForFold,
+        "struct" | "local" | "struct:" | "pdefine:" | "match-define" | "match-define-values" | "pattern" => Define,
+        "case-lambda" | "case-lambda:" | "pcase-lambda:" | "match-lambda" | "match-lambda*" | "syntax-parser" | "cond"
+        | "delay" | "unit" | "compound-unit" | "public" | "private" | "override" | "require" | "inherit"
+        | "with-output-to-string" | "with-output-to-bytes" | "with-module-reading-parameterization" => Begin,
+        "cases" | "instantiate" | "super-instantiate" | "syntax/loc" | "quasisyntax/loc" | "datum-case" | "match"
+        | "match*" | "match-let" | "match-let*" | "match-letrec" | "λ" | "lambda" | "let" | "let*" | "letrec" | "recur"
+        | "lambda/kw" | "letrec-values" | "with-syntax" | "with-syntax*" | "with-continuation-mark" | "module"
+        | "module*" | "module+" | "let/cc" | "let/ec" | "let-syntax" | "letrec-syntax" | "letrec-syntaxes+values"
+        | "let:" | "letrec:" | "let*:" | "let-values:" | "letrec-values:" | "let*-values:" | "let/cc:" | "let/ec:"
+        | "lambda:" | "λ:" | "plambda:" | "opt-lambda:" | "popt-lambda:" | "splicing-let" | "splicing-letrec"
+        | "splicing-let-values" | "splicing-letrec-values" | "splicing-let-syntax" | "splicing-letrec-syntax"
+        | "splicing-let-syntaxes" | "splicing-letrec-syntaxes" | "splicing-letrec-syntaxes+values" | "splicing-local"
+        | "splicing-parameterize" | "splicing-syntax-parameterize" | "do:" | "kernel-syntax-case" | "syntax-case"
+        | "syntax-case*" | "syntax-rules" | "syntax-id-rules" | "syntax-parse" | "fluid-let" | "let-struct"
+        | "let-values" | "let*-values" | "case" | "when" | "unless" | "class" | "class*" | "rec" | "make-object"
+        | "mixin" | "do" | "opt-lambda" | "send*" | "with-method" | "define-record" | "shared" | "with-handlers"
+        | "interface" | "parameterize" | "parameterize*" | "syntax-parameterize" | "call-with-input-file"
+        | "call-with-input-file*" | "with-input-from-file" | "with-input-from-string" | "call-with-output-file"
+        | "with-output-to-file" | "for-all" | "big-bang" | "type-case" => Lambda,
+        _ if head.starts_with("begin") => Begin,
+        _ if head.starts_with("def") => Define,
+        _ if ["for", "for*"].contains(&head) || head.starts_with("for/") || head.starts_with("for*/") || head.starts_with("with-") => {
+            Lambda
         }
+        _ => return None,
     };
-    Some(s)
+    Some(t)
 }
 
-/// Line/column lookup supplied by the caller (keeps this module independent of the rope).
+/// Line lookup supplied by the caller (keeps this module independent of the rope).
 pub trait Lines {
     fn line_of(&self, pos: usize) -> usize;
-    fn col_of(&self, pos: usize) -> usize;
+}
+
+/// Column of `pos` on its line, with tabs to the next multiple of 8 (DrRacket's
+/// `visual-offset`).
+fn visual_col(text: &[char], pos: usize) -> usize {
+    let start = text[..pos].iter().rposition(|&c| c == '\n').map_or(0, |i| i + 1);
+    text[start..pos].iter().fold(0, |col, &c| if c == '\t' { col + 8 - col % 8 } else { col + 1 })
 }
 
 /// Desired indentation (in columns) for the line starting at `line_start`, or None if the
 /// line is inside a multi-line string or block comment and must be left alone.
 pub fn indent_for(toks: &[Token], text: &[char], lines: &impl Lines, line_start: usize) -> Option<usize> {
+    use HeadType::*;
     let i = token_index_at(toks, line_start);
     if let Some(t) = toks.get(i)
         && t.start < line_start
@@ -282,66 +289,71 @@ pub fn indent_for(toks: &[Token], text: &[char], lines: &impl Lines, line_start:
         return None;
     }
     let Some(o) = enclosing_open(toks, line_start) else { return Some(0) };
-    let open = &toks[o];
-    // Column of the bracket char itself (the last char of openers like `#hash(`).
-    let open_col = lines.col_of(open.end - 1);
-    let line_of_open = lines.line_of(open.start);
-    let h = skip_trivia(toks, o + 1);
-    let Some(head) = toks.get(h).filter(|t| t.start < line_start && t.kind != Kind::Close) else {
-        return Some(open_col + 1);
-    };
-    let head_line = lines.line_of(head.start);
-    let head_col = lines.col_of(head.start);
 
-    // Arguments after the head that start before this line.
-    let mut args: Vec<usize> = Vec::new();
-    let mut k = datum_end(toks, h).unwrap_or(h + 1);
+    // The list's elements that start before this line.
+    let mut kids: Vec<usize> = Vec::new();
+    let mut k = o + 1;
     loop {
         k = skip_trivia(toks, k);
-        let Some(t) = toks.get(k) else { break };
-        if t.start >= line_start || t.kind == Kind::Close {
-            break;
+        match toks.get(k) {
+            Some(t) if t.kind != Kind::Close && t.start < line_start => {
+                kids.push(k);
+                k = datum_end(toks, k).unwrap_or(k + 1);
+            }
+            _ => break,
         }
-        args.push(k);
-        k = datum_end(toks, k).unwrap_or(k + 1);
     }
-    let first_arg_on_head_line = args.first().is_some_and(|&a| lines.line_of(toks[a].start) == head_line);
-    let first_arg_col = args.first().map(|&a| lines.col_of(toks[a].start));
+    // Nothing before this line: just inside the bracket.
+    let (Some(&first), Some(&last)) = (kids.first(), kids.last()) else {
+        return Some(visual_col(text, toks[o].start) + 1);
+    };
+    let head = &toks[first];
+    let contains = head.start;
+    let col = visual_col(text, contains);
+    let token_text = |t: &Token| text[t.start..t.end].iter().collect::<String>();
+    let head_type = if head.kind == Kind::Symbol { head_type(&token_text(head)) } else { None };
 
-    // Quoted data, vectors, and non-symbol heads: align with the first element.
-    let is_data = head.class == Class::Symbol || open.end - open.start > 1 && text[open.start] == '#';
-    if head.kind != Kind::Symbol || is_data {
-        return Some(if head_line == line_of_open { head_col } else { open_col + 1 });
+    // This line holds the first argument.
+    if kids.len() == 1 {
+        return Some(col + match head_type {
+            Some(Begin | Define) => 1,
+            Some(Lambda) => 3,
+            _ => 0,
+        });
     }
-
-    let head_text: String = text[head.start..head.end].iter().collect();
-    match style_for(&head_text) {
-        Some(Style::Begin) => {
-            if first_arg_on_head_line {
-                first_arg_col
-            } else {
-                Some(open_col + 2)
-            }
-        }
-        Some(Style::Body(mut n)) => {
-            // Named let has an extra distinguished argument.
-            if head_text == "let" && args.first().is_some_and(|&a| toks[a].kind == Kind::Symbol) {
-                n = 2;
-            }
-            if args.len() < n {
-                if first_arg_on_head_line { first_arg_col } else { Some(open_col + 4) }
-            } else {
-                Some(open_col + 2)
-            }
-        }
-        None => {
-            if first_arg_on_head_line {
-                first_arg_col
-            } else {
-                Some(head_col)
-            }
-        }
+    if head_type == Some(ForFold) && kids.len() == 2 {
+        return Some(visual_col(text, toks[last].start));
     }
+    if matches!(head_type, Some(Define | Lambda | ForFold)) {
+        return Some(col + 1);
+    }
+    let all_hyphens = |t: Option<&Token>| {
+        t.is_some_and(|t| t.kind == Kind::Symbol && t.end - t.start >= 3 && text[t.start..t.end].iter().all(|&c| c == '-'))
+    };
+    if lines.line_of(contains) == lines.line_of(toks[last].start) {
+        // Everything so far is on the head's line: align with the first argument, except
+        // after a keyword or `---` head, a lone `...`, or before a `---` line.
+        if head.kind == Kind::HashKeyword || all_hyphens(Some(head)) {
+            return Some(col);
+        }
+        let second = &toks[kids[1]];
+        if datum_end(toks, kids[1]) == Some(kids[1] + 1) && token_text(second) == "..." {
+            let third_end = datum_end(toks, kids[1] + 1).map(|e| toks[e - 1].end);
+            if third_end.is_none_or(|e| lines.line_of(e) != lines.line_of(second.start)) {
+                return Some(col);
+            }
+        }
+        if all_hyphens(toks.get(skip_trivia(toks, i))) {
+            return Some(col);
+        }
+        let head_end = toks[datum_end(toks, first).unwrap_or(first + 1) - 1].end;
+        let arg = (head_end..text.len()).find(|&p| text[p] == '\n' || !text[p].is_whitespace()).unwrap_or(text.len());
+        return Some(visual_col(text, arg));
+    }
+    // Align with the first element on the line of the last one.
+    let last_line = lines.line_of(toks[last].start);
+    let row_start = kids.iter().rev().take_while(|&&k| lines.line_of(toks[k].start) == last_line).last().unwrap_or(&last);
+    Some(visual_col(text, toks[*row_start].start))
 }
 
 #[cfg(test)]
@@ -353,9 +365,6 @@ mod tests {
     impl Lines for L {
         fn line_of(&self, pos: usize) -> usize {
             self.0.partition_point(|&s| s <= pos) - 1
-        }
-        fn col_of(&self, pos: usize) -> usize {
-            pos - self.0[self.line_of(pos)]
         }
     }
 
@@ -418,7 +427,7 @@ mod tests {
 
     #[test]
     fn data_lists_and_strings() {
-        let expected = "'(a b\n  c)";
+        let expected = "'(a b\n    c)";
         assert_eq!(reindent(expected), expected);
         let expected = "(list 1\n      2)";
         assert_eq!(reindent(expected), expected);

@@ -41,9 +41,6 @@ impl Lines for Buffer {
     fn line_of(&self, pos: usize) -> usize {
         Buffer::line_of(self, pos)
     }
-    fn col_of(&self, pos: usize) -> usize {
-        Buffer::col_of(self, pos)
-    }
 }
 
 impl Document {
@@ -537,7 +534,8 @@ impl Document {
             let have = self.buffer.indentation(line);
             let ls = self.buffer.line_start(line);
             let line_blank = self.buffer.line_len(line) == have;
-            let want = if line_blank && self.buffer.line_count() > line + 1 && !self.buffer.selections.list.iter().any(|s| self.buffer.line_of(s.head) == line) {
+            // Blank lines are left empty (no trailing spaces), except the one being typed on.
+            let want = if line_blank && !self.buffer.selections.list.iter().any(|s| self.buffer.line_of(s.head) == line) {
                 0
             } else {
                 want
@@ -1128,5 +1126,59 @@ mod tests {
     fn enclosing_call_head() {
         let mut d = doc("(map (lambda (x) x) lst)", 21);
         assert_eq!(d.enclosing_call(21).map(|x| x.0).as_deref(), Some("map"));
+    }
+}
+
+/// Reindent All must reproduce DrRacket's own indentation. The files in `tests/indent` were
+/// indented by DrRacket (regenerate with `racket tools/drracket-indent.rkt tests/indent/*.rkt`).
+#[cfg(test)]
+mod drracket_indentation {
+    use super::Document;
+
+    /// `expected` with the indentation of every reindentable line replaced by `pad`.
+    fn misindent(expected: &str, pad: &str) -> String {
+        let mut d = Document::new(expected);
+        let lines: Vec<String> = expected.split('\n').map(str::to_string).collect();
+        let mut out = Vec::new();
+        for (i, line) in lines.iter().enumerate() {
+            if d.desired_indent(i).is_some() && !line.trim().is_empty() {
+                out.push(format!("{pad}{}", line.trim_start()));
+            } else {
+                out.push(line.clone());
+            }
+        }
+        out.join("\n")
+    }
+
+    #[test]
+    fn reindent_all_matches_drracket() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/indent");
+        let mut files = 0;
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|x| x != "rkt") {
+                continue;
+            }
+            files += 1;
+            // DrRacket leaves blank lines alone; Dr. Rocket empties them.
+            let expected: String = std::fs::read_to_string(&path).unwrap().split('\n').map(|l| if l.trim().is_empty() { "" } else { l }).collect::<Vec<_>>().join("\n");
+            for pad in ["", "       "] {
+                let mut d = Document::new(&misindent(&expected, pad));
+                d.reindent_all();
+                let got = d.text();
+                if got != expected {
+                    let line = got.lines().zip(expected.lines()).position(|(a, b)| a != b).unwrap_or(0);
+                    panic!(
+                        "{} (pad {:?}) differs from DrRacket at line {}:\n  ours:     {:?}\n  drracket: {:?}",
+                        path.display(),
+                        pad,
+                        line + 1,
+                        got.lines().nth(line).unwrap_or(""),
+                        expected.lines().nth(line).unwrap_or("")
+                    );
+                }
+            }
+        }
+        assert!(files >= 2);
     }
 }

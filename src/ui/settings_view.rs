@@ -605,6 +605,14 @@ impl App {
         row(ui, &theme, "Highlight current line", "", |ui| {
             toggle(ui, &theme, &mut s.highlight_active_line);
         });
+        row(ui, &theme, "Line length guide", "A line at this column. Course style guides cap lines at 80 or 102 characters", |ui| {
+            let label = |c: Option<usize>| c.map_or("Off".to_string(), |c| c.to_string());
+            egui::ComboBox::from_id_salt("wrap-guide").width(120.0).selected_text(label(s.wrap_guide_column)).show_ui(ui, |ui| {
+                for c in [None, Some(80), Some(100), Some(102), Some(120)] {
+                    ui.selectable_value(&mut s.wrap_guide_column, c, label(c));
+                }
+            });
+        });
         row(ui, &theme, "Auto-close brackets and quotes", "Typing ) always inserts the matching closer, like DrRacket", |ui| {
             toggle(ui, &theme, &mut s.auto_close_brackets);
         });

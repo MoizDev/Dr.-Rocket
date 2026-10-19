@@ -75,3 +75,7 @@ There's no Windows machine here; use the manual GitHub workflows:
 
 Benchmark and automation scripts must never open repo files they edit: `tools/bench/` works on
 a copy in `target/bench/`.
+
+Indentation is a port of DrRacket's (`src/editor/sexp.rs`, `indent_for`). `tests/indent/*.rkt`
+are indented by DrRacket itself and the `reindent_all_matches_drracket` test must reproduce
+them; after adding a case, regenerate them with `racket tools/drracket-indent.rkt tests/indent/*.rkt`.

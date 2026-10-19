@@ -994,6 +994,14 @@ impl EditorView {
             }
         }
 
+        // Line length guide (course style guides cap lines at 80 or 102 characters).
+        if code && let Some(col) = style.settings.wrap_guide_column {
+            let x = (text_left - self.scroll.x + col as f32 * char_w).round() + 0.5;
+            if x > text_left {
+                tp.vline(x, rect.y_range(), egui::Stroke::new(1.0, theme.wrap_guide));
+            }
+        }
+
         // Indent guides (structure-aware: one guide per enclosing multi-line list).
         if style.settings.indent_style != crate::config::IndentStyle::Off && code {
             self.paint_indent_guides(&tp, toks, first, last, style, primary.head);
