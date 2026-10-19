@@ -17,32 +17,8 @@
          lang/run-teaching-program
          htdp/bsl/runtime
          net/base64
-         "common.rkt")
-
-;; Per level: the language module, reader and printing configuration, and how the stepper
-;; shows lambdas. `family` is 'htdp or a DeinProgramm level symbol.
-(struct level-info (module accept-quasiquote? abbreviate? function-output? output-function?
-                     lambdas? sharing? [family #:auto])
-  #:auto-value 'htdp)
-(struct sdp-level-info level-info (sdp-level writing-style))
-
-(define levels
-  (hash "beginner"            (level-info '(lib "htdp-beginner.ss" "lang") #f #f #f #t #f #f)
-        "beginner-abbr"       (level-info '(lib "htdp-beginner-abbr.ss" "lang") #t #t #f #t #f #f)
-        "intermediate"        (level-info '(lib "htdp-intermediate.ss" "lang") #t #t #t #t #f #f)
-        "intermediate-lambda" (level-info '(lib "htdp-intermediate-lambda.ss" "lang") #t #t #t #f #t #f)
-        "advanced"            (level-info '(lib "htdp-advanced.ss" "lang") #t #t #t #f #t #t)
-        "sdp-beginner"        (sdp-level-info '(lib "deinprogramm/sdp/beginner.rkt") #t #t #f #f #f #f 'beginner "explicit")
-        "sdp-vanilla"         (sdp-level-info '(lib "deinprogramm/sdp/vanilla.rkt") #t #t #f #f #f #f 'vanilla "explicit")))
-
-;; `#lang htdp/bsl` and friends map onto the same levels.
-(define lang-line-levels
-  '(("htdp/bsl" . "beginner") ("htdp/bsl+" . "beginner-abbr") ("htdp/isl" . "intermediate")
-    ("htdp/isl+" . "intermediate-lambda") ("htdp/asl" . "advanced")))
-
-(define (lang-line-level source)
-  (define m (regexp-match #px"^\\s*(?:;[^\n]*\n\\s*)*#lang\\s+(\\S+)" source))
-  (and m (let ([p (assoc (cadr m) lang-line-levels)]) (and p (cdr p)))))
+         "common.rkt"
+         "teaching.rkt")
 
 (define commands (make-async-channel))
 (define more-sema (make-semaphore 0))
@@ -120,22 +96,9 @@
                   (let-values ([(base name dir?) (split-path source-name)]) (if (path? base) base (current-directory)))
                   (current-directory)))
   (define ns (make-base-namespace))
-  (define printing-style
-    (string->symbol (setting settings 'printing_style "constructor")))
-  (define fraction-style
-    (string->symbol (setting settings 'fraction_style "repeating-decimal")))
   (define sdp? (sdp-level-info? info))
   (define rt-settings
-    (and (not sdp?)
-     (sl-runtime-settings printing-style
-                         fraction-style
-                         (setting settings 'show_sharing (level-info-sharing? info))
-                         (setting settings 'insert_newlines #t)
-                         #f
-                         (setting settings 'true_false_empty_as_ids #f)
-                         (level-info-abbreviate? info)
-                         (level-info-function-output? info)
-                         (level-info-output-function? info))))
+    (and (not sdp?) (apply sl-runtime-settings (htdp-runtime-settings-args info settings))))
   (define step-count 0)
   (parameterize ([current-namespace ns]
                  [current-directory dir]
@@ -151,12 +114,7 @@
          (define runtime 'deinprogramm/sdp/private/runtime)
          (define make-settings (dynamic-require runtime 'sdp-runtime-settings))
          ((dynamic-require runtime 'configure/settings)
-          (make-settings (string->symbol (setting settings 'printing_style "write"))
-                         (string->symbol (setting settings 'writing_style (sdp-level-info-writing-style info)))
-                         fraction-style
-                         (setting settings 'show_sharing #f)
-                         (setting settings 'insert_newlines #t)
-                         #f))
+          (apply make-settings (sdp-runtime-settings-args settings (sdp-level-info-writing-style info))))
          (dynamic-require runtime 'sdp-render-value/format)]
         [else
          (configure/settings rt-settings)

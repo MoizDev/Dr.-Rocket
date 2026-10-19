@@ -72,6 +72,11 @@ pub struct RunOptions {
     pub print_width: usize,
     /// Trace function calls (DrRacket's teaching-language "Tracing" option).
     pub trace: bool,
+    /// A teaching language chosen in Choose Language: its level id and output settings
+    /// (`{"level": "beginner", ...TeachingSettings::stepper_json}`), which apply on top
+    /// of the language's defaults as in DrRacket.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub teaching: Option<serde_json::Value>,
     /// With [`Instrument::Debug`]: other open files to debug if the program requires them.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub debug_modules: Vec<DebugModule>,
@@ -101,6 +106,7 @@ impl Default for RunOptions {
             images: SourceImages::new(),
             print_width: 80,
             trace: false,
+            teaching: None,
             debug_modules: Vec::new(),
         }
     }
@@ -329,6 +335,9 @@ pub enum RunEvent {
     /// Visualizer recording started (`instrument: visualize`).
     VizStart {
         max_steps: usize,
+        /// Values are written true/false/empty rather than #true/#false/'().
+        #[serde(default)]
+        as_ids: bool,
     },
     VizStep(Box<VizStep>),
     VizEnd {

@@ -21,6 +21,7 @@
          set-viz-emitter!
          set-viz-image-encoder!
          set-viz-max-steps!
+         set-viz-as-ids!
          viz-note-output!
          viz-note-result!)
 
@@ -34,6 +35,10 @@
 (define (set-viz-image-encoder! f) (set! image-encoder f))
 (define max-steps 1500)
 (define (set-viz-max-steps! n) (set! max-steps n))
+;; DrRacket's "true/false/empty as ids" output option: true, false and empty
+;; instead of #true, #false and '().
+(define as-ids? #f)
+(define (set-viz-as-ids! b) (set! as-ids? b))
 
 (define source #f)
 (define source-text "")
@@ -397,7 +402,7 @@
   (set! top-done '())
   (set! pending-output (open-output-string))
   (set! recording? #t)
-  (emitter (hasheq 'ev "viz-start" 'max_steps max-steps)))
+  (emitter (hasheq 'ev "viz-start" 'max_steps max-steps 'as_ids as-ids?)))
 
 (define (viz-finish! failed?)
   (when recording?
@@ -549,9 +554,9 @@
     [(number? v) (hasheq 'v (format "#i~a" v) 'k "num")]
     [(string? v) (hasheq 'v (format "~s" v) 'k "str")]
     [(symbol? v) (hasheq 'v (format "'~a" v) 'k "sym")]
-    [(boolean? v) (hasheq 'v (if v "#true" "#false") 'k "bool")]
+    [(boolean? v) (hasheq 'v (cond [as-ids? (if v "true" "false")] [v "#true"] [else "#false"]) 'k "bool")]
     [(char? v) (hasheq 'v (format "~s" v) 'k "char")]
-    [(null? v) (hasheq 'v "'()" 'k "empty")]
+    [(null? v) (hasheq 'v (if as-ids? "empty" "'()") 'k "empty")]
     [(void? v) (hasheq 'v "(void)" 'k "void")]
     [(procedure? v) (hasheq 'v (format "~a" (or (object-name v) "λ")) 'k "fn")]
     [(keyword? v) (hasheq 'v (format "~s" v) 'k "sym")]

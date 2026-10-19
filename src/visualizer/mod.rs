@@ -32,6 +32,8 @@ pub struct Trace {
     pub finished: bool,
     pub truncated: bool,
     pub max_steps: usize,
+    /// Values are written true/false/empty rather than #true/#false/'().
+    pub as_ids: bool,
     /// Struct type -> fields that have pointed at a struct of the same type (tree links).
     links: HashMap<String, BTreeSet<usize>>,
     /// Struct type -> fields that have held an empty value ('() or #false).
@@ -132,7 +134,7 @@ impl Trace {
                     }
                 }
                 VizRef::Prim { k: kind, v } => {
-                    let empty = kind == "empty" || (kind == "bool" && v == "#false");
+                    let empty = kind == "empty" || (kind == "bool" && is_false(v));
                     let set = if empty { &mut self.empties } else { &mut self.data };
                     set.entry(name.clone()).or_default().insert(k);
                 }
@@ -398,6 +400,11 @@ fn text_w(char_w: f32, s: &str) -> f32 {
     s.chars().count() as f32 * char_w
 }
 
+/// Whether a primitive's text is false, in either output style.
+pub fn is_false(v: &str) -> bool {
+    v == "#false" || v == "false"
+}
+
 /// A primitive as students read it: the empty list is `empty`, not `'()`.
 pub fn prim_display<'a>(v: &'a str, k: &str) -> &'a str {
     if k == "empty" { "empty" } else { v }
@@ -548,7 +555,7 @@ fn layout(trace: &Trace, step_idx: usize, cw: f32) -> Layout {
             let p = step.pos?;
             let q: String = trace.source.get(p..p + step.span)?.iter().collect();
             let answer = match &step.value {
-                Some(VizRef::Prim { v, .. }) => Some(v != "#false"),
+                Some(VizRef::Prim { v, .. }) => Some(!is_false(v)),
                 _ => None,
             };
             Some((q.split_whitespace().collect::<Vec<_>>().join(" "), answer))

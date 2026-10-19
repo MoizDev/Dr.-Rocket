@@ -355,8 +355,8 @@ fn words(ctx: &Ctx, n: &Node) -> Vec<Piece> {
     if let Some(a) = n.atom() {
         return vec![match a {
             "empty" | "'()" | "null" => Piece::Value("empty".into()),
-            "#true" | "#t" | "true" => Piece::Value("#true".into()),
-            "#false" | "#f" | "false" => Piece::Value("#false".into()),
+            "#true" | "#t" | "true" => Piece::Value(if ctx.trace.as_ids { "true" } else { "#true" }.into()),
+            "#false" | "#f" | "false" => Piece::Value(if ctx.trace.as_ids { "false" } else { "#false" }.into()),
             _ if a.starts_with(|c: char| c.is_ascii_digit() || c == '"' || c == '\'' || c == '#') || a.parse::<f64>().is_ok() => Piece::Value(a.to_string()),
             _ => Piece::Name(a.to_string()),
         }];
@@ -653,7 +653,7 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
         }
         "question" => {
             let answer = step.value.as_ref().and_then(|v| match v {
-                VizRef::Prim { v, .. } => Some(v == "#true"),
+                VizRef::Prim { v, .. } => Some(!super::is_false(v)),
                 VizRef::Object { .. } => None,
             });
             let q = step.pos.and_then(|p| ctx.read(p, step.span).map(|n| (p, n)));

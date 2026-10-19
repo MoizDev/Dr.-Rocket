@@ -15,7 +15,8 @@
          syntax/modread
          setup/dirs
          "common.rkt"
-         "visualize.rkt")
+         "visualize.rkt"
+         "teaching.rkt")
 
 ;; ---------------------------------------------------------------------------
 ;; Protocol plumbing
@@ -743,6 +744,34 @@
        (for ([c (in-list configs)])
          ((dynamic-require (vector-ref c 0) (vector-ref c 1)) (vector-ref c 2))))]))
 
+;; The Choose Language settings of a teaching language chosen there (not a #lang line):
+;; the level id and `TeachingSettings::stepper_json`, or #f.
+(define teaching #f)
+
+(define (teaching-family)
+  (define level (and teaching (hash-ref teaching 'level #f)))
+  (define info (and (string? level) (hash-ref levels level #f)))
+  (cond
+    [(and info (not (sdp-level-info? info))) 'htdp]
+    [(and (string? level) (regexp-match? #rx"^sdp" level)) 'sdp]
+    [else #f]))
+
+;; Like DrRacket, configure a teaching language's runtime with its Choose Language output
+;; settings (true/false/empty, printing and fraction style, sharing, newlines) in place of
+;; the defaults its configure-runtime would install. Returns whether it did.
+(define (configure-teaching-output!)
+  (case (teaching-family)
+    [(htdp)
+     (define info (hash-ref levels (hash-ref teaching 'level)))
+     ((dynamic-require 'htdp/bsl/runtime 'configure/settings)
+      (apply (dynamic-require 'htdp/bsl/runtime 'sl-runtime-settings) (htdp-runtime-settings-args info teaching)))]
+    [(sdp)
+     (define rt 'deinprogramm/sdp/private/runtime)
+     ((dynamic-require rt 'configure/settings)
+      (apply (dynamic-require rt 'sdp-runtime-settings) (sdp-runtime-settings-args teaching "explicit")))]
+    [else #f])
+  (and (teaching-family) #t))
+
 (define (instrument-namespace! instrument)
   (when (memq instrument '(errortrace coverage))
     (define make-handler (rt-require 'errortrace/errortrace-lib 'make-errortrace-compile-handler))
@@ -910,6 +939,8 @@
   (set! print-width (let ([w (setting options 'print_width 80)]) (if (exact-positive-integer? w) w 80)))
   (hash-set! requested-breakpoints (source-key source-name) (filter exact-nonnegative-integer? (setting options 'breakpoints '())))
   (set! trace? (eq? (setting options 'trace #f) #t))
+  (set! teaching (let ([t (setting options 'teaching #f)]) (and (hash? t) t)))
+  (set-viz-as-ids! (and (teaching-family) (eq? (setting teaching 'true_false_empty_as_ids #f) #t)))
   (hash-clear! debug-modules)
   (for ([m (in-list (setting options 'debug_modules '()))] #:when (hash? m))
     (define p (hash-ref m 'path #f))
@@ -1086,7 +1117,8 @@
                      (viz-annotate (expand stx) source-name stx source)]
                     [trace? (trace-annotate (expand stx))]
                     [else stx])))
-          (run-configure-runtime! mod-path)
+          (unless (configure-teaching-output!)
+            (run-configure-runtime! mod-path))
           (set! fraction-view (if (pretty-print-exact-as-decimal) 'decimal 'mixed))
           (current-print (make-value-printer (current-print)))
           (init-markup-support!)

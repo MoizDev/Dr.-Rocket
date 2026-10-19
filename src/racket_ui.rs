@@ -645,6 +645,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
             breakpoints,
             print_width: 80,
             trace: tab.language.is_teaching() && tab.lang_settings.tracing,
+            teaching: tab.language.is_teaching().then(|| tab.lang_settings.run_json(tab.language)),
             debug_modules,
             images,
             ..Default::default()
@@ -859,10 +860,11 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
                 tab.rk.log.push((level, topic, message));
             }
         }
-        RunEvent::VizStart { max_steps } => {
+        RunEvent::VizStart { max_steps, as_ids } => {
             let v = tab.rk.viz.get_or_insert_with(Default::default);
             *v = Default::default();
             v.trace.max_steps = max_steps;
+            v.trace.as_ids = as_ids;
             // Positions in the trace are into the program as it ran.
             let n = tab.editor.doc.buffer.len();
             v.trace.set_source(&tab.editor.doc.buffer.slice(0..n));

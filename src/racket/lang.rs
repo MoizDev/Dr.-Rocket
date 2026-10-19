@@ -465,6 +465,14 @@ impl TeachingSettings {
         })
     }
 
+    /// The settings the runner applies to a teaching language: [`Self::stepper_json`] plus
+    /// the level id.
+    pub fn run_json(&self, language: Language) -> serde_json::Value {
+        let mut json = self.stepper_json();
+        json["level"] = language.id().into();
+        json
+    }
+
     fn teachpack_list(&self) -> String {
         format!("({})", self.teachpacks.join(" "))
     }

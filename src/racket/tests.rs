@@ -785,6 +785,48 @@ fn visualizer_records_calls_questions_returns_and_heap_objects() {
     assert!(events.iter().any(|e| matches!(e, RunEvent::VizEnd { truncated: false, .. })));
 }
 
+/// The Choose Language output settings apply to a run, as in DrRacket.
+#[test]
+fn run_applies_choose_language_output_settings() {
+    let b = need_racket!();
+    let src = "#lang htdp/bsl\n(list empty false (/ 1 3))\n";
+    let run = |settings: lang::TeachingSettings| {
+        let mut config = module_config(None, src, Instrument::Errortrace);
+        config.options.teaching = Some(settings.run_json(Language::Beginner));
+        let s = RunSession::start(b, &config).unwrap();
+        values(&run_until(&s, ready(None)))
+    };
+    let mut settings = Language::Beginner.default_settings();
+    assert_eq!(run(settings.clone()), vec!["(cons '() (cons #false (cons 0.3\u{305} '())))"]);
+    settings.true_false_empty_as_ids = true;
+    assert_eq!(run(settings.clone()), vec!["(cons empty (cons false (cons 0.3\u{305} empty)))"]);
+    settings.printing_style = lang::PrintingStyle::Write;
+    settings.fraction_style = lang::FractionStyle::MixedFraction;
+    assert_eq!(run(settings), vec!["(() #false 1/3)"]);
+}
+
+/// DrRacket's "true/false/empty as ids" option: the visualizer writes values the same way.
+#[test]
+fn visualizer_follows_true_false_empty_as_ids() {
+    let b = need_racket!();
+    let src = "#lang htdp/bsl\n(define-struct node (left key right))\n(define (leaf? t) (empty? (node-left t)))\n(define t (make-node empty 5 false))\n(leaf? t)\n";
+    for (as_ids, t, f, e) in [(false, "#true", "#false", "'()"), (true, "true", "false", "empty")] {
+        let mut config = module_config(None, src, Instrument::Visualize);
+        let mut settings = Language::Beginner.default_settings();
+        settings.true_false_empty_as_ids = as_ids;
+        config.options.teaching = Some(settings.run_json(Language::Beginner));
+        let s = RunSession::start(b, &config).unwrap();
+        let events = run_until(&s, ready(None));
+        assert!(events.iter().any(|ev| matches!(ev, RunEvent::VizStart { as_ids: a, .. } if *a == as_ids)));
+        let steps: Vec<&VizStep> = events.iter().filter_map(|e| if let RunEvent::VizStep(s) = e { Some(&**s) } else { None }).collect();
+        let result = steps.iter().find(|s| s.kind == "result").unwrap();
+        assert_eq!(result.value, Some(VizRef::Prim { v: t.into(), k: "bool".into() }), "as_ids {as_ids}");
+        let node = steps.iter().flat_map(|s| s.objects.iter()).find(|o| o.k == "struct").unwrap();
+        assert_eq!(node.fields[0].1, VizRef::Prim { v: e.into(), k: "empty".into() });
+        assert_eq!(node.fields[2].1, VizRef::Prim { v: f.into(), k: "bool".into() });
+    }
+}
+
 /// Tail calls replace the caller's frame, as Racket runs them: an accumulator loop shows
 /// one frame, while non-tail recursion stacks up.
 #[test]
