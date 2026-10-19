@@ -23,7 +23,9 @@ first launch after an update (`src/ui/whats_new.rs`); use the same file for the 
 (`gh release create ... --notes-file release-notes/<version>.md`).
 
 For a new app release, attach the files to the GitHub release (macOS DMG via
-`tools/bundle.sh --universal --dmg`, Windows and Linux via the Release workflow), then deploy as
+`DEVELOPER_ID="Developer ID Application: Moiz Hashmi (BJ2UZLM855)" NOTARY_PROFILE=drrocket
+tools/bundle.sh --universal --dmg`, which signs and notarizes it; Windows and Linux via the
+Release workflow), then deploy as
 above. The build takes its version from GitHub: the newest release with the macOS and Windows
 files attached. It writes that into `website/release.json` (commit the change), and the badge,
 downloads and share image all follow it.

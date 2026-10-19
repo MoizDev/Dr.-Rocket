@@ -12,8 +12,11 @@
 #
 # Distribution signing (otherwise the app is signed ad hoc, which only runs on this Mac):
 #   DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"   sign for distribution
-#   NOTARY_PROFILE=<profile>   also notarize the DMG with Apple and staple the ticket
-#                              (create the profile once with `xcrun notarytool store-credentials`)
+#   NOTARY_PROFILE=<profile>   also notarize the app and the DMG with Apple and staple the
+#                              tickets (create the profile once with
+#                              `xcrun notarytool store-credentials <profile>`)
+# This Mac's are DEVELOPER_ID="Developer ID Application: Moiz Hashmi (BJ2UZLM855)" and
+# NOTARY_PROFILE=drrocket.
 set -e
 cd "$(dirname "$0")/.."
 
@@ -85,6 +88,14 @@ if [ -n "$DEVELOPER_ID" ]; then
   # Hardened runtime and a secure timestamp are required for notarization.
   codesign --force --options runtime --timestamp -s "$DEVELOPER_ID" "$app"
   echo "Signed with $DEVELOPER_ID"
+  if [ -n "$NOTARY_PROFILE" ]; then
+    # Staple the app itself too, so a copy dragged out of the DMG opens even offline.
+    zip="$(mktemp -d)/drrocket.zip"
+    ditto -c -k --keepParent "$app" "$zip"
+    xcrun notarytool submit "$zip" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun stapler staple "$app"
+    rm -f "$zip"
+  fi
 else
   codesign --force --deep -s - "$app" >/dev/null 2>&1 || true
 fi
