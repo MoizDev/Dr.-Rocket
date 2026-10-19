@@ -372,9 +372,10 @@ mod tests {
     #[test]
     fn every_release_has_notes_and_they_sort_newest_first() {
         let notes = notes();
-        assert!(notes.iter().any(|(v, _)| *v == "1.0.0-beta.10"));
-        let versions: Vec<_> = notes.iter().map(|(v, _)| *v).collect();
-        assert_eq!(&versions[..3], ["1.0.0-beta.10", "1.0.0-beta.9", "1.0.0-beta.8"]);
+        // The version being built is the newest, and the rest follow in order.
+        assert_eq!(notes[0].0, env!("CARGO_PKG_VERSION"));
+        assert!(notes.windows(2).all(|w| crate::update::newer(w[0].0, w[1].0)));
+        assert!(notes.iter().any(|(v, _)| *v == "1.0.0-beta.9"));
         assert!(notes.iter().all(|(_, md)| !md.trim().is_empty() && !md.contains('\u{2014}')));
     }
 

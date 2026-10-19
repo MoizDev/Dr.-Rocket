@@ -380,12 +380,8 @@ export default function Home() {
                   Open <code>{mac.filename}</code> and drag Dr. Rocket into Applications.
                 </li>
                 <li>
-                  The beta isn&rsquo;t signed with an Apple certificate yet, so the first time, right-click the app and
-                  choose <b>Open</b>, then <b>Open</b> again.
-                </li>
-                <li>
-                  If macOS only offers <b>Move to Trash</b>, open System Settings, then Privacy &amp; Security, and click{" "}
-                  <b>Open Anyway</b> next to Dr. Rocket.
+                  Open Dr. Rocket from Applications. It&rsquo;s signed and notarized by Apple, so it opens like any other
+                  app.
                 </li>
               </OsCard>
               <OsCard os="windows" download={windows}>
@@ -623,11 +619,10 @@ const FAQ: [string, React.ReactNode][] = [
     </p>,
   ],
   [
-    "Why is macOS asking me to confirm, or Windows showing SmartScreen?",
+    "Why is Windows showing SmartScreen?",
     <p key="a">
-      Because the beta isn&rsquo;t code-signed yet. On macOS, right-click the app and choose Open the first time (or use
-      Open Anyway in System Settings, Privacy &amp; Security). On Windows, click More info, then Run anyway. You only
-      need to do this once.
+      Because the Windows beta isn&rsquo;t code-signed yet. Click More info, then Run anyway. You only need to do
+      this once. The macOS app is signed and notarized by Apple, so it opens without any warning.
     </p>,
   ],
   [

@@ -177,8 +177,8 @@ Intel), [Windows](https://doctorocket.com/download/windows) or
 `PATH`, Homebrew, `/Applications/Racket*` or `C:\Program Files\Racket`).
 
 > [!NOTE]
-> The beta isn't code-signed yet. On macOS, right-click the app and choose **Open** the first
-> time. On Windows, click **More info → Run anyway**.
+> The macOS app is signed and notarized by Apple. The Windows beta isn't code-signed yet, so the
+> first time, click **More info → Run anyway**.
 
 **Or build it** with a Rust toolchain:
 
