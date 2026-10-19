@@ -30,6 +30,8 @@
 (define active-lock (make-semaphore 1))
 
 (define (main)
+  ;; Includes the shared loader and docs workers, not just request custodians.
+  (custodian-limit-memory (current-custodian) (* 512 1024 1024))
   (define in (current-input-port))
   ;; Check syntax's documentation lookups run in a helper thread created when its xref
   ;; module is instantiated; instantiate it here, under the main custodian, so cancelling
