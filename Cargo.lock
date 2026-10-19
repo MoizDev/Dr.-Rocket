@@ -678,6 +678,7 @@ dependencies = [
  "resvg",
  "rfd",
  "ropey",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

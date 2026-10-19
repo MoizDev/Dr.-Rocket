@@ -263,47 +263,13 @@ fn fetch_feed() -> Result<Feed, String> {
 /// Whether version `a` comes after `b` (semver precedence: 1.0.0-beta.2 < 1.0.0-beta.10 < 1.0.0).
 pub fn newer(a: &str, b: &str) -> bool {
     match (parse(a), parse(b)) {
-        (Some(a), Some(b)) => cmp(&a, &b) == std::cmp::Ordering::Greater,
+        (Some(a), Some(b)) => a.cmp_precedence(&b) == std::cmp::Ordering::Greater,
         _ => false,
     }
 }
 
-type Version<'a> = ([u64; 3], Vec<&'a str>);
-
-fn parse(v: &str) -> Option<Version<'_>> {
-    let v = v.trim().trim_start_matches('v');
-    let v = v.split('+').next()?;
-    let (core, pre) = match v.split_once('-') {
-        Some((c, p)) => (c, p.split('.').collect()),
-        None => (v, Vec::new()),
-    };
-    let mut nums = core.split('.').map(|n| n.parse::<u64>().ok());
-    let out = [nums.next()??, nums.next()??, nums.next()??];
-    nums.next().is_none().then_some((out, pre))
-}
-
-fn cmp(a: &Version, b: &Version) -> std::cmp::Ordering {
-    use std::cmp::Ordering::*;
-    a.0.cmp(&b.0).then_with(|| match (a.1.is_empty(), b.1.is_empty()) {
-        (true, true) => Equal,
-        // A release comes after its prereleases.
-        (true, false) => Greater,
-        (false, true) => Less,
-        (false, false) => {
-            for (x, y) in a.1.iter().zip(&b.1) {
-                let o = match (x.parse::<u64>(), y.parse::<u64>()) {
-                    (Ok(x), Ok(y)) => x.cmp(&y),
-                    (Ok(_), Err(_)) => Less,
-                    (Err(_), Ok(_)) => Greater,
-                    (Err(_), Err(_)) => x.cmp(y),
-                };
-                if o != Equal {
-                    return o;
-                }
-            }
-            a.1.len().cmp(&b.1.len())
-        }
-    })
+fn parse(v: &str) -> Option<semver::Version> {
+    semver::Version::parse(v.strip_prefix('v').unwrap_or(v)).ok()
 }
 
 // ---- Where the app lives ----
@@ -346,8 +312,8 @@ fn is_dev_build(exe: &Path) -> bool {
 
 fn writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".drrocket-update-{}", std::process::id()));
-    let ok = std::fs::write(&probe, b"").is_ok();
-    let _ = std::fs::remove_file(&probe);
+    let ok = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).is_ok();
+    if ok { let _ = std::fs::remove_file(&probe); }
     ok
 }
 
@@ -360,16 +326,29 @@ fn update_dir() -> PathBuf {
     }
 }
 
-fn staged_dir(version: &str) -> PathBuf {
-    update_dir().join(version)
+fn staged_dir(version: &str) -> Result<PathBuf, String> {
+    parse(version).ok_or("Invalid update version")?;
+    let dir = update_dir().join(version);
+    if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("Update folder must not be a symbolic link".into());
+    }
+    Ok(dir)
 }
 
 /// The unpacked app or executable for `version`, once verified.
 fn staged_payload(version: &str) -> Result<PathBuf, String> {
-    let dir = staged_dir(version);
+    let dir = staged_dir(version)?;
     let name = std::fs::read_to_string(dir.join("ready")).map_err(|_| "The downloaded update is missing.".to_string())?;
-    let p = dir.join(name.trim());
-    if p.exists() { Ok(p) } else { Err("The downloaded update is missing.".into()) }
+    let relative = Path::new(name.trim());
+    if !safe_relative(relative) { return Err("Invalid update payload path".into()); }
+    let p = dir.join(relative).canonicalize().map_err(|e| e.to_string())?;
+    let root = dir.canonicalize().map_err(|e| e.to_string())?;
+    if p.starts_with(&root) { Ok(p) } else { Err("Update payload escapes its folder".into()) }
+}
+
+fn safe_relative(path: &Path) -> bool {
+    !path.as_os_str().is_empty() && !path.to_string_lossy().contains('\\')
+        && path.components().all(|c| matches!(c, std::path::Component::Normal(_)))
 }
 
 /// A verified update left by an earlier run, if it's still newer than this one. Clears out
@@ -385,7 +364,7 @@ fn staged_version() -> Option<String> {
         let keep = newer(&name, CURRENT) && staged_payload(&name).is_ok() && best.as_deref().is_none_or(|b| newer(&name, b));
         if keep {
             if let Some(old) = best.replace(name) {
-                let _ = std::fs::remove_dir_all(staged_dir(&old));
+                if let Ok(dir) = staged_dir(&old) { let _ = std::fs::remove_dir_all(dir); }
             }
         } else {
             let _ = if e.path().is_dir() { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
@@ -397,7 +376,7 @@ fn staged_version() -> Option<String> {
 // ---- Download and unpack ----
 
 fn download(version: &str, asset: &Asset) -> Result<(), String> {
-    let dir = staged_dir(version);
+    let dir = staged_dir(version)?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let file = dir.join(match OS {
@@ -643,6 +622,18 @@ fn launch(t: &Target) -> bool {
 #[cfg(test)]
 mod tests {
     use super::newer;
+
+    #[test]
+    fn reject_versions_and_payloads_that_escape_staging() {
+        for version in ["99.0.0-payload/../../outside", "99.0.0+../../outside", "99.0.0-..", "99.0.0-", "01.0.0", "99.0.0-beta.01", " 99.0.0", "99.0.0-evil\\path"] {
+            assert!(!newer(version, "1.0.0"), "{version}");
+            assert!(super::staged_dir(version).is_err(), "{version}");
+        }
+        for path in ["../outside", "/tmp/outside", "app/../../outside", "C:\\outside", ""] {
+            assert!(!super::safe_relative(std::path::Path::new(path)), "{path}");
+        }
+        assert!(super::safe_relative(std::path::Path::new("app/Dr. Rocket.app")));
+    }
 
     #[test]
     fn versions_order_like_semver() {
