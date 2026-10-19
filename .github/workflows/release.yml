@@ -22,6 +22,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
+        env:
+          DRROCKET_UPDATE_PUBLIC_KEY: ${{ vars.DRROCKET_UPDATE_PUBLIC_KEY }}
         run: cargo build --release
       - name: Package
         shell: pwsh
@@ -51,6 +53,8 @@ jobs:
       - name: System libraries
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
       - name: Build
+        env:
+          DRROCKET_UPDATE_PUBLIC_KEY: ${{ vars.DRROCKET_UPDATE_PUBLIC_KEY }}
         run: cargo build --release
       - name: Package
         run: |
