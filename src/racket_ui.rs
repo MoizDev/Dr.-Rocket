@@ -257,8 +257,8 @@ pub fn load_text(app: &App, path: Option<&Path>, text: &str) -> (Language, Teach
     (language, settings, loaded.body)
 }
 
-pub fn save_text(tab: &Tab) -> String {
-    lang::save(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text())
+pub fn save_text(tab: &Tab, path: &Path) -> String {
+    lang::save(tab.language, &tab.lang_settings, Some(path), &tab.editor.doc.text())
 }
 
 pub fn remember_language(app: &mut App, path: &Path, language: Language) {

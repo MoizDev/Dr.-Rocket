@@ -264,6 +264,14 @@ impl Tab {
     pub fn dirty(&self) -> bool {
         self.editor.doc.buffer.is_dirty() || self.lang_changed
     }
+
+    fn check_writable(&self) -> Result<(), &'static str> {
+        if self.editor.read_only {
+            Err("This file contains unsupported content and is read-only. Open it in DrRacket to save changes.")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Modal overlays.
@@ -729,6 +737,10 @@ impl App {
 
     pub fn save_tab(&mut self, idx: usize, save_as: bool) -> bool {
         let Some(tab) = self.tabs.get(idx) else { return false };
+        if let Err(message) = tab.check_writable() {
+            self.toast(message, ToastKind::Error);
+            return false;
+        }
         let path = match (&tab.path, save_as) {
             (Some(p), false) => p.clone(),
             _ => {
@@ -742,8 +754,7 @@ impl App {
                 }
             }
         };
-        self.tabs[idx].path = Some(path.clone());
-        let text = crate::racket_ui::save_text(&self.tabs[idx]);
+        let text = crate::racket_ui::save_text(&self.tabs[idx], &path);
         // Text with pasted images is saved in DrRacket's editor format; everything else as text.
         let images = self.tabs[idx].editor.doc.images.for_text(&text);
         let written = if images.is_empty() {
@@ -753,6 +764,7 @@ impl App {
         };
         match written {
             Ok(()) => {
+                self.tabs[idx].path = Some(path.clone());
                 let language = self.tabs[idx].language;
                 crate::racket_ui::remember_language(self, &path, language);
                 let tab = &mut self.tabs[idx];
@@ -814,6 +826,7 @@ impl App {
                 let (_, _, body) = crate::racket_ui::load_text(self, Some(&p), &text);
                 let tab = &mut self.tabs[i];
                 if let Some(w) = wxme {
+                    tab.editor.read_only |= !w.unsupported.is_empty();
                     tab.editor.doc.images.load(&w.images);
                 }
                 let text = body;
@@ -1078,6 +1091,7 @@ impl App {
                         let (_, _, body) = crate::racket_ui::load_text(self, Some(&path), &text);
                         if let Some(t) = self.active_tab_mut() {
                             if let Some(w) = wxme {
+                                t.editor.read_only |= !w.unsupported.is_empty();
                                 t.editor.doc.images.load(&w.images);
                             }
                             // One undoable edit: ⌘Z brings the discarded changes back.
@@ -1608,5 +1622,29 @@ impl eframe::App for App {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.tokens().window.to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_content_remains_unsaveable_after_edits() {
+        let language = crate::racket::lang::Language::Module;
+        let mut tab = Tab {
+            id: 1, path: None, untitled: 1,
+            editor: EditorView::new("partial WXME text", Id::unique("save-test")),
+            language, lang_settings: language.default_settings(), lang_changed: false,
+            disk_mtime: None, rk: crate::racket_ui::RacketTab::new(1), zoom: 1.0,
+            edit_seen: (0, 0.0),
+        };
+        assert!(tab.check_writable().is_ok());
+        tab.editor.read_only = true;
+        tab.editor.doc.buffer.set_text("modified partial text");
+        tab.lang_changed = true;
+        assert!(tab.check_writable().is_err());
+        tab.path = Some(PathBuf::from("another-name.rkt"));
+        assert!(tab.check_writable().is_err());
     }
 }
