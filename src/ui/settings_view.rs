@@ -647,7 +647,7 @@ impl App {
         row(ui, &theme, "Include tests in the stepper", "Step through check-expect and other test checks. Restart the stepper after changing this", |ui| {
             toggle(ui, &theme, &mut s.stepper_include_tests);
         });
-        row(ui, &theme, "Functional stepper focus", "Show the innermost active reduction, hiding outer recursive expressions. Restart to apply", |ui| {
+        row(ui, &theme, "Functional step trace", "Show successive function calls with their surrounding expression, then the final reductions. Restart to apply", |ui| {
             toggle(ui, &theme, &mut s.stepper_functional_focus);
         });
         row(ui, &theme, "Stepper view", "Changes apply immediately; the result of each reduction stays highlighted", |ui| {

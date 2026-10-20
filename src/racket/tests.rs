@@ -1118,13 +1118,13 @@ fn stepper_can_disable_test_execution() {
 }
 
 #[test]
-fn functional_stepper_focus_hides_recursive_context_without_skipping_steps() {
+fn functional_stepper_matches_recursive_trace_and_keeps_final_cond_steps() {
     let b = need_racket!();
-    let source = "(define (fact n) (if (zero? n) 1 (* n (fact (sub1 n)))))\n(fact 3)\n";
+    let source = "(define (f x y t) (cond [(< y x) 0] [(= y x) 1] [else (add1 (f x (- y t) t))]))\n(f 5 17 3)\n";
     let mut traces = Vec::new();
-    for focus in [false, true] {
+    for functional in [false, true] {
         let mut settings = Language::Beginner.default_settings().stepper_json();
-        settings["functional_focus"] = focus.into();
+        settings["functional_focus"] = functional.into();
         let request = StepRequest {
             path: None, source: source.into(), level: "beginner".into(), settings,
             teachpacks: vec![], width: 200, images: Default::default(),
@@ -1132,19 +1132,53 @@ fn functional_stepper_focus_hides_recursive_context_without_skipping_steps() {
         let events = step_until(&StepperSession::start(b, &request).unwrap());
         assert!(!events.iter().any(|e| matches!(e, StepperEvent::Error { .. } | StepperEvent::StepError { .. })), "{events:#?}");
         let steps: Vec<Step> = events.into_iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
-        assert_eq!(steps.last().unwrap().after.last().unwrap().text, "6");
-        for step in &steps {
+        for (i, step) in steps.iter().enumerate() {
+            assert_eq!(step.index, i);
             for e in step.before.iter().chain(&step.after) {
                 assert!(e.highlights.iter().all(|&(a, z)| a < z && z <= e.text.chars().count()));
             }
         }
         traces.push(steps);
     }
-    assert_eq!(traces[0].len(), traces[1].len());
-    let k = traces[1].iter().position(|s| s.kind == "user-application" && s.before.iter().any(|e| e.text == "(fact 1)")).expect("innermost recursive call");
-    assert!(traces[0][k].before.iter().any(|e| e.text.contains("(* 3 (* 2 (fact 1)))")), "{:?}", traces[0][k]);
-    assert_eq!(traces[1][k].before.len(), 1);
-    assert_eq!(traces[0][k].before_src, traces[1][k].before_src);
+    let full = &traces[0];
+    let functional = &traces[1];
+    assert!(functional.len() < full.len());
+    assert_eq!(functional[0].before.last().unwrap().text, "(f 5 17 3)");
+    let calls = ["(add1 (f 5 14 3))", "(add1 (add1 (f 5 11 3)))",
+                 "(add1 (add1 (add1 (f 5 8 3))))", "(add1 (add1 (add1 (add1 (f 5 5 3)))))"];
+    for (step, expected) in functional.iter().zip(calls) {
+        assert_eq!(step.after.last().unwrap().text, expected);
+        assert!(step.after_src.is_some());
+    }
+    let base = full.iter().position(|s| s.kind == "user-application" && s.before.last().unwrap().text == calls[3]).unwrap();
+    assert_eq!(functional.len() - 4, full.len() - base);
+    for (actual, expected) in functional[4..].iter().zip(&full[base..]) {
+        assert_eq!(actual.before, expected.before);
+        assert_eq!(actual.after, expected.after);
+        assert_eq!(actual.before_src, expected.before_src);
+        assert_eq!(actual.after_src, expected.after_src);
+    }
+    assert!(functional[4].after.last().unwrap().text.contains("cond"));
+    assert_eq!(functional.last().unwrap().after.last().unwrap().text, "5");
+}
+
+#[test]
+fn functional_stepper_keeps_separate_expressions_and_errors() {
+    let b = need_racket!();
+    for source in [
+        "(define (f x) (+ x 1))\n(f 2)\n(f 4)\n(check-expect (f 6) 7)\n(check-expect (f 8) 9)",
+        "(define (f x) (/ 1 (sub1 x)))\n(f 1)",
+    ] {
+        let mut traces = Vec::new();
+        for functional in [false, true] {
+            let mut settings = Language::Beginner.default_settings().stepper_json();
+            settings["functional_focus"] = functional.into();
+            let request = StepRequest { path: None, source: source.into(), level: "beginner".into(), settings,
+                teachpacks: vec![], width: 200, images: Default::default() };
+            traces.push(step_until(&StepperSession::start(b, &request).unwrap()));
+        }
+        assert_eq!(format!("{:?}", traces[0]), format!("{:?}", traces[1]));
+    }
 }
 
 #[test]

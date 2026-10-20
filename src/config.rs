@@ -95,7 +95,7 @@ pub struct Settings {
     pub stepper_count_finish: bool,
     /// Execute and show check-expect and the other test-engine checks while stepping.
     pub stepper_include_tests: bool,
-    /// Show the active reduction without accumulated outer recursive expressions.
+    /// Collapse reductions between function calls, keeping context and final reductions.
     pub stepper_functional_focus: bool,
     /// Show only the highlighted result of each reduction.
     pub stepper_after_only: bool,

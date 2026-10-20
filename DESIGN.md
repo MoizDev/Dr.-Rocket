@@ -108,9 +108,13 @@ IDE -> {"cmd":"more"}                       ; after a "paused" event
 Highlight ranges are 0-based char offsets into that expression's `text`.
 `include_tests` defaults to true; false disables test execution for this stepper session.
 The option is saved in Settings → Racket and takes effect when stepping starts/restarts.
-`functional_focus` defaults to false. When enabled, only the active highlighted subexpressions
-are rendered, without the accumulated surrounding recursive expression. Every reduction is
-still evaluated and recorded; source locations and image highlights remain attached to it.
+`functional_focus` defaults to false (the persisted key is retained for compatibility).
+The Functional step trace setting collapses reductions between successive user-function calls,
+keeping the surrounding expression and evaluated call arguments. The final call and its
+remaining ordinary reductions, including conditionals and unwinding, stay visible. Separate
+top-level expressions and errors flush the pending trace. Lookahead is capped at 500 reductions;
+longer stretches stream normally to preserve bounded buffering and pause/resume behavior.
+Full stepping is unchanged when disabled.
 The UI also persists `stepper_after_only` (default false). It switches the existing trace
 between before/after and after-only without rerunning code; after highlights and inline
 images are retained. Failed steps always show the expression that failed.

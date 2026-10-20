@@ -153,8 +153,7 @@
       (parameterize ([abbreviate-cons-as-list #t])
         (get-render-settings render-to-string render-to-sexp #t #t (level-info-lambdas? info))))
     (define (render-exps sstxs)
-      (define visible (if (setting settings 'functional_focus #f) (focused-exps sstxs) sstxs))
-      (for/list ([s (in-list visible)])
+      (for/list ([s (in-list sstxs)])
         (define table (make-hasheq))
         (define datum (strip-to-sexp (sstx-s s) table))
         (define-values (text ranges)
@@ -168,6 +167,43 @@
           (hasheq 'pos (adjust-pos source-name (Posn-Info-posn p))
                   'span (or (Posn-Info-span p) 0))
           (json-null)))
+    (define (emit-step r)
+      (match-define (Before-After-Result pre post kind pre-src post-src) r)
+      (reset-step-images!)
+      (define before (render-exps pre))
+      (define after (render-exps post))
+      (emit (hasheq 'ev "step" 'index step-count 'kind (format "~a" kind)
+                    'images step-images 'before before 'after after
+                    'before_src (posn-info->jsexpr pre-src)
+                    'after_src (posn-info->jsexpr post-src)))
+      (set! step-count (add1 step-count))
+      (when (zero? (modulo step-count steps-per-batch))
+        (emit (hasheq 'ev "paused" 'count step-count))
+        (semaphore-wait more-sema)))
+    ;; Look ahead to the next call; retain the final call's ordinary reductions.
+    (define pending '())
+    (define (flush-pending!)
+      (for-each emit-step (reverse pending))
+      (set! pending '()))
+    (define (trace-step r)
+      (match-define (Before-After-Result pre post kind pre-src post-src) r)
+      (when (and (pair? pending)
+                 (not (equal? (map (λ (s) (syntax->datum (sstx-s s))) pre)
+                              (map (λ (s) (syntax->datum (sstx-s s)))
+                                   (Before-After-Result-post-exps (car pending))))))
+        (flush-pending!))
+      (cond
+        [(eq? kind 'user-application)
+         (when (pair? pending)
+           (define first (last pending))
+           (emit-step (Before-After-Result (Before-After-Result-pre-exps first) pre
+                                          'user-application (Before-After-Result-pre-src first) pre-src)))
+         (set! pending (list r))]
+        [(pair? pending)
+         (set! pending (cons r pending))
+         ;; Bound lookahead so long non-recursive computations still stream and pause.
+         (when (>= (length pending) steps-per-batch) (flush-pending!))]
+        [else (emit-step r)]))
     (define (receive-result r)
       (match r
         [(Before-After-Result pre post kind pre-src post-src)
@@ -178,27 +214,20 @@
                           (and (pair? context-names)
                                (ormap (λ (s) (and (member (definition-name (sstx-s s)) context-names)
                                                   (pair? (highlighted-exps (sstx-s s))))) pre))))
-           (reset-step-images!)
-           (define before (render-exps visible-pre))
-           (define after (render-exps visible-post))
-           (emit (hasheq 'ev "step" 'index step-count 'kind (format "~a" kind)
-                         'images step-images
-                         'before before 'after after
-                         'before_src (posn-info->jsexpr pre-src)
-                         'after_src (posn-info->jsexpr post-src)))
-           (set! step-count (add1 step-count))
-           (when (zero? (modulo step-count steps-per-batch))
-             (emit (hasheq 'ev "paused" 'count step-count))
-             (semaphore-wait more-sema)))]
+           (define visible (Before-After-Result visible-pre visible-post kind pre-src post-src))
+           (if (setting settings 'functional_focus #f) (trace-step visible) (emit-step visible)))]
         [(Before-Error-Result pre msg pre-src)
+         (flush-pending!)
          (reset-step-images!)
          (define before (render-exps pre))
          (emit (hasheq 'ev "step-error" 'index step-count 'images step-images 'before before
                        'message msg 'before_src (posn-info->jsexpr pre-src)))
          (set! step-count (add1 step-count))]
         [(Error-Result msg)
+         (flush-pending!)
          (emit (hasheq 'ev "error" 'message msg))]
         ['finished-stepping
+         (flush-pending!)
          (emit (hasheq 'ev "finished" 'count step-count))]
         [_ (void)]))
     ((dynamic-require 'test-engine/racket-tests 'test-execute) (setting settings 'include_tests #t))
@@ -207,15 +236,16 @@
                                reader
                                (level-info-module info)
                                teachpacks))
-    (go (λ (init iter)
-          (init)
-          (error-value->string-handler
-           (λ (v len) (truncate-string (render-to-string v) len)))
-          (current-print void)
-          (let loop () (iter (next) loop)))
-        void
-        receive-result
-        render-settings)))
+    (with-handlers ([exn:fail? (λ (e) (flush-pending!) (raise e))])
+      (go (λ (init iter)
+            (init)
+            (error-value->string-handler
+             (λ (v len) (truncate-string (render-to-string v) len)))
+            (current-print void)
+            (let loop () (iter (next) loop)))
+          void
+          receive-result
+          render-settings))))
 
 (define (definition-name stx)
   (define name
@@ -273,19 +303,13 @@
                 (begin0 (car remaining) (set! remaining (cdr remaining)))))
           (filter values (map definition-name context))))
 
-;; Keep the stepper's active redex, not the surrounding recursive continuation.
+;; Locate active reductions when filtering context definitions for selection stepping.
 (define (highlighted-exps v)
   (cond
     [(and (syntax? v) (stepper-syntax-property v 'stepper-highlight)) (list (sstx v))]
     [(syntax? v) (highlighted-exps (syntax-e v))]
     [(pair? v) (append (highlighted-exps (car v)) (highlighted-exps (cdr v)))]
     [else '()]))
-
-(define (focused-exps sstxs)
-  (define active (append-map (λ (s) (highlighted-exps (sstx-s s))) sstxs))
-  (cond [(pair? active) active]
-        [(pair? sstxs) (list (last sstxs))]
-        [else '()]))
 
 (define (blank-lang-line source)
   (define m (regexp-match-positions #px"#lang\\s+\\S+" source))
