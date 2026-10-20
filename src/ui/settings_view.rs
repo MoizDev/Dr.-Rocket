@@ -656,6 +656,9 @@ impl App {
                 ui.selectable_value(&mut s.stepper_after_only, true, "After only");
             });
         });
+        row(ui, &theme, "Step selection only", "Select complete expressions before starting. Global definitions initialize as context; local variables need a function call", |ui| {
+            toggle(ui, &theme, &mut s.stepper_selection_only);
+        });
         row(ui, &theme, "Memory limit", "Pause a program that uses more than this and ask whether to keep going", |ui| {
             let label = |m: Option<u64>| m.map_or("No limit".to_string(), crate::racket_ui::mb_text);
             egui::ComboBox::from_id_salt("memory-limit").width(120.0).selected_text(label(s.memory_limit_mb)).show_ui(ui, |ui| {

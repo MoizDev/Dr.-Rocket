@@ -1017,6 +1017,15 @@ fn start_stepper(app: &mut App, i: usize) {
     let mut settings = tab.lang_settings.stepper_json();
     settings["include_tests"] = app.settings.stepper_include_tests.into();
     settings["functional_focus"] = app.settings.stepper_functional_focus.into();
+    if app.settings.stepper_selection_only {
+        let selections = &tab.editor.doc.buffer.selections;
+        let selected = selections.primary();
+        if selections.list.len() != 1 || selected.is_empty() {
+            app.toast("Select one contiguous range of complete expressions before starting the stepper.", ToastKind::Info);
+            return;
+        }
+        settings["selection"] = serde_json::json!([selected.start(), selected.end()]);
+    }
     let req = StepRequest {
         path: tab.path.clone(),
         images: tab.editor.doc.images.for_text(&body),

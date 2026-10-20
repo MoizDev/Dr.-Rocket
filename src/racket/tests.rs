@@ -1146,3 +1146,109 @@ fn functional_stepper_focus_hides_recursive_context_without_skipping_steps() {
     assert_eq!(traces[1][k].before.len(), 1);
     assert_eq!(traces[0][k].before_src, traces[1][k].before_src);
 }
+
+#[test]
+fn stepper_selection_keeps_definitions_and_original_source_positions() {
+    let b = need_racket!();
+    let source = "#lang htdp/bsl\n; λ 🚀\n(define (f x) (+ x 1))\n(define y (f 2))\n(error \"outside\")\n(f (+ y 1))\n(define z (f 3))\n(error \"outside\")\n";
+    let selected = "(f (+ y 1))";
+    let start = source[..source.find(selected).unwrap()].chars().count();
+    for focus in [false, true] {
+        let mut settings = Language::Beginner.default_settings().stepper_json();
+        settings["selection"] = serde_json::json!([start, start + selected.chars().count()]);
+        settings["functional_focus"] = focus.into();
+        let request = StepRequest {
+            path: None, source: source.into(), level: "module".into(), settings,
+            teachpacks: vec![], width: 60, images: Default::default(),
+        };
+        let events = step_until(&StepperSession::start(b, &request).unwrap());
+        assert!(!events.iter().any(|e| matches!(e, StepperEvent::Error { .. } | StepperEvent::StepError { .. })), "{events:#?}");
+        let steps: Vec<_> = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
+        assert_eq!(steps.len(), 4, "context initializers must not appear: {steps:#?}");
+        assert_eq!(steps[0].before_src.as_ref().unwrap().pos, start + 6);
+        assert_eq!(steps.last().unwrap().after.last().unwrap().text, "5");
+        for (i, step) in steps.iter().enumerate() {
+            assert_eq!(step.index, i);
+            assert!(step.before.iter().chain(&step.after).all(|e| !e.text.contains("define")));
+        }
+    }
+}
+
+#[test]
+fn stepper_selection_runs_nested_expressions_and_respects_test_setting() {
+    let b = need_racket!();
+    for (source, selected, include, expected_steps, result) in [
+        ("(* 10 (+ 2 3))", "(+ 2 3)", true, 1, "5"),
+        ("(+ 1 2)\n(+ 3 4)\n(error \"outside\")", "(+ 1 2)\n(+ 3 4)", true, 2, "7"),
+        ("(define y (+ 1 2))\n(error \"outside\")", "(define y (+ 1 2))", true, 1, "(define y 3)"),
+        ("(check-expect (+ 2 3) 5)\n(error \"outside\")", "(check-expect (+ 2 3) 5)", false, 0, ""),
+        ("(define (f x) (+ x 1))\n(check-expect (f 2) 3)\n(error \"outside\")", "(check-expect (f 2) 3)", true, 2, "(check-expect 3 3)"),
+    ] {
+        let start = source.find(selected).unwrap();
+        let mut settings = Language::Beginner.default_settings().stepper_json();
+        settings["selection"] = serde_json::json!([start, start + selected.len()]);
+        settings["include_tests"] = include.into();
+        let request = StepRequest {
+            path: None, source: source.into(), level: "beginner".into(), settings,
+            teachpacks: vec![], width: 60, images: Default::default(),
+        };
+        let events = step_until(&StepperSession::start(b, &request).unwrap());
+        assert!(!events.iter().any(|e| matches!(e, StepperEvent::Error { .. } | StepperEvent::StepError { .. })), "{events:#?}");
+        let steps: Vec<_> = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
+        assert_eq!(steps.len(), expected_steps, "{events:#?}");
+        if expected_steps > 0 { assert_eq!(steps.last().unwrap().after.last().unwrap().text, result); }
+    }
+}
+
+#[test]
+fn stepper_selection_rejects_invalid_ranges_and_partial_expressions() {
+    let b = need_racket!();
+    let source = "; (+ 2 3)\n(+ 123 4)";
+    for range in [serde_json::json!([]), serde_json::json!([-1, 4]), serde_json::json!([0, 999]),
+                  serde_json::json!([0, 0]), serde_json::json!([0, 10]), serde_json::json!([2, 9]),
+                  serde_json::json!([13, 14]), serde_json::json!([10, 15])] {
+        let mut settings = Language::Beginner.default_settings().stepper_json();
+        settings["selection"] = range.clone();
+        let request = StepRequest {
+            path: None, source: source.into(), level: "beginner".into(), settings,
+            teachpacks: vec![], width: 60, images: Default::default(),
+        };
+        let events = step_until(&StepperSession::start(b, &request).unwrap());
+        assert!(events.iter().any(|e| matches!(e, StepperEvent::Error { .. })), "{range}: {events:#?}");
+        assert!(!events.iter().any(|e| matches!(e, StepperEvent::Step(_))));
+    }
+}
+
+#[test]
+fn stepper_selection_preserves_images_and_context_errors() {
+    let b = need_racket!();
+    let img = image::RgbaImage::from_pixel(3, 2, image::Rgba([255, 0, 0, 255]));
+    let mut png = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let ch = char::from_u32(0xF0000).unwrap();
+    let selected = format!("(beside pic {ch})");
+    let source = format!("; λ 🚀\n(require 2htdp/image)\n(define pic {ch})\n{selected}\n(error \"outside\")");
+    let start = source[..source.find(&selected).unwrap()].chars().count();
+    let mut settings = Language::Beginner.default_settings().stepper_json();
+    settings["selection"] = serde_json::json!([start, start + selected.chars().count()]);
+    settings["functional_focus"] = true.into();
+    let mut images = SourceImages::new();
+    images.insert("983040".into(), base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &png));
+    let request = StepRequest { path: None, source, level: "beginner".into(), settings, teachpacks: vec![], width: 60, images };
+    let events = step_until(&StepperSession::start(b, &request).unwrap());
+    assert!(!events.iter().any(|e| matches!(e, StepperEvent::Error { .. } | StepperEvent::StepError { .. })), "{events:#?}");
+    let steps: Vec<_> = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
+    assert_eq!(steps[0].before_src.as_ref().unwrap().pos, start + 8);
+    let last = steps.last().unwrap();
+    let c = last.after.last().unwrap().text.chars().next().unwrap();
+    let image = crate::editor::images::EmbeddedImage::from_b64(&last.images[&(c as u32).to_string()]).unwrap();
+    assert_eq!((image.width, image.height), (6, 2));
+
+    let source = "(define bad (/ 1 0))\n(+ 2 3)";
+    let start = source.find("(+").unwrap();
+    let mut settings = Language::Beginner.default_settings().stepper_json();
+    settings["selection"] = serde_json::json!([start, source.len()]);
+    let request = StepRequest { path: None, source: source.into(), level: "beginner".into(), settings, teachpacks: vec![], width: 60, images: Default::default() };
+    let events = step_until(&StepperSession::start(b, &request).unwrap());
+    assert!(events.iter().any(|e| matches!(e, StepperEvent::StepError { message, .. } | StepperEvent::Error { message } if message.contains("zero"))), "{events:#?}");
+}

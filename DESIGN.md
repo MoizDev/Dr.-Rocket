@@ -93,7 +93,7 @@ IDE -> {"cmd":"step","path":..,"source":"<buffer text without header>","level":"
         "sdp-vanilla"|"module",          ; "module": a `#lang htdp/bsl|bsl+|isl|isl+` buffer
         "settings":{"printing_style","fraction_style","show_sharing","insert_newlines",
                     "case_sensitive","true_false_empty_as_ids","writing_style","include_tests",
-                    "functional_focus"},
+                    "functional_focus","selection"},
         "teachpacks":["(lib \"image.rkt\" \"teachpack\" \"2htdp\")",...],"width":72}
 IDE -> {"cmd":"more"}                       ; after a "paused" event
 <- {"ev":"step","index":i,"kind":"normal"|"user-application"|...,
@@ -114,6 +114,17 @@ still evaluated and recorded; source locations and image highlights remain attac
 The UI also persists `stepper_after_only` (default false). It switches the existing trace
 between before/after and after-only without rerunning code; after highlights and inline
 images are retained. Failed steps always show the expression that failed.
+
+`stepper_selection_only` defaults to false. When enabled, the IDE sends `selection: [start, end]`
+in settings (0-based character offsets, end exclusive). Racket validates complete expressions
+and preserves their source locations. Unselected top-level `define`, `define-struct`, `require`,
+and signature declarations provide context; other expressions and tests are excluded. Context
+definitions initialize but their reductions are hidden. Initialization errors remain visible.
+Selected calls still step into their function bodies. A selected subexpression runs on its own,
+so local variables require selecting the enclosing function call instead. An empty, partial-token,
+or multiple-cursor selection is rejected. Starting/restarting uses the current selection; the
+buffer is never rewritten. The include-tests and functional-focus settings apply to selection
+stepping too.
 
 ### server
 
