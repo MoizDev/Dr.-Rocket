@@ -95,6 +95,8 @@ pub struct Settings {
     pub stepper_count_finish: bool,
     /// Execute and show check-expect and the other test-engine checks while stepping.
     pub stepper_include_tests: bool,
+    /// Show the active reduction without accumulated outer recursive expressions.
+    pub stepper_functional_focus: bool,
     pub racket_path: Option<String>,
     /// Pause a running program that uses more memory than this and ask whether to keep going
     /// (DrRacket's memory limit); `None` for no limit.
@@ -143,6 +145,7 @@ impl Default for Settings {
             auto_complete: false,
             stepper_count_finish: true,
             stepper_include_tests: true,
+            stepper_functional_focus: false,
             racket_path: None,
             memory_limit_mb: Some(256),
             shell: None,
@@ -329,7 +332,9 @@ mod stepper_settings_tests {
     fn stepper_options_default_and_round_trip() {
         let mut settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.stepper_include_tests);
+        assert!(!settings.stepper_functional_focus);
         settings.stepper_include_tests = false;
+        settings.stepper_functional_focus = true;
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
     }

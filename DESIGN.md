@@ -92,7 +92,8 @@ IDE -> {"cmd":"step","path":..,"source":"<buffer text without header>","level":"
         "beginner-abbr"|"intermediate"|"intermediate-lambda"|"advanced"|"sdp-beginner"|
         "sdp-vanilla"|"module",          ; "module": a `#lang htdp/bsl|bsl+|isl|isl+` buffer
         "settings":{"printing_style","fraction_style","show_sharing","insert_newlines",
-                    "case_sensitive","true_false_empty_as_ids","writing_style","include_tests"},
+                    "case_sensitive","true_false_empty_as_ids","writing_style","include_tests",
+                    "functional_focus"},
         "teachpacks":["(lib \"image.rkt\" \"teachpack\" \"2htdp\")",...],"width":72}
 IDE -> {"cmd":"more"}                       ; after a "paused" event
 <- {"ev":"step","index":i,"kind":"normal"|"user-application"|...,
@@ -107,6 +108,9 @@ IDE -> {"cmd":"more"}                       ; after a "paused" event
 Highlight ranges are 0-based char offsets into that expression's `text`.
 `include_tests` defaults to true; false disables test execution for this stepper session.
 The option is saved in Settings → Racket and takes effect when stepping starts/restarts.
+`functional_focus` defaults to false. When enabled, only the active highlighted subexpressions
+are rendered, without the accumulated surrounding recursive expression. Every reduction is
+still evaluated and recorded; source locations and image highlights remain attached to it.
 
 ### server
 

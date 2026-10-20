@@ -7,6 +7,7 @@
          racket/async-channel
          racket/port
          racket/pretty
+         racket/list
          racket/string
          mzlib/pconvert
          stepper/private/model
@@ -139,7 +140,8 @@
       (parameterize ([abbreviate-cons-as-list #t])
         (get-render-settings render-to-string render-to-sexp #t #t (level-info-lambdas? info))))
     (define (render-exps sstxs)
-      (for/list ([s (in-list sstxs)])
+      (define visible (if (setting settings 'functional_focus #f) (focused-exps sstxs) sstxs))
+      (for/list ([s (in-list visible)])
         (define table (make-hasheq))
         (define datum (strip-to-sexp (sstx-s s) table))
         (define-values (text ranges)
@@ -196,6 +198,19 @@
         void
         receive-result
         render-settings)))
+
+;; Keep the stepper's active redex, not the surrounding recursive continuation.
+(define (focused-exps sstxs)
+  (define (highlights v)
+    (cond
+      [(and (syntax? v) (stepper-syntax-property v 'stepper-highlight)) (list (sstx v))]
+      [(syntax? v) (highlights (syntax-e v))]
+      [(pair? v) (append (highlights (car v)) (highlights (cdr v)))]
+      [else '()]))
+  (define active (append-map (λ (s) (highlights (sstx-s s))) sstxs))
+  (cond [(pair? active) active]
+        [(pair? sstxs) (list (last sstxs))]
+        [else '()]))
 
 (define (blank-lang-line source)
   (define m (regexp-match-positions #px"#lang\\s+\\S+" source))

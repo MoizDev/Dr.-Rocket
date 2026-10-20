@@ -1116,3 +1116,33 @@ fn stepper_can_disable_test_execution() {
         if !include { assert_eq!(steps.len(), 2); }
     }
 }
+
+#[test]
+fn functional_stepper_focus_hides_recursive_context_without_skipping_steps() {
+    let b = need_racket!();
+    let source = "(define (fact n) (if (zero? n) 1 (* n (fact (sub1 n)))))\n(fact 3)\n";
+    let mut traces = Vec::new();
+    for focus in [false, true] {
+        let mut settings = Language::Beginner.default_settings().stepper_json();
+        settings["functional_focus"] = focus.into();
+        let request = StepRequest {
+            path: None, source: source.into(), level: "beginner".into(), settings,
+            teachpacks: vec![], width: 200, images: Default::default(),
+        };
+        let events = step_until(&StepperSession::start(b, &request).unwrap());
+        assert!(!events.iter().any(|e| matches!(e, StepperEvent::Error { .. } | StepperEvent::StepError { .. })), "{events:#?}");
+        let steps: Vec<Step> = events.into_iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
+        assert_eq!(steps.last().unwrap().after.last().unwrap().text, "6");
+        for step in &steps {
+            for e in step.before.iter().chain(&step.after) {
+                assert!(e.highlights.iter().all(|&(a, z)| a < z && z <= e.text.chars().count()));
+            }
+        }
+        traces.push(steps);
+    }
+    assert_eq!(traces[0].len(), traces[1].len());
+    let k = traces[1].iter().position(|s| s.kind == "user-application" && s.before.iter().any(|e| e.text == "(fact 1)")).expect("innermost recursive call");
+    assert!(traces[0][k].before.iter().any(|e| e.text.contains("(* 3 (* 2 (fact 1)))")), "{:?}", traces[0][k]);
+    assert_eq!(traces[1][k].before.len(), 1);
+    assert_eq!(traces[0][k].before_src, traces[1][k].before_src);
+}
