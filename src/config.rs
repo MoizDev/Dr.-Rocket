@@ -97,6 +97,8 @@ pub struct Settings {
     pub stepper_include_tests: bool,
     /// Show the active reduction without accumulated outer recursive expressions.
     pub stepper_functional_focus: bool,
+    /// Show only the highlighted result of each reduction.
+    pub stepper_after_only: bool,
     pub racket_path: Option<String>,
     /// Pause a running program that uses more memory than this and ask whether to keep going
     /// (DrRacket's memory limit); `None` for no limit.
@@ -146,6 +148,7 @@ impl Default for Settings {
             stepper_count_finish: true,
             stepper_include_tests: true,
             stepper_functional_focus: false,
+            stepper_after_only: false,
             racket_path: None,
             memory_limit_mb: Some(256),
             shell: None,
@@ -333,8 +336,10 @@ mod stepper_settings_tests {
         let mut settings: Settings = serde_json::from_str("{}").unwrap();
         assert!(settings.stepper_include_tests);
         assert!(!settings.stepper_functional_focus);
+        assert!(!settings.stepper_after_only);
         settings.stepper_include_tests = false;
         settings.stepper_functional_focus = true;
+        settings.stepper_after_only = true;
         let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
         assert_eq!(restored, settings);
     }

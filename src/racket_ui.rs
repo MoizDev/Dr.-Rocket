@@ -2003,7 +2003,8 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     };
     let before_bg = with_alpha(theme.syntax.function.color, 55);
     let after_bg = with_alpha(theme.syntax.string.color, 55);
-    let side_by_side = body.width() > 760.0;
+    let after_only = app.settings.stepper_after_only;
+    let side_by_side = !after_only && body.width() > 760.0;
     egui::ScrollArea::vertical().id_salt("stepper-scroll").auto_shrink([false, false]).show(&mut child, |ui| {
         let w = ui.available_width();
         let col_w = if side_by_side { (w - 36.0) / 2.0 } else { w };
@@ -2048,7 +2049,10 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 let kind = if s.kind == "user-application" { "function application" } else { "reduction" };
                 ui.label(egui::RichText::new(kind).font(ui::ui_font(12.0)).color(theme.text_placeholder));
                 ui.add_space(4.0);
-                if side_by_side {
+                if after_only {
+                    header(ui, "AFTER", theme.syntax.string.color);
+                    expr_block(ui, &s.after, after_bg, col_w);
+                } else if side_by_side {
                     ui.horizontal_top(|ui| {
                         ui.vertical(|ui| {
                             header(ui, "BEFORE", theme.syntax.function.color);
@@ -2076,7 +2080,7 @@ fn stepper_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 }
             }
             StepItem::Error { before, message, .. } => {
-                header(ui, "BEFORE", theme.syntax.function.color);
+                header(ui, "EXPRESSION THAT FAILED", theme.syntax.function.color);
                 expr_block(ui, before, before_bg, col_w);
                 ui.add_space(6.0);
                 egui::Frame::NONE.fill(theme.error_bg).corner_radius(CornerRadius::same(8)).inner_margin(egui::Margin::symmetric(12, 9)).show(ui, |ui| {
