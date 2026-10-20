@@ -644,6 +644,9 @@ impl App {
         row(ui, &theme, "Count the stepper's finish screen", "Number steps like DrRacket: the final \"successfully evaluated\" screen is a step of its own", |ui| {
             toggle(ui, &theme, &mut s.stepper_count_finish);
         });
+        row(ui, &theme, "Include tests in the stepper", "Step through check-expect and other test checks. Restart the stepper after changing this", |ui| {
+            toggle(ui, &theme, &mut s.stepper_include_tests);
+        });
         row(ui, &theme, "Memory limit", "Pause a program that uses more than this and ask whether to keep going", |ui| {
             let label = |m: Option<u64>| m.map_or("No limit".to_string(), crate::racket_ui::mb_text);
             egui::ComboBox::from_id_salt("memory-limit").width(120.0).selected_text(label(s.memory_limit_mb)).show_ui(ui, |ui| {

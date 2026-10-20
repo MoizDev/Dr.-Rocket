@@ -1094,3 +1094,25 @@ fn visualizer_shows_closures_with_what_they_capture() {
     assert_eq!(names[0], "i");
     assert!(names.contains(&"k") && names.contains(&"start") && !names.contains(&"go"), "{names:?}");
 }
+
+#[test]
+fn stepper_can_disable_test_execution() {
+    let b = need_racket!();
+    let source = "#lang htdp/bsl\n(define (f x) (+ x 1))\n(check-expect (f 2) 3)\n(check-within (f 3) 4 0.1)\n(f 5)\n";
+    for include in [true, false] {
+        let mut settings = Language::Beginner.default_settings().stepper_json();
+        settings["include_tests"] = include.into();
+        let request = StepRequest {
+            path: None, source: source.into(), level: "module".into(), settings,
+            teachpacks: vec![], width: 60, images: Default::default(),
+        };
+        let events = step_until(&StepperSession::start(b, &request).unwrap());
+        let steps: Vec<_> = events.iter().filter_map(|e| if let StepperEvent::Step(s) = e { Some(s) } else { None }).collect();
+        assert!(!events.iter().any(|e| matches!(e, StepperEvent::Error { .. } | StepperEvent::StepError { .. })), "{events:#?}");
+        assert!(steps.iter().any(|s| s.after.iter().any(|e| e.text == "6")));
+        for check in ["check-expect", "check-within"] {
+            assert_eq!(steps.iter().any(|s| s.before.iter().chain(&s.after).any(|e| e.text.contains(check))), include, "{events:#?}");
+        }
+        if !include { assert_eq!(steps.len(), 2); }
+    }
+}

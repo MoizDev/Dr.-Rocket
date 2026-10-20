@@ -1014,12 +1014,14 @@ fn start_stepper(app: &mut App, i: usize) {
         return;
     };
     let width = 60;
+    let mut settings = tab.lang_settings.stepper_json();
+    settings["include_tests"] = app.settings.stepper_include_tests.into();
     let req = StepRequest {
         path: tab.path.clone(),
         images: tab.editor.doc.images.for_text(&body),
         source: body,
         level: level.to_string(),
-        settings: tab.lang_settings.stepper_json(),
+        settings,
         teachpacks: tab.lang_settings.teachpacks.clone(),
         width,
     };

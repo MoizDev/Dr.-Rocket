@@ -180,6 +180,7 @@
          (emit (hasheq 'ev "finished" 'count step-count))]
         [_ (void)]))
     (define port (open-source-port source (decode-source-images (hash-ref cmd-images 'images #f))))
+    ((dynamic-require 'test-engine/racket-tests 'test-execute) (setting settings 'include_tests #t))
     (port-count-lines! port)
     (define next
       (expand-teaching-program port
