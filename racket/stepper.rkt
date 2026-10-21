@@ -7,6 +7,7 @@
          racket/async-channel
          racket/port
          racket/pretty
+         racket/list
          racket/string
          mzlib/pconvert
          stepper/private/model
@@ -96,6 +97,8 @@
                   (let-values ([(base name dir?) (split-path source-name)]) (if (path? base) base (current-directory)))
                   (current-directory)))
   (define ns (make-base-namespace))
+  ;; Embedded image snips must use the same class instance as the source-port helpers.
+  (namespace-attach-module (variable-reference->namespace (#%variable-reference)) 'racket/class ns)
   (define sdp? (sdp-level-info? info))
   (define rt-settings
     (and (not sdp?) (apply sl-runtime-settings (htdp-runtime-settings-args info settings))))
@@ -108,6 +111,17 @@
                  [read-case-sensitive (setting settings 'case_sensitive (not sdp?))]
                  [read-accept-quasiquote (level-info-accept-quasiquote? info)]
                  [read-decimal-as-inexact #f])
+    (define images (decode-source-images (hash-ref cmd-images 'images #f)))
+    (define port (open-source-port source images))
+    (port-count-lines! port)
+    (define selection (setting settings 'selection #f))
+    (define-values (reader context-names)
+      (if selection
+          (selection-reader source source-name port images selection)
+          (values read-syntax '())))
+    (define (visible-exps exps)
+      (if (null? context-names) exps
+          (filter (λ (s) (not (member (definition-name (sstx-s s)) context-names))) exps)))
     (define render-value/format
       (cond
         [sdp?
@@ -153,48 +167,149 @@
           (hasheq 'pos (adjust-pos source-name (Posn-Info-posn p))
                   'span (or (Posn-Info-span p) 0))
           (json-null)))
+    (define (emit-step r)
+      (match-define (Before-After-Result pre post kind pre-src post-src) r)
+      (reset-step-images!)
+      (define before (render-exps pre))
+      (define after (render-exps post))
+      (emit (hasheq 'ev "step" 'index step-count 'kind (format "~a" kind)
+                    'images step-images 'before before 'after after
+                    'before_src (posn-info->jsexpr pre-src)
+                    'after_src (posn-info->jsexpr post-src)))
+      (set! step-count (add1 step-count))
+      (when (zero? (modulo step-count steps-per-batch))
+        (emit (hasheq 'ev "paused" 'count step-count))
+        (semaphore-wait more-sema)))
+    ;; Look ahead to the next call; retain the final call's ordinary reductions.
+    (define pending '())
+    (define (flush-pending!)
+      (for-each emit-step (reverse pending))
+      (set! pending '()))
+    (define (trace-step r)
+      (match-define (Before-After-Result pre post kind pre-src post-src) r)
+      (when (and (pair? pending)
+                 (not (equal? (map (λ (s) (syntax->datum (sstx-s s))) pre)
+                              (map (λ (s) (syntax->datum (sstx-s s)))
+                                   (Before-After-Result-post-exps (car pending))))))
+        (flush-pending!))
+      (cond
+        [(eq? kind 'user-application)
+         (when (pair? pending)
+           (define first (last pending))
+           (emit-step (Before-After-Result (Before-After-Result-pre-exps first) pre
+                                          'user-application (Before-After-Result-pre-src first) pre-src)))
+         (set! pending (list r))]
+        [(pair? pending)
+         (set! pending (cons r pending))
+         ;; Bound lookahead so long non-recursive computations still stream and pause.
+         (when (>= (length pending) steps-per-batch) (flush-pending!))]
+        [else (emit-step r)]))
     (define (receive-result r)
       (match r
         [(Before-After-Result pre post kind pre-src post-src)
-         (reset-step-images!)
-         (define before (render-exps pre))
-         (define after (render-exps post))
-         (emit (hasheq 'ev "step" 'index step-count 'kind (format "~a" kind)
-                       'images step-images
-                       'before before 'after after
-                       'before_src (posn-info->jsexpr pre-src)
-                       'after_src (posn-info->jsexpr post-src)))
-         (set! step-count (add1 step-count))
-         (when (zero? (modulo step-count steps-per-batch))
-           (emit (hasheq 'ev "paused" 'count step-count))
-           (semaphore-wait more-sema))]
+         (define visible-pre (visible-exps pre))
+         (define visible-post (visible-exps post))
+         (unless (and selection
+                      (or (and (null? visible-pre) (null? visible-post))
+                          (and (pair? context-names)
+                               (ormap (λ (s) (and (member (definition-name (sstx-s s)) context-names)
+                                                  (pair? (highlighted-exps (sstx-s s))))) pre))))
+           (define visible (Before-After-Result visible-pre visible-post kind pre-src post-src))
+           (if (setting settings 'functional_focus #f) (trace-step visible) (emit-step visible)))]
         [(Before-Error-Result pre msg pre-src)
+         (flush-pending!)
          (reset-step-images!)
          (define before (render-exps pre))
          (emit (hasheq 'ev "step-error" 'index step-count 'images step-images 'before before
                        'message msg 'before_src (posn-info->jsexpr pre-src)))
          (set! step-count (add1 step-count))]
         [(Error-Result msg)
+         (flush-pending!)
          (emit (hasheq 'ev "error" 'message msg))]
         ['finished-stepping
+         (flush-pending!)
          (emit (hasheq 'ev "finished" 'count step-count))]
         [_ (void)]))
-    (define port (open-source-port source (decode-source-images (hash-ref cmd-images 'images #f))))
-    (port-count-lines! port)
+    ((dynamic-require 'test-engine/racket-tests 'test-execute) (setting settings 'include_tests #t))
     (define next
       (expand-teaching-program port
-                               (λ (src p) (read-syntax src p))
+                               reader
                                (level-info-module info)
                                teachpacks))
-    (go (λ (init iter)
-          (init)
-          (error-value->string-handler
-           (λ (v len) (truncate-string (render-to-string v) len)))
-          (current-print void)
-          (let loop () (iter (next) loop)))
-        void
-        receive-result
-        render-settings)))
+    (with-handlers ([exn:fail? (λ (e) (flush-pending!) (raise e))])
+      (go (λ (init iter)
+            (init)
+            (error-value->string-handler
+             (λ (v len) (truncate-string (render-to-string v) len)))
+            (current-print void)
+            (let loop () (iter (next) loop)))
+          void
+          receive-result
+          render-settings))))
+
+(define (definition-name stx)
+  (define name
+    (match (syntax->datum stx)
+      [(list 'define (cons name _) _ ...) name]
+      [(list (or 'define 'define-struct) name _ ...) name]
+      [_ #f]))
+  ;; The stepper can reconstruct function names as uninterned symbols.
+  (and (symbol? name) (symbol->string name)))
+
+;; Parse with Racket's reader and keep original source locations, including embedded images.
+(define (selection-reader source source-name port images selection)
+  (match-define (list start end)
+    (match selection
+      [(list (? exact-nonnegative-integer? a) (? exact-nonnegative-integer? z))
+       #:when (< a z (add1 (string-length source))) selection]
+      [_ (error 'stepper "Select a nonempty range of complete expressions.")]))
+  (define (read-all p)
+    (parameterize ([read-accept-lang #f])
+      (for/list ([s (in-port (λ (p) (read-syntax source-name p)) p)]) s)))
+  (define forms (read-all port))
+  (define selected-port (open-source-port (substring source start end) images))
+  (port-count-lines! selected-port)
+  (define location-port (open-input-string source))
+  (port-count-lines! location-port)
+  (read-string start location-port)
+  (define-values (line column position) (port-next-location location-port))
+  (set-port-next-location! selected-port line column position)
+  (define selected (read-all selected-port))
+  (when (null? selected)
+    (error 'stepper "The selection contains no expressions."))
+  ;; A readable substring can still cut through a token, string, or comment.
+  (define spans (make-hash))
+  (define (collect v)
+    (cond [(syntax? v)
+           (hash-set! spans (cons (syntax-position v) (syntax-span v)) #t)
+           (collect (syntax-e v))]
+          [(pair? v) (collect (car v)) (collect (cdr v))]))
+  (for-each collect forms)
+  (unless (andmap (λ (s) (hash-ref spans (cons (syntax-position s) (syntax-span s)) #f)) selected)
+    (error 'stepper "Select complete expressions, without cutting through a token or comment."))
+  (define (inside? s)
+    (define pos (sub1 (syntax-position s)))
+    (and (<= start pos) (<= (+ pos (syntax-span s)) end)))
+  (define context
+    (filter (λ (s)
+              (define parts (syntax->list s))
+              (and parts (pair? parts)
+                   (memq (syntax-e (car parts)) '(define define-struct require :))
+                   (not (inside? s))))
+            forms))
+  (define remaining (sort (append context selected) < #:key syntax-position))
+  (values (λ (_src _port)
+            (if (null? remaining) eof
+                (begin0 (car remaining) (set! remaining (cdr remaining)))))
+          (filter values (map definition-name context))))
+
+;; Locate active reductions when filtering context definitions for selection stepping.
+(define (highlighted-exps v)
+  (cond
+    [(and (syntax? v) (stepper-syntax-property v 'stepper-highlight)) (list (sstx v))]
+    [(syntax? v) (highlighted-exps (syntax-e v))]
+    [(pair? v) (append (highlighted-exps (car v)) (highlighted-exps (cdr v)))]
+    [else '()]))
 
 (define (blank-lang-line source)
   (define m (regexp-match-positions #px"#lang\\s+\\S+" source))
