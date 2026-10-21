@@ -93,6 +93,14 @@ pub struct Settings {
     /// Count the stepper's closing "All of the definitions have been successfully evaluated"
     /// screen as a step, as DrRacket does ("9/9" rather than "8 of 8" plus a note).
     pub stepper_count_finish: bool,
+    /// Execute and show check-expect and the other test-engine checks while stepping.
+    pub stepper_include_tests: bool,
+    /// Collapse reductions between function calls, keeping context and final reductions.
+    pub stepper_functional_focus: bool,
+    /// Show only the highlighted result of each reduction.
+    pub stepper_after_only: bool,
+    /// Step selected expressions using the program definitions as context.
+    pub stepper_selection_only: bool,
     pub racket_path: Option<String>,
     /// Pause a running program that uses more memory than this and ask whether to keep going
     /// (DrRacket's memory limit); `None` for no limit.
@@ -140,6 +148,10 @@ impl Default for Settings {
             show_binding_arrows: false,
             auto_complete: false,
             stepper_count_finish: true,
+            stepper_include_tests: true,
+            stepper_functional_focus: false,
+            stepper_after_only: false,
+            stepper_selection_only: false,
             racket_path: None,
             memory_limit_mb: Some(256),
             shell: None,
@@ -316,4 +328,24 @@ pub fn tildify(p: &Path) -> String {
         return format!("~/{}", rest.display());
     }
     p.display().to_string()
+}
+
+#[cfg(test)]
+mod stepper_settings_tests {
+    use super::Settings;
+
+    #[test]
+    fn stepper_options_default_and_round_trip() {
+        let mut settings: Settings = serde_json::from_str("{}").unwrap();
+        assert!(settings.stepper_include_tests);
+        assert!(!settings.stepper_functional_focus);
+        assert!(!settings.stepper_after_only);
+        assert!(!settings.stepper_selection_only);
+        settings.stepper_include_tests = false;
+        settings.stepper_functional_focus = true;
+        settings.stepper_after_only = true;
+        settings.stepper_selection_only = true;
+        let restored: Settings = serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(restored, settings);
+    }
 }

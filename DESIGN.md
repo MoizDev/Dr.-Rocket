@@ -92,7 +92,8 @@ IDE -> {"cmd":"step","path":..,"source":"<buffer text without header>","level":"
         "beginner-abbr"|"intermediate"|"intermediate-lambda"|"advanced"|"sdp-beginner"|
         "sdp-vanilla"|"module",          ; "module": a `#lang htdp/bsl|bsl+|isl|isl+` buffer
         "settings":{"printing_style","fraction_style","show_sharing","insert_newlines",
-                    "case_sensitive","true_false_empty_as_ids","writing_style"},
+                    "case_sensitive","true_false_empty_as_ids","writing_style","include_tests",
+                    "functional_focus","selection"},
         "teachpacks":["(lib \"image.rkt\" \"teachpack\" \"2htdp\")",...],"width":72}
 IDE -> {"cmd":"more"}                       ; after a "paused" event
 <- {"ev":"step","index":i,"kind":"normal"|"user-application"|...,
@@ -105,6 +106,29 @@ IDE -> {"cmd":"more"}                       ; after a "paused" event
 <- {"ev":"finished","count":n}
 ```
 Highlight ranges are 0-based char offsets into that expression's `text`.
+`include_tests` defaults to true; false disables test execution for this stepper session.
+The option is saved in Settings → Racket and takes effect when stepping starts/restarts.
+`functional_focus` defaults to false (the persisted key is retained for compatibility).
+The Functional step trace setting collapses reductions between successive user-function calls,
+keeping the surrounding expression and evaluated call arguments. The final call and its
+remaining ordinary reductions, including conditionals and unwinding, stay visible. Separate
+top-level expressions and errors flush the pending trace. Lookahead is capped at 500 reductions;
+longer stretches stream normally to preserve bounded buffering and pause/resume behavior.
+Full stepping is unchanged when disabled.
+The UI also persists `stepper_after_only` (default false). It switches the existing trace
+between before/after and after-only without rerunning code; after highlights and inline
+images are retained. Failed steps always show the expression that failed.
+
+`stepper_selection_only` defaults to false. When enabled, the IDE sends `selection: [start, end]`
+in settings (0-based character offsets, end exclusive). Racket validates complete expressions
+and preserves their source locations. Unselected top-level `define`, `define-struct`, `require`,
+and signature declarations provide context; other expressions and tests are excluded. Context
+definitions initialize but their reductions are hidden. Initialization errors remain visible.
+Selected calls still step into their function bodies. A selected subexpression runs on its own,
+so local variables require selecting the enclosing function call instead. An empty, partial-token,
+or multiple-cursor selection is rejected. Starting/restarting uses the current selection; the
+buffer is never rewritten. The include-tests and functional-focus settings apply to selection
+stepping too.
 
 ### server
 

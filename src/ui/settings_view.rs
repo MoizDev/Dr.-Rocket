@@ -644,6 +644,21 @@ impl App {
         row(ui, &theme, "Count the stepper's finish screen", "Number steps like DrRacket: the final \"successfully evaluated\" screen is a step of its own", |ui| {
             toggle(ui, &theme, &mut s.stepper_count_finish);
         });
+        row(ui, &theme, "Include tests in the stepper", "Step through check-expect and other test checks. Restart the stepper after changing this", |ui| {
+            toggle(ui, &theme, &mut s.stepper_include_tests);
+        });
+        row(ui, &theme, "Functional step trace", "Show successive function calls with their surrounding expression, then the final reductions. Restart to apply", |ui| {
+            toggle(ui, &theme, &mut s.stepper_functional_focus);
+        });
+        row(ui, &theme, "Stepper view", "Changes apply immediately; the result of each reduction stays highlighted", |ui| {
+            egui::ComboBox::from_id_salt("stepper-view").width(150.0).selected_text(if s.stepper_after_only { "After only" } else { "Before and after" }).show_ui(ui, |ui| {
+                ui.selectable_value(&mut s.stepper_after_only, false, "Before and after");
+                ui.selectable_value(&mut s.stepper_after_only, true, "After only");
+            });
+        });
+        row(ui, &theme, "Step selection only", "Select complete expressions before starting. Global definitions initialize as context; local variables need a function call", |ui| {
+            toggle(ui, &theme, &mut s.stepper_selection_only);
+        });
         row(ui, &theme, "Memory limit", "Pause a program that uses more than this and ask whether to keep going", |ui| {
             let label = |m: Option<u64>| m.map_or("No limit".to_string(), crate::racket_ui::mb_text);
             egui::ComboBox::from_id_salt("memory-limit").width(120.0).selected_text(label(s.memory_limit_mb)).show_ui(ui, |ui| {
