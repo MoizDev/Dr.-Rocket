@@ -156,6 +156,17 @@ impl Workspace {
         self.rows_cache = None;
     }
 
+    /// Keep the folders that were open under `from` open at their new place, `to`.
+    pub fn path_moved(&mut self, from: &Path, to: &Path) {
+        let moved: Vec<PathBuf> = self.expanded.iter().filter(|p| p.starts_with(from)).cloned().collect();
+        for p in moved {
+            self.expanded.remove(&p);
+            let rest = p.strip_prefix(from).unwrap_or(Path::new(""));
+            self.expanded.insert(if rest.as_os_str().is_empty() { to.to_path_buf() } else { to.join(rest) });
+        }
+        self.rows_cache = None;
+    }
+
     pub fn collapse_all(&mut self) {
         self.expanded.clear();
         self.expanded.insert(self.root.clone());

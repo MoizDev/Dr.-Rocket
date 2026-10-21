@@ -1182,6 +1182,23 @@ impl App {
         }
     }
 
+    /// A file or folder was renamed or moved on disk: open tabs, remembered zooms and open
+    /// folders in the tree follow it to `to`.
+    pub fn path_moved(&mut self, from: &Path, to: &Path) {
+        let follow = |p: &Path| p.strip_prefix(from).ok().map(|rest| if rest.as_os_str().is_empty() { to.to_path_buf() } else { to.join(rest) });
+        for t in self.tabs.iter_mut() {
+            if let Some(np) = t.path.as_deref().and_then(follow) {
+                t.path = Some(np);
+            }
+        }
+        let zooms = std::mem::take(&mut self.file_zooms);
+        self.file_zooms = zooms.into_iter().map(|(p, z)| (follow(&p).unwrap_or(p), z)).collect();
+        if let Some(ws) = &mut self.workspace {
+            ws.path_moved(from, to);
+        }
+        self.refresh_tree();
+    }
+
     /// Open a terminal whose working directory is `dir`.
     pub fn terminal_at(&mut self, dir: &Path, dock: Dock) {
         match crate::terminal::TerminalView::spawn(dir, self.settings.shell.as_deref(), &self.ctx) {

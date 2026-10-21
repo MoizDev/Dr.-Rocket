@@ -32,8 +32,6 @@ pub enum Step {
     DoubleClick([f32; 2]),
     RightClick([f32; 2]),
     Hover([f32; 2]),
-    /// Press or release the primary button at a point, each in its own frame (`click` does
-    /// both in one).
     /// Show this step of the visualizer in the active tab.
     #[serde(rename = "show_viz_step")]
     VizGoto(usize),
@@ -41,6 +39,8 @@ pub enum Step {
     VizPlay(bool),
     /// Width of the right-hand panel, in points.
     RightPanelWidth(f32),
+    /// Press or release the primary button at a point, each in its own frame (`click` does
+    /// both in one).
     MouseDown([f32; 2]),
     MouseUp([f32; 2]),
     /// Press at the first point, move to the second over several frames, release.

@@ -197,16 +197,7 @@ impl App {
                     let Some(parent) = path.parent() else { return };
                     let to = parent.join(name);
                     match std::fs::rename(&path, &to) {
-                        Ok(()) => {
-                            for t in self.tabs.iter_mut() {
-                                if let Some(tp) = &t.path
-                                    && let Ok(rest) = tp.strip_prefix(&path)
-                                {
-                                    t.path = Some(if rest.as_os_str().is_empty() { to.clone() } else { to.join(rest) });
-                                }
-                            }
-                            self.refresh_tree();
-                        }
+                        Ok(()) => self.path_moved(&path, &to),
                         Err(e) => self.toast(format!("Rename failed: {e}"), crate::app::ToastKind::Error),
                     }
                 }

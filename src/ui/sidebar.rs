@@ -15,7 +15,25 @@ pub struct SidebarState {
     pub search_results: Vec<SearchHit>,
     search_key: String,
     pub focus_search: bool,
+    /// The closed folder a drag is resting on, and since when: it opens after a moment.
+    drag_hover: Option<(PathBuf, f64)>,
 }
+
+/// A file or folder being dragged in the Files tree.
+struct TreeDrag {
+    path: PathBuf,
+    name: String,
+    is_dir: bool,
+}
+
+/// Whether `item` can be moved into the folder `dir`: not into itself or a folder inside it,
+/// and not where it already is.
+fn can_move(item: &std::path::Path, dir: &std::path::Path) -> bool {
+    !dir.starts_with(item) && item.parent() != Some(dir)
+}
+
+/// How long a drag rests on a closed folder before it opens.
+const DRAG_OPEN_DELAY: f64 = 0.6;
 
 /// The menu for the project itself (its header, and the empty space below the files).
 fn root_menu(ui: &mut Ui, root: &std::path::Path, action: &mut Option<TreeAction>) {
@@ -46,6 +64,8 @@ enum TreeAction {
     Trash(PathBuf),
     CopyRelative(PathBuf),
     Terminal(PathBuf),
+    /// Move the first path into the folder that is the second.
+    Move(PathBuf, PathBuf),
 }
 
 #[derive(Clone)]
@@ -92,6 +112,29 @@ impl App {
         self.modal = crate::app::Modal::Prompt(crate::ui::language_dialog::Prompt::new_folder(dir));
     }
 
+    /// Move a file or folder into another folder of the project (dragged there in the tree).
+    fn move_into(&mut self, from: &std::path::Path, dir: &std::path::Path) {
+        let Some(name) = from.file_name() else { return };
+        if !can_move(from, dir) {
+            return;
+        }
+        let to = dir.join(name);
+        let shown = |p: &std::path::Path| p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| p.display().to_string());
+        if to.symlink_metadata().is_ok() {
+            self.toast(format!("There's already a “{}” in “{}”", shown(from), shown(dir)), crate::app::ToastKind::Error);
+            return;
+        }
+        match std::fs::rename(from, &to) {
+            Ok(()) => {
+                self.path_moved(from, &to);
+                if let Some(ws) = &mut self.workspace {
+                    ws.expand_to(&to);
+                }
+            }
+            Err(e) => self.toast(format!("Could not move “{}”: {e}", shown(from)), crate::app::ToastKind::Error),
+        }
+    }
+
     pub(crate) fn files_view(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
         let tk = self.tokens();
@@ -121,13 +164,33 @@ impl App {
         let spacing = ui.spacing().item_spacing.y;
         ui.spacing_mut().item_spacing.y = 0.0;
         header.context_menu(|ui| root_menu(ui, &root, &mut action));
+        let ctx = ui.ctx().clone();
+        let drag = egui::DragAndDrop::payload::<TreeDrag>(&ctx);
+        let pointer = ctx.pointer_hover_pos();
+        // The row under the pointer while dragging, and where each visible row is.
+        let mut drag_over: Option<usize> = None;
+        let mut row_rects: Vec<(usize, Rect)> = Vec::new();
         let scrolled = egui::ScrollArea::vertical().id_salt("files").auto_shrink([false, false]).show_rows(ui, FILE_ROW_H, rows.len(), |ui, range| {
-            for row in &rows[range] {
-                let (r, resp) = ui.allocate_exact_size(vec2(width, FILE_ROW_H), Sense::click());
+            let first = range.start;
+            for (k, row) in rows[range].iter().enumerate() {
+                // Rows are known by their path, not their place: opening a folder mid-drag
+                // shifts the rows below it, and the drag must stay with its item.
+                let (r, _) = ui.allocate_exact_size(vec2(width, FILE_ROW_H), Sense::hover());
+                let resp = ui.interact(r, ui.scope_id().with(&row.entry.path), Sense::click_and_drag());
+                row_rects.push((first + k, r));
+                if resp.drag_started() {
+                    egui::DragAndDrop::set_payload(&ctx, TreeDrag { path: row.entry.path.clone(), name: row.entry.name.clone(), is_dir: row.entry.is_dir });
+                }
+                if drag.is_some() && resp.contains_pointer() {
+                    drag_over = Some(first + k);
+                }
+                // The item being dragged stays in place, faded.
+                let lifted = drag.as_ref().is_some_and(|d| d.path == row.entry.path);
+                let fade = |c: egui::Color32| if lifted { c.gamma_multiply(0.45) } else { c };
                 let selected = active_path.as_ref() == Some(&row.entry.path);
                 if selected {
                     ui.painter().rect_filled(r, CornerRadius::same(6), tk.selected);
-                } else if resp.hovered() {
+                } else if resp.hovered() && drag.is_none() {
                     ui.painter().rect_filled(r, CornerRadius::same(6), tk.hover);
                 }
                 let indent = 8.0 + row.depth as f32 * 14.0;
@@ -139,17 +202,17 @@ impl App {
                 let mut x = r.left() + indent;
                 if row.entry.is_dir {
                     let chev = if row.expanded { ic::EXPAND_MORE } else { ic::CHEVRON_RIGHT };
-                    ui.painter().text(pos2(x + 7.0, r.center().y), Align2::CENTER_CENTER, chev, ui::icon_font(16.0), theme.icon_muted);
+                    ui.painter().text(pos2(x + 7.0, r.center().y), Align2::CENTER_CENTER, chev, ui::icon_font(16.0), fade(theme.icon_muted));
                 }
                 x += 16.0;
                 let icon = if row.entry.is_dir { file_icons::folder_icon(&row.entry.name, row.expanded) } else { file_icons::file_icon(&row.entry.name) };
-                file_icons::image(icon, 17.0).paint_at(ui, Rect::from_center_size(pos2(x + 8.5, r.center().y), vec2(17.0, 17.0)));
+                file_icons::image(icon, 17.0).tint(fade(egui::Color32::WHITE)).paint_at(ui, Rect::from_center_size(pos2(x + 8.5, r.center().y), vec2(17.0, 17.0)));
                 x += 22.0;
                 let is_dirty = dirty.contains(&row.entry.path);
                 let color = if selected { theme.text } else if is_dirty { theme.modified } else { crate::theme::mix(theme.text, theme.text_muted, 0.35) };
-                truncated_label(ui, pos2(x, r.center().y), &row.entry.name, ui::ui_font(13.5), color, r.right() - x - 14.0);
+                truncated_label(ui, pos2(x, r.center().y), &row.entry.name, ui::ui_font(13.5), fade(color), r.right() - x - 14.0);
                 if is_dirty {
-                    ui.painter().circle_filled(pos2(r.right() - 10.0, r.center().y), 3.0, theme.modified);
+                    ui.painter().circle_filled(pos2(r.right() - 10.0, r.center().y), 3.0, fade(theme.modified));
                 }
                 if resp.clicked() {
                     if row.entry.is_dir {
@@ -198,7 +261,92 @@ impl App {
                     }
                 });
             }
+            // Dragging near the top or bottom edge scrolls the tree, faster closer to the edge.
+            if drag.is_some()
+                && let Some(p) = pointer
+            {
+                let clip = ui.clip_rect();
+                const EDGE: f32 = 32.0;
+                if clip.x_range().contains(p.x) && clip.y_range().contains(p.y) {
+                    let pull = if p.y < clip.top() + EDGE {
+                        (clip.top() + EDGE - p.y) / EDGE
+                    } else if p.y > clip.bottom() - EDGE {
+                        -(p.y - (clip.bottom() - EDGE)) / EDGE
+                    } else {
+                        0.0
+                    };
+                    if pull != 0.0 {
+                        let dt = ui.input(|i| i.stable_dt).min(0.05);
+                        ui.scroll_with_delta(vec2(0.0, pull * 700.0 * dt));
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
         });
+        // Where a drag would drop: the folder under the pointer, the folder of the file under
+        // it, or the project itself (its header, and the space below the files).
+        let tree_rect = hr.union(scrolled.inner_rect);
+        let drop_dir = drag.as_ref().and_then(|_| {
+            let p = pointer?;
+            match drag_over {
+                Some(i) => {
+                    let e = &rows[i].entry;
+                    Some(if e.is_dir { e.path.clone() } else { e.path.parent()?.to_path_buf() })
+                }
+                None => tree_rect.contains(p).then(|| root.clone()),
+            }
+        });
+        let target = match (&drag, &drop_dir) {
+            (Some(d), Some(dir)) if can_move(&d.path, dir) => Some(dir.clone()),
+            _ => None,
+        };
+        if let Some(d) = &drag {
+            // Into itself: say no. Where it already is: nothing to show.
+            if drop_dir.as_ref().is_some_and(|dir| dir.starts_with(&d.path)) {
+                ctx.set_cursor_icon(egui::CursorIcon::NoDrop);
+            }
+            self.drag_ghost(&ctx, d);
+        }
+        // Outline the folder it would land in, with everything shown inside it.
+        if let Some(dir) = &target {
+            let tint = crate::theme::with_alpha(theme.text_accent, 22);
+            let edge = Stroke::new(1.0, crate::theme::with_alpha(theme.text_accent, 150));
+            let area = if *dir == root {
+                Some(tree_rect)
+            } else {
+                let at = rows.iter().position(|r| &r.entry.path == dir);
+                let span = at.map(|f| f..rows[f + 1..].iter().position(|r| r.depth <= rows[f].depth).map_or(rows.len(), |n| f + 1 + n));
+                span.and_then(|span| row_rects.iter().filter(|(i, _)| span.contains(i)).map(|(_, r)| *r).reduce(|a, b| a.union(b)))
+            };
+            if let Some(a) = area {
+                let painter = ui.painter().with_clip_rect(tree_rect);
+                painter.rect(a, CornerRadius::same(6), tint, edge, egui::StrokeKind::Inside);
+            }
+        }
+        // Resting on a closed folder opens it.
+        let resting = target.as_ref().zip(drag_over).filter(|(dir, i)| rows[*i].entry.path == **dir && rows[*i].entry.is_dir && !rows[*i].expanded).map(|(dir, _)| dir.clone());
+        let now = ctx.input(|i| i.time);
+        match (&resting, &self.sidebar.drag_hover) {
+            (Some(dir), Some((was, since))) if dir == was => {
+                if now - since >= DRAG_OPEN_DELAY {
+                    toggle = Some(dir.clone());
+                    self.sidebar.drag_hover = None;
+                } else {
+                    ctx.request_repaint_after(std::time::Duration::from_secs_f64(DRAG_OPEN_DELAY - (now - since)));
+                }
+            }
+            (Some(dir), _) => {
+                self.sidebar.drag_hover = Some((dir.clone(), now));
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(DRAG_OPEN_DELAY));
+            }
+            (None, _) => self.sidebar.drag_hover = None,
+        }
+        if let (Some(d), Some(dir)) = (&drag, &target)
+            && ctx.input(|i| i.pointer.primary_released())
+        {
+            action = Some(TreeAction::Move(d.path.clone(), dir.clone()));
+            toggle = None;
+        }
         // The space below the last row: right-click to add things at the top of the project.
         let below = scrolled.inner_rect.top() + scrolled.content_size.y - scrolled.state.clamped_offset().y;
         if below < scrolled.inner_rect.bottom() - 4.0 {
@@ -231,8 +379,27 @@ impl App {
                 ui.ctx().copy_text(rel.display().to_string());
             }
             Some(TreeAction::Terminal(d)) => self.terminal_at(&d, crate::app::Dock::Bottom),
+            Some(TreeAction::Move(from, dir)) => self.move_into(&from, &dir),
             None => {}
         }
+    }
+
+    /// What follows the pointer while dragging in the tree: the item's icon and name.
+    fn drag_ghost(&self, ctx: &egui::Context, d: &TreeDrag) {
+        let Some(p) = ctx.pointer_hover_pos() else { return };
+        let theme = &self.theme;
+        let tk = self.tokens();
+        egui::Area::new(Id::unique("tree-drag-ghost")).order(egui::Order::Tooltip).fixed_pos(p + vec2(14.0, 10.0)).interactable(false).show(ctx, |ui| {
+            let font = ui::ui_font(13.0);
+            let text_w = ui.painter().layout_no_wrap(d.name.clone(), font.clone(), theme.text).size().x.min(220.0);
+            let (r, _) = ui.allocate_exact_size(vec2(text_w + 46.0, 26.0), Sense::hover());
+            ui.painter().add(egui::epaint::Shadow { offset: [0, 3], blur: 10, spread: 0, color: tk.shadow }.as_shape(r, CornerRadius::same(7)));
+            ui.painter().rect_filled(r, CornerRadius::same(7), tk.popup);
+            ui.painter().rect_stroke(r, CornerRadius::same(7), Stroke::new(1.0, tk.subtle_border), egui::StrokeKind::Inside);
+            let icon = if d.is_dir { file_icons::folder_icon(&d.name, false) } else { file_icons::file_icon(&d.name) };
+            file_icons::image(icon, 16.0).paint_at(ui, Rect::from_center_size(pos2(r.left() + 18.0, r.center().y), vec2(16.0, 16.0)));
+            truncated_label(ui, pos2(r.left() + 34.0, r.center().y), &d.name, font, theme.text, text_w);
+        });
     }
 
     pub(crate) fn outline_view(&mut self, ui: &mut Ui) {
@@ -395,5 +562,26 @@ impl App {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_move;
+    use std::path::Path;
+
+    #[test]
+    fn where_a_dragged_item_can_go() {
+        let p = Path::new;
+        assert!(can_move(p("/proj/a.rkt"), p("/proj/sub")));
+        assert!(can_move(p("/proj/sub/a.rkt"), p("/proj")));
+        assert!(can_move(p("/proj/sub"), p("/proj/other/deep")));
+        // Where it already is.
+        assert!(!can_move(p("/proj/a.rkt"), p("/proj")));
+        // A folder into itself, or into a folder inside it.
+        assert!(!can_move(p("/proj/sub"), p("/proj/sub")));
+        assert!(!can_move(p("/proj/sub"), p("/proj/sub/inner")));
+        // A name that only starts the same is a different folder.
+        assert!(can_move(p("/proj/sub"), p("/proj/subway")));
     }
 }
