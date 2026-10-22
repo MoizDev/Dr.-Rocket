@@ -28,7 +28,7 @@ mod workspace;
 use std::path::PathBuf;
 
 fn main() -> eframe::Result {
-    // Updates ask a downloaded copy for its version before installing it (update.rs).
+    // Report the version without starting the UI.
     if std::env::args().nth(1).as_deref() == Some("--version") {
         println!("{}", update::CURRENT);
         return Ok(());

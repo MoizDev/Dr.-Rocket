@@ -3,7 +3,7 @@
 use super::protocol::*;
 use super::transport::Process;
 use super::Backend;
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, bounded};
 use std::path::PathBuf;
 
 /// What to step.
@@ -36,7 +36,7 @@ pub struct StepperSession {
 impl StepperSession {
     pub fn start(backend: &Backend, request: &StepRequest) -> std::io::Result<StepperSession> {
         let cwd = request.path.as_deref().and_then(|p| p.parent());
-        let (tx, events) = unbounded();
+        let (tx, events) = bounded(super::transport::QUEUE_CAPACITY);
         let mut process = Process::spawn(
             backend.command("stepper.rkt", cwd),
             tx,
@@ -66,7 +66,9 @@ impl StepperSession {
     }
 
     pub fn drain(&self) -> Vec<StepperEvent> {
-        self.events.try_iter().collect()
+        let events = self.events.try_iter().take(super::transport::FRAME_EVENTS).collect();
+        if !self.events.is_empty() { self.process.repaint(); }
+        events
     }
 
     pub fn events(&self) -> &Receiver<StepperEvent> {

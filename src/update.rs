@@ -3,8 +3,9 @@
 //!
 //! The feed is `https://doctorocket.com/version.json` (website/app/version.json/route.ts):
 //! `{"version": "1.0.0-beta.5", "downloads": {"mac": {"url", "sha256", "size"}, ...}}`.
-//! A newer version is downloaded to `<cache>/update/`, checked against its SHA-256, unpacked, and
-//! asked for its `--version` before it counts as ready. On quit the app replaces itself:
+//! A newer version requires an Ed25519 signature from the key pinned at build time. Its
+//! archive is checked against the signed SHA-256, retained, and reverified before extraction.
+//! Downloaded programs are never executed to inspect their version. On quit the app replaces itself:
 //!
 //! - macOS: the whole `Dr. Rocket.app` bundle (from the DMG).
 //! - Windows and Linux: the executable (from the zip or tarball). A running exe can be renamed
@@ -19,7 +20,8 @@
 //! `file://`), for testing; it also enables checks in automation runs and development builds.
 
 use parking_lot::Mutex;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
+use base64::Engine;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
@@ -62,10 +64,12 @@ struct Feed {
     downloads: std::collections::HashMap<String, Asset>,
 }
 
-#[derive(Deserialize, Clone)]
+#[derive(Deserialize, Serialize, Clone)]
 struct Asset {
     url: String,
     sha256: String,
+    #[serde(default)]
+    signature: String,
 }
 
 /// What the app replaces when it updates.
@@ -224,6 +228,9 @@ fn check(s: &Shared) {
         Some(a) => a.clone(),
         None => return set(s, manual_only("The update for this system isn't ready to install automatically yet.".into())),
     };
+    if let Err(why) = verify_asset(&version, &asset) {
+        return set(s, manual_only(why));
+    }
     if let Err(why) = target() {
         return set(s, manual_only(why));
     }
@@ -263,47 +270,13 @@ fn fetch_feed() -> Result<Feed, String> {
 /// Whether version `a` comes after `b` (semver precedence: 1.0.0-beta.2 < 1.0.0-beta.10 < 1.0.0).
 pub fn newer(a: &str, b: &str) -> bool {
     match (parse(a), parse(b)) {
-        (Some(a), Some(b)) => cmp(&a, &b) == std::cmp::Ordering::Greater,
+        (Some(a), Some(b)) => a.cmp_precedence(&b) == std::cmp::Ordering::Greater,
         _ => false,
     }
 }
 
-type Version<'a> = ([u64; 3], Vec<&'a str>);
-
-fn parse(v: &str) -> Option<Version<'_>> {
-    let v = v.trim().trim_start_matches('v');
-    let v = v.split('+').next()?;
-    let (core, pre) = match v.split_once('-') {
-        Some((c, p)) => (c, p.split('.').collect()),
-        None => (v, Vec::new()),
-    };
-    let mut nums = core.split('.').map(|n| n.parse::<u64>().ok());
-    let out = [nums.next()??, nums.next()??, nums.next()??];
-    nums.next().is_none().then_some((out, pre))
-}
-
-fn cmp(a: &Version, b: &Version) -> std::cmp::Ordering {
-    use std::cmp::Ordering::*;
-    a.0.cmp(&b.0).then_with(|| match (a.1.is_empty(), b.1.is_empty()) {
-        (true, true) => Equal,
-        // A release comes after its prereleases.
-        (true, false) => Greater,
-        (false, true) => Less,
-        (false, false) => {
-            for (x, y) in a.1.iter().zip(&b.1) {
-                let o = match (x.parse::<u64>(), y.parse::<u64>()) {
-                    (Ok(x), Ok(y)) => x.cmp(&y),
-                    (Ok(_), Err(_)) => Less,
-                    (Err(_), Ok(_)) => Greater,
-                    (Err(_), Err(_)) => x.cmp(y),
-                };
-                if o != Equal {
-                    return o;
-                }
-            }
-            a.1.len().cmp(&b.1.len())
-        }
-    })
+fn parse(v: &str) -> Option<semver::Version> {
+    semver::Version::parse(v.strip_prefix('v').unwrap_or(v)).ok()
 }
 
 // ---- Where the app lives ----
@@ -346,8 +319,8 @@ fn is_dev_build(exe: &Path) -> bool {
 
 fn writable(dir: &Path) -> bool {
     let probe = dir.join(format!(".drrocket-update-{}", std::process::id()));
-    let ok = std::fs::write(&probe, b"").is_ok();
-    let _ = std::fs::remove_file(&probe);
+    let ok = std::fs::OpenOptions::new().write(true).create_new(true).open(&probe).is_ok();
+    if ok { let _ = std::fs::remove_file(&probe); }
     ok
 }
 
@@ -360,16 +333,70 @@ fn update_dir() -> PathBuf {
     }
 }
 
-fn staged_dir(version: &str) -> PathBuf {
-    update_dir().join(version)
+fn staged_dir(version: &str) -> Result<PathBuf, String> {
+    parse(version).ok_or("Invalid update version")?;
+    let dir = update_dir().join(version);
+    if std::fs::symlink_metadata(&dir).is_ok_and(|m| m.file_type().is_symlink()) {
+        return Err("Update folder must not be a symbolic link".into());
+    }
+    Ok(dir)
 }
 
-/// The unpacked app or executable for `version`, once verified.
+#[derive(Deserialize, Serialize)]
+struct Receipt {
+    version: String,
+    asset: Asset,
+}
+
+fn signature_message(version: &str, os: &str, asset: &Asset) -> String {
+    format!("drrocket-update-v1\n{version}\n{os}\n{}\n{}\n", asset.sha256, asset.url)
+}
+
+fn verify_with_key(version: &str, os: &str, asset: &Asset, key: &str) -> Result<(), String> {
+    parse(version).ok_or("Invalid signed version")?;
+    if asset.sha256.len() != 64 || !asset.sha256.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
+        || !asset.url.starts_with("https://") || asset.url.chars().any(|c| c.is_control()) {
+        return Err("Invalid signed update metadata".into());
+    }
+    let decode = |s: &str| base64::engine::general_purpose::STANDARD.decode(s).map_err(|_| "Invalid update signature encoding".to_string());
+    let key: [u8; 32] = decode(key)?.try_into().map_err(|_| "Invalid update public key")?;
+    let key = ed25519_dalek::VerifyingKey::from_bytes(&key).map_err(|_| "Invalid update public key")?;
+    let signature = ed25519_dalek::Signature::from_slice(&decode(&asset.signature)?).map_err(|_| "Invalid update signature")?;
+    key.verify_strict(signature_message(version, os, asset).as_bytes(), &signature).map_err(|_| "The update is not signed by the trusted release key".into())
+}
+
+fn verify_asset(version: &str, asset: &Asset) -> Result<(), String> {
+    let key = option_env!("DRROCKET_UPDATE_PUBLIC_KEY").filter(|s| !s.is_empty())
+        .ok_or("Automatic updates are disabled: this build has no trusted release key. Download the update manually.")?;
+    verify_with_key(version, OS, asset, key)
+}
+
+fn archive_name() -> &'static str {
+    match OS { "mac" => "update.dmg", "windows" => "update.zip", _ => "update.tar.gz" }
+}
+
+/// Recheck signatures and bytes on every launch and immediately before installing.
+fn verified_archive(version: &str) -> Result<PathBuf, String> {
+    let dir = staged_dir(version)?;
+    let receipt: Receipt = serde_json::from_slice(&std::fs::read(dir.join("receipt.json")).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
+    if receipt.version != version { return Err("Cached update version mismatch".into()); }
+    verify_asset(version, &receipt.asset)?;
+    let archive = dir.join(archive_name());
+    if std::fs::symlink_metadata(&archive).map_err(|e| e.to_string())?.file_type().is_symlink() {
+        return Err("Cached archive must not be a symbolic link".into());
+    }
+    if sha256(&archive).map_err(|e| e.to_string())? != receipt.asset.sha256 {
+        return Err("Cached update checksum mismatch".into());
+    }
+    Ok(archive)
+}
+
 fn staged_payload(version: &str) -> Result<PathBuf, String> {
-    let dir = staged_dir(version);
-    let name = std::fs::read_to_string(dir.join("ready")).map_err(|_| "The downloaded update is missing.".to_string())?;
-    let p = dir.join(name.trim());
-    if p.exists() { Ok(p) } else { Err("The downloaded update is missing.".into()) }
+    let archive = verified_archive(version)?;
+    let dir = staged_dir(version)?;
+    // Never install an extracted tree left by another run.
+    let _ = std::fs::remove_dir_all(dir.join("app"));
+    unpack(&archive, &dir)
 }
 
 /// A verified update left by an earlier run, if it's still newer than this one. Clears out
@@ -382,10 +409,11 @@ fn staged_version() -> Option<String> {
         if name == "failed" {
             continue;
         }
-        let keep = newer(&name, CURRENT) && staged_payload(&name).is_ok() && best.as_deref().is_none_or(|b| newer(&name, b));
+        let keep = newer(&name, CURRENT) && verified_archive(&name).is_ok() && best.as_deref().is_none_or(|b| newer(&name, b));
         if keep {
-            if let Some(old) = best.replace(name) {
-                let _ = std::fs::remove_dir_all(staged_dir(&old));
+            if let Some(old) = best.replace(name)
+                && let Ok(dir) = staged_dir(&old) {
+                let _ = std::fs::remove_dir_all(dir);
             }
         } else {
             let _ = if e.path().is_dir() { std::fs::remove_dir_all(e.path()) } else { std::fs::remove_file(e.path()) };
@@ -397,31 +425,17 @@ fn staged_version() -> Option<String> {
 // ---- Download and unpack ----
 
 fn download(version: &str, asset: &Asset) -> Result<(), String> {
-    let dir = staged_dir(version);
+    verify_asset(version, asset)?;
+    let dir = staged_dir(version)?;
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let file = dir.join(match OS {
-        "mac" => "update.dmg",
-        "windows" => "update.zip",
-        _ => "update.tar.gz",
-    });
+    let file = dir.join(archive_name());
     fetch(&asset.url, &file, Duration::from_secs(30 * 60))?;
-    let sum = sha256(&file).map_err(|e| e.to_string())?;
-    if !sum.eq_ignore_ascii_case(asset.sha256.trim()) {
-        return Err("the file didn't match its checksum".into());
+    if sha256(&file).map_err(|e| e.to_string())? != asset.sha256 {
+        return Err("the file didn't match its signed checksum".into());
     }
-    let payload = unpack(&file, &dir)?;
-    let _ = std::fs::remove_file(&file);
-    let exe = match OS {
-        "mac" => payload.join("Contents/MacOS/drrocket"),
-        _ => payload.clone(),
-    };
-    let reported = version_of(&exe)?;
-    if reported != version {
-        return Err(format!("the download is version {reported}, not {version}"));
-    }
-    let name = payload.strip_prefix(&dir).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join("ready"), name.to_string_lossy().as_bytes()).map_err(|e| e.to_string())
+    let receipt = Receipt { version: version.into(), asset: asset.clone() };
+    crate::config::atomic_write(&dir.join("receipt.json"), &serde_json::to_vec(&receipt).map_err(|e| e.to_string())?).map_err(|e| e.to_string())
 }
 
 /// Unpacks the download into `dir` and returns the app bundle or executable in it.
@@ -446,7 +460,6 @@ fn unpack(file: &Path, dir: &Path) -> Result<PathBuf, String> {
         let _ = run(Command::new("hdiutil").args(["detach", "-force"]).arg(&mnt));
         let _ = std::fs::remove_dir(&mnt);
         let app = copied?;
-        let _ = run(Command::new("xattr").args(["-dr", "com.apple.quarantine"]).arg(&app));
         Ok(app)
     } else {
         // Windows 10 and later ship bsdtar, which reads zips too.
@@ -466,25 +479,6 @@ fn find_file(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
         return None;
     }
     entries.iter().filter(|p| p.is_dir()).find_map(|p| find_file(p, name, depth - 1))
-}
-
-/// The version an executable reports with `--version` (it must answer within a few seconds).
-fn version_of(exe: &Path) -> Result<String, String> {
-    let mut child = tool(exe).arg("--version").stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().map_err(|e| format!("the new version won't start ({e})"))?;
-    let start = std::time::Instant::now();
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if start.elapsed() < Duration::from_secs(15) => std::thread::sleep(Duration::from_millis(50)),
-            _ => {
-                let _ = child.kill();
-                return Err("the new version didn't answer".into());
-            }
-        }
-    }
-    let mut out = String::new();
-    std::io::Read::read_to_string(&mut child.stdout.take().ok_or("no output")?, &mut out).map_err(|e| e.to_string())?;
-    Ok(out.trim().to_string())
 }
 
 /// Download `url` to `dest` with curl (or wget where there's no curl).
@@ -643,6 +637,41 @@ fn launch(t: &Target) -> bool {
 #[cfg(test)]
 mod tests {
     use super::newer;
+
+    #[test]
+    fn signatures_bind_version_platform_checksum_and_url() {
+        use base64::Engine;
+        use ed25519_dalek::Signer;
+        let key = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
+        let encode = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+        let public = encode(key.verifying_key().as_bytes());
+        let mut asset = super::Asset { url: "https://doctorocket.com/downloads/test.zip".into(), sha256: "a".repeat(64), signature: String::new() };
+        asset.signature = encode(&key.sign(super::signature_message("1.2.3", "windows", &asset).as_bytes()).to_bytes());
+        assert!(super::verify_with_key("1.2.3", "windows", &asset, &public).is_ok());
+        assert!(super::verify_with_key("1.2.4", "windows", &asset, &public).is_err());
+        assert!(super::verify_with_key("1.2.3", "linux", &asset, &public).is_err());
+        assert!(super::verify_with_key("1.2.3", "windows", &asset, "").is_err());
+        let other = ed25519_dalek::SigningKey::from_bytes(&[43; 32]);
+        assert!(super::verify_with_key("1.2.3", "windows", &asset, &encode(other.verifying_key().as_bytes())).is_err());
+        let mut changed = asset.clone();
+        changed.sha256 = "b".repeat(64);
+        assert!(super::verify_with_key("1.2.3", "windows", &changed, &public).is_err());
+        changed = asset.clone();
+        changed.url.push_str("?tampered");
+        assert!(super::verify_with_key("1.2.3", "windows", &changed, &public).is_err());
+        changed = asset;
+        changed.signature.clear();
+        assert!(super::verify_with_key("1.2.3", "windows", &changed, &public).is_err());
+    }
+
+    #[test]
+    fn reject_versions_and_payloads_that_escape_staging() {
+        for version in ["99.0.0-payload/../../outside", "99.0.0+../../outside", "99.0.0-..", "99.0.0-", "01.0.0", "99.0.0-beta.01", " 99.0.0", "99.0.0-evil\\path"] {
+            assert!(!newer(version, "1.0.0"), "{version}");
+            assert!(super::staged_dir(version).is_err(), "{version}");
+        }
+
+    }
 
     #[test]
     fn versions_order_like_semver() {

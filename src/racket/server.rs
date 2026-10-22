@@ -6,7 +6,7 @@
 use super::protocol::*;
 use super::transport::Process;
 use super::Backend;
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, bounded};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::time::{Duration, Instant};
@@ -43,7 +43,7 @@ pub struct Server {
     backend: Backend,
     process: Option<Process>,
     raw: Receiver<RawResponse>,
-    pending: HashMap<RequestId, ServerRequestKind>,
+    pending: HashMap<RequestId, (ServerRequestKind, Instant)>,
     results: HashMap<RequestId, Result<ServerResponse, String>>,
     next_id: RequestId,
     restarts: u32,
@@ -54,7 +54,7 @@ impl Server {
         let mut server = Server {
             backend: backend.clone(),
             process: None,
-            raw: unbounded().1,
+            raw: bounded(super::transport::QUEUE_CAPACITY).1,
             pending: HashMap::new(),
             results: HashMap::new(),
             next_id: 1,
@@ -66,7 +66,7 @@ impl Server {
     }
 
     fn spawn(&mut self) -> std::io::Result<()> {
-        let (tx, rx) = unbounded();
+        let (tx, rx) = bounded(super::transport::QUEUE_CAPACITY);
         let process = Process::spawn(self.backend.command("server.rkt", None), tx, self.backend.ctx(), |_code, stderr| {
             Some(RawResponse { id: None, ok: false, result: serde_json::Value::Null, error: None, ended: Some(stderr) })
         })?;
@@ -85,6 +85,10 @@ impl Server {
     pub fn request(&mut self, request: ServerRequest) -> RequestId {
         let id = self.next_id;
         self.next_id += 1;
+        if self.pending.len() >= 32 {
+            self.results.insert(id, Err("Too many pending Racket requests".into()));
+            return id;
+        }
         let alive = self.process.as_mut().is_some_and(|p| p.is_alive());
         if !alive && let Err(e) = self.spawn() {
             self.results.insert(id, Err(format!("could not start the Racket server: {e}")));
@@ -97,7 +101,7 @@ impl Server {
             .unwrap_or_else(|| Err(std::io::ErrorKind::BrokenPipe.into()));
         match sent {
             Ok(()) => {
-                self.pending.insert(id, request.kind());
+                self.pending.insert(id, (request.kind(), Instant::now()));
             }
             Err(e) => {
                 self.results.insert(id, Err(format!("the Racket server is not running: {e}")));
@@ -121,8 +125,21 @@ impl Server {
 
     /// Collect responses that have arrived.
     pub fn poll(&mut self) {
-        while let Ok(raw) = self.raw.try_recv() {
+        if self.pending.values().any(|(_, start)| start.elapsed() > Duration::from_secs(30)) {
+            // Restart the whole process: a timed-out loader can corrupt the shared module registry.
+            self.process = None;
+            self.raw = bounded(1).1;
+            for (id, _) in self.pending.drain() {
+                self.results.insert(id, Err("Racket analysis exceeded its 30-second time limit; server restarted".into()));
+            }
+        }
+        for _ in 0..super::transport::FRAME_EVENTS {
+            let Ok(raw) = self.raw.try_recv() else { break };
             self.accept(raw);
+        }
+        if (!self.raw.is_empty() || !self.pending.is_empty())
+            && let Some(ctx) = self.backend.ctx() {
+            ctx.request_repaint_after(Duration::from_millis(50));
         }
     }
 
@@ -141,7 +158,7 @@ impl Server {
             return;
         }
         let Some(id) = raw.id.as_ref().and_then(|v| v.as_u64()) else { return };
-        let Some(kind) = self.pending.remove(&id) else { return };
+        let Some((kind, _)) = self.pending.remove(&id) else { return };
         let result = if raw.ok {
             ServerResponse::decode(kind, raw.result)
         } else {

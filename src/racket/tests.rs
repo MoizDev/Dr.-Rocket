@@ -1286,3 +1286,20 @@ fn stepper_selection_preserves_images_and_context_errors() {
     let events = step_until(&StepperSession::start(b, &request).unwrap());
     assert!(events.iter().any(|e| matches!(e, StepperEvent::StepError { message, .. } | StepperEvent::Error { message } if message.contains("zero"))), "{events:#?}");
 }
+
+#[test]
+fn analysis_timeout_restarts_server_and_recovers() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let id = server.request(ServerRequest::CheckSyntax {
+        path: None,
+        source: "#lang racket/base\n(require (for-syntax racket/base))\n(begin-for-syntax (let loop () (loop)))".into(),
+        offset: 0,
+        images: Default::default(),
+    });
+    let result = server.wait(id, Duration::from_secs(40)).expect("request must finish");
+    assert!(result.unwrap_err().contains("time limit"));
+    let id = server.request(ServerRequest::Completions { language: "racket/base".into() });
+    assert!(server.wait(id, TIMEOUT).expect("restarted response").is_ok());
+    assert!(server.restarts() > 0);
+}
