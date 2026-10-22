@@ -35,7 +35,7 @@ fn main() -> eframe::Result {
     }
     crash::install();
     let renderer = startup::begin();
-    platform::install_open_handler();
+    platform::install_app_handlers();
     let open: Vec<PathBuf> = std::env::args().skip(1).filter(|a| !a.starts_with('-')).map(PathBuf::from).collect();
     let size = automation::Automation::window_size().unwrap_or([1480.0, 940.0]);
     let viewport = egui::ViewportBuilder::default()
