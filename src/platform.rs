@@ -280,6 +280,22 @@ mod app_events {
         }
     );
 
+    /// Must run before the event loop starts: macOS delivers documents during launch.
+    pub fn install() {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let observer: Retained<LaunchObserver> = unsafe { msg_send![LaunchObserver::alloc(mtm), init] };
+        unsafe {
+            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
+                &observer,
+                sel!(willFinishLaunching:),
+                Some(NSApplicationWillFinishLaunchingNotification),
+                None,
+            );
+        }
+        // The observer lives for the whole process.
+        std::mem::forget(observer);
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -300,22 +316,6 @@ mod app_events {
                 assert!(super::super::take_menu_actions().is_empty());
             }
         }
-    }
-
-    /// Must run before the event loop starts: macOS delivers documents during launch.
-    pub fn install() {
-        let Some(mtm) = MainThreadMarker::new() else { return };
-        let observer: Retained<LaunchObserver> = unsafe { msg_send![LaunchObserver::alloc(mtm), init] };
-        unsafe {
-            NSNotificationCenter::defaultCenter().addObserver_selector_name_object(
-                &observer,
-                sel!(willFinishLaunching:),
-                Some(NSApplicationWillFinishLaunchingNotification),
-                None,
-            );
-        }
-        // The observer lives for the whole process.
-        std::mem::forget(observer);
     }
 }
 
