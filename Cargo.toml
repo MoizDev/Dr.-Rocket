@@ -3,6 +3,9 @@ name = "drrocket"
 version = "1.0.0-beta.12"
 edition = "2024"
 description = "Dr. Rocket: a fast, beautiful IDE for Racket"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/MoizDev/Dr.-Rocket"
+homepage = "https://doctorocket.com"
 
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "system_fonts", "x11", "wayland"] }

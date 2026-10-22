@@ -8,10 +8,7 @@ should handle your Racket work, and when it doesn't, we want to hear about it.
 You need **Racket** (any recent version; we test with 9.3). If you have DrRacket, you
 already have it. Otherwise get it from [racket-lang.org](https://racket-lang.org).
 
-**macOS:** open `Dr.Rocket-<version>.dmg` and drag Dr. Rocket into Applications. The beta
-isn't signed with an Apple certificate yet, so the first time, **right-click the app and
-choose Open**, then Open again. (If macOS only offers "Move to Trash", open System Settings
-→ Privacy & Security and click **Open Anyway** next to Dr. Rocket.)
+**macOS:** open the `.dmg` and drag Dr. Rocket into Applications.
 
 **Windows:** unzip `Dr.Rocket-<version>-windows-x64.zip` and run `Dr. Rocket.exe`. Windows
 may show "Windows protected your PC" because the beta isn't signed: click **More info** →
@@ -56,3 +53,9 @@ Use it for your real work for a week, the way you'd use DrRacket. In particular:
 2. Paste it into a message to us and add **what you were doing** and, if you can, the file.
 
 If Dr. Rocket crashes, it saves a report automatically and reminds you on the next launch.
+
+## License
+
+Dr. Rocket is free and open source, under the MIT license or the Apache License 2.0, at your
+option (`LICENSE-MIT`, `LICENSE-APACHE`). Third-party notices are in `NOTICE.md`. Source:
+https://github.com/MoizDev/Dr.-Rocket

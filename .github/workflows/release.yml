@@ -31,6 +31,8 @@ jobs:
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
           Copy-Item target/release/drrocket.exe "$dir/Dr. Rocket.exe"
           Copy-Item BETA.md "$dir/README.md"
+          Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE.md "$dir/"
+          Copy-Item -Recurse licenses "$dir/licenses"
           $zip = "Dr. Rocket-$version-windows-x64.zip"
           Compress-Archive -Path $dir -DestinationPath $zip
           "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
@@ -59,6 +61,7 @@ jobs:
           mkdir -p "$dir"
           cp target/release/drrocket "$dir/drrocket"
           cp BETA.md "$dir/README.md"
+          cp -R LICENSE-MIT LICENSE-APACHE NOTICE.md licenses "$dir/"
           cp assets/icon/icon_256.png "$dir/drrocket.png"
           cat > "$dir/drrocket.desktop" <<DESKTOP
           [Desktop Entry]
