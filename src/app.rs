@@ -233,8 +233,6 @@ pub struct Tab {
     pub id: u64,
     pub path: Option<PathBuf>,
     pub untitled: usize,
-    /// Explicit execution consent for this open tab; never restored from the session.
-    pub trusted: bool,
     pub editor: EditorView,
     /// The language level (DrRacket's "Choose Language"); teaching languages are saved as a
     /// hidden DrRacket metadata header.
@@ -288,8 +286,6 @@ pub enum Modal {
     Language(crate::ui::language_dialog::LanguageDialog),
     Prompt(crate::ui::language_dialog::Prompt),
     About,
-    TrustFile { tab: u64, command: Option<Command> },
-    TrustWxme(PathBuf),
 }
 
 /// Transient notification shown at the bottom-right.
@@ -652,8 +648,7 @@ impl App {
             rk.input.completion_words = words.clone();
         }
         let zoom = path.as_ref().and_then(|p| self.file_zooms.get(p)).copied().unwrap_or(1.0);
-        let trusted = path.as_ref().is_some_and(|p| self.racket.trusted_wxme.contains(p));
-        self.tabs.push(Tab { id, path, untitled, trusted, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
         self.tabs.len() - 1
     }
 
@@ -705,7 +700,6 @@ impl App {
             self.tabs.clear();
         }
         let i = self.new_tab(Some(path.clone()), &text);
-        self.racket.trusted_wxme.remove(&path);
         if let Some(w) = wxme {
             self.tabs[i].editor.doc.images.load(&w.images);
             if !w.unsupported.is_empty() {
@@ -729,10 +723,6 @@ impl App {
     fn read_source(&mut self, path: &Path) -> Result<(String, Option<crate::racket::protocol::WxmeFile>), String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         if crate::racket_ui::is_wxme(&bytes) {
-            if !self.racket.trusted_wxme.contains(path) && !self.tabs.iter().any(|t| t.trusted && t.path.as_deref() == Some(path)) {
-                self.modal = Modal::TrustWxme(path.to_path_buf());
-                return Err("approval is required to decode this DrRacket file".into());
-            }
             let w = crate::racket_ui::read_wxme(self, path)?;
             return Ok((w.text.replace("\r\n", "\n"), Some(w)));
         }
@@ -1660,17 +1650,13 @@ mod save_tests {
     fn unsupported_content_remains_unsaveable_after_edits() {
         let language = crate::racket::lang::Language::Module;
         let mut tab = Tab {
-            id: 1, path: None, untitled: 1, trusted: false,
+            id: 1, path: None, untitled: 1,
             editor: EditorView::new("partial WXME text", Id::unique("save-test")),
             language, lang_settings: language.default_settings(), lang_changed: false,
             disk_mtime: None, rk: crate::racket_ui::RacketTab::new(1), zoom: 1.0,
             edit_seen: (0, 0.0),
         };
         assert!(tab.check_writable().is_ok());
-        tab.editor.doc.buffer.set_text("#lang s-exp \"malicious-language.rkt\"\n");
-        assert!(crate::racket_ui::completion_key(&tab).is_none());
-        tab.trusted = true;
-        assert!(crate::racket_ui::completion_key(&tab).is_some());
         tab.editor.read_only = true;
         tab.editor.doc.buffer.set_text("modified partial text");
         tab.lang_changed = true;
