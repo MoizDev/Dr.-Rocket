@@ -1,30 +1,31 @@
 # Signing releases
 
-Automatic installation requires an Ed25519 key pinned into the app at build time. Builds
-without a key, unsigned feeds, and legacy cached updates offer manual downloads only.
-Existing installations made before this change must receive this version before they can
-verify signatures; changing the website alone cannot secure an old updater.
+The app installs an update automatically only if the update is signed with the release key.
+The public half of that key is `release-key.pub` (base64 of the raw 32-byte Ed25519 key), and
+every build includes it. The private half never goes in Git or on the website. It lives on the
+release Mac at `~/.drrocket-release/release-key.pem` (readable only by its owner), with a
+backup kept in a password manager. If it is lost, updates have to be downloaded by hand until a
+release with a new key reaches users.
 
-1. Generate an Ed25519 key outside this repository, for example with
-   `openssl genpkey -algorithm ED25519 -out /secure/location/release-key.pem`.
-   Keep the private key off the website and out of Git. Restrict access to the file.
-2. Export its raw 32-byte public key in base64 as `DRROCKET_UPDATE_PUBLIC_KEY` when building
-   every platform. For GitHub Actions, set the repository variable of that name. The signing
-   script prints this public value, which can also be obtained from Node's JWK `x` field.
-   Local `tools/bundle.sh` builds inherit the environment variable.
-3. Build and upload the release archives. Fetch them with `website/scripts/fetch-downloads.sh`.
-4. Run `node tools/sign-updates.mjs /secure/location/release-key.pem` from the repo root.
-   Review and commit `website/update-signatures.json`, then build/deploy the website normally.
-   The private key is only read locally by this script; the website receives signatures.
-5. Preserve the exact archive bytes. The website attaches a signature only when its version,
-   URL and checksum match. Replaced archives need fresh signatures and the usual CDN purge.
+For each release:
 
-The signature covers a domain separator, version, platform, lowercase SHA-256 and URL,
-with newline separators and a final newline. The app requires HTTPS archive URLs. A test
-feed may still be read through `DRROCKET_UPDATE_FEED=file://...`, but it cannot bypass the
-pinned key or permit unsigned/local archive URLs.
+1. Build and upload the release archives. Fetch them with `website/scripts/fetch-downloads.sh`
+   (`vercel build --prod` runs it too).
+2. Run `node tools/sign-updates.mjs ~/.drrocket-release/release-key.pem` from the repo root.
+   It refuses a key whose public half isn't `release-key.pub`. Commit
+   `website/update-signatures.json`, then build and deploy the website as usual.
+3. Keep the archives byte for byte. The website only adds a signature when the version, URL and
+   checksum all match, so a replaced archive needs signing again (and the usual CDN purge).
 
-The app verifies before downloading and rechecks the retained archive and signature on
-startup and immediately before extraction/install. It never runs downloaded code to ask
-for a version, and it preserves macOS quarantine attributes. Rotating the signing key
-requires a release built with the new public key, delivered while the old key is trusted.
+The signature covers a domain separator, the version, the platform, the lowercase SHA-256 and
+the URL, each followed by a newline. The app requires HTTPS archive URLs. A test feed can still
+be read through `DRROCKET_UPDATE_FEED=file://...`, but it can't get around the key or allow
+unsigned or local archives.
+
+The app checks the signature before downloading, and checks the saved archive and signature
+again at startup and just before installing. It never runs downloaded code to ask for its
+version, and it keeps macOS's quarantine attribute. To change keys, ship a release built
+with the new public key while the old key is still trusted.
+
+Builds before 1.0.0-beta.13 only check the SHA-256 from the feed. They update to beta.13 that
+way, and from then on updates must be signed.

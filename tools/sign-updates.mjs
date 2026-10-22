@@ -27,5 +27,8 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (Object.keys(downloads).length === 0) throw new Error('No release archives found');
   fs.writeFileSync(path.join(website, 'update-signatures.json'), JSON.stringify({ version: release.version, downloads }, null, 2) + '\n');
   const jwk = createPublicKey(key).export({ format: 'jwk' });
-  console.log(`Build with DRROCKET_UPDATE_PUBLIC_KEY=${Buffer.from(jwk.x, 'base64url').toString('base64')}`);
+  const pub = Buffer.from(jwk.x, 'base64url').toString('base64');
+  const pinned = fs.readFileSync(fileURLToPath(new URL('../release-key.pub', import.meta.url)), 'utf8').trim();
+  if (pub !== pinned) throw new Error(`This key's public half (${pub}) is not release-key.pub (${pinned}); the app would reject these signatures`);
+  console.log(`Signed ${Object.keys(downloads).join(', ')} for ${release.version}`);
 }
