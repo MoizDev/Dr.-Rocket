@@ -15,6 +15,7 @@
   <img alt="Racket 9.3" src="https://img.shields.io/badge/Racket-9.3-9f1d20?style=flat-square">
   <img alt="Written in Rust" src="https://img.shields.io/badge/Rust-egui%20%2B%20wgpu-b7410e?style=flat-square&logo=rust&logoColor=white">
   <img alt="Free" src="https://img.shields.io/badge/price-free-2ea043?style=flat-square">
+  <a href="#license"><img alt="License: MIT or Apache-2.0" src="https://img.shields.io/badge/license-MIT%20or%20Apache--2.0-555?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -243,5 +244,18 @@ DRROCKET_AUTOMATION=script.json cargo run   # scripted end-to-end runs with scre
 
 File icons: [Material Icon Theme](https://github.com/material-extensions/vscode-material-icon-theme) (MIT).
 UI glyphs: [Material Symbols](https://github.com/google/material-design-icons) (Apache 2.0).
-Fonts: Fira Code and Inter (SIL OFL). Dr. Rocket is not affiliated with the Racket project; it
-runs the Racket you install from [racket-lang.org](https://racket-lang.org).
+Fonts: Fira Code and Inter (SIL OFL). Theme colors from One Dark, Catppuccin, Tokyo Night,
+GitHub and Gruvbox (MIT). Dr. Rocket is not affiliated with the Racket project; it runs the
+Racket you install from [racket-lang.org](https://racket-lang.org). See [NOTICE.md](NOTICE.md)
+for the details.
+
+## License
+
+Dr. Rocket is licensed under either of
+
+- the [MIT license](LICENSE-MIT), or
+- the [Apache License, Version 2.0](LICENSE-APACHE),
+
+at your option. Unless you explicitly state otherwise, any contribution you intentionally submit
+for inclusion in Dr. Rocket, as defined in the Apache-2.0 license, is dual licensed as above,
+without any additional terms or conditions.

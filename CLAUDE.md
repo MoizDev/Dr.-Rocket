@@ -3,8 +3,8 @@
 ## Website (website/, live at doctorocket.com)
 
 Next.js site deployed to the Vercel project `dr-rocket` (scope `moizs-projects-49365057`).
-The GitHub repo is private, so the site hosts the downloads itself: `scripts/fetch-downloads.sh`
-pulls the release assets into `public/downloads/` (gitignored) using the local `gh` login.
+The site hosts the downloads itself: `scripts/fetch-downloads.sh` pulls the release assets into
+`public/downloads/` (gitignored) using the local `gh` login.
 
 Deploy by building locally and uploading the build, so the binaries go up with it and Vercel
 never needs a GitHub token:
@@ -25,9 +25,9 @@ first launch after an update (`src/ui/whats_new.rs`); use the same file for the 
 For a new app release, attach the files to the GitHub release (macOS DMG via
 `DEVELOPER_ID="Developer ID Application: Moiz Hashmi (BJ2UZLM855)" NOTARY_PROFILE=drrocket
 tools/bundle.sh --universal --dmg`, which signs and notarizes it; Windows and Linux via the
-Release workflow), then deploy as
-above. The build takes its version from GitHub: the newest release with the macOS and Windows
-files attached. It writes that into `website/release.json` (commit the change), and the badge,
+Release workflow), sign them for automatic updates (see App updates), then deploy as above. The
+build takes its version from GitHub: the newest release with the macOS and Windows files
+attached. It writes that into `website/release.json` (commit the change), and the badge,
 downloads and share image all follow it.
 
 The download files keep the same URLs across releases, so after replacing one run
@@ -46,6 +46,13 @@ the background, checked, and installed when the app quits or the user clicks Res
 So a release reaches existing users as soon as the site is deployed and the CDN purged; a stale
 file fails the checksum and is never installed.
 
+Updates must also be signed with the release key (`docs/signed-updates.md`). Before each deploy,
+after `vercel build --prod` has fetched the new files, run
+`node tools/sign-updates.mjs ~/.drrocket-release/release-key.pem` from the repo root, commit
+`website/update-signatures.json`, and build again so `version.json` carries the signatures. Check
+that every platform in https://doctorocket.com/version.json has a `signature`. The private key
+never goes in Git or on the website.
+
 Testing: `DRROCKET_UPDATE_FEED=file:///path/feed.json` points the app at a test feed (it also
 enables updates under automation and in development builds, and keeps the download inside
 `DRROCKET_CONFIG_DIR`). On macOS, install a `tools/bundle.sh` app in a scratch folder and serve a
@@ -56,7 +63,8 @@ DMG built with a higher version. Windows and Linux: the manual `update-test.yml`
 Download links go to `website/app/download/[os]/route.ts`, which records the download in
 Supabase (project `dr-rocket`, `zfacelxxebqfxwhkwrrd`; schema in `website/supabase/downloads.sql`)
 after responding, then redirects to `/downloads/<file>`. Bots and link previews aren't counted.
-The Vercel project has `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (production) for it.
+The Vercel project has `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` (production) for it; the
+`record_download` function only accepts the service role.
 
 To read the numbers: `select * from public.download_totals;` (or the Table Editor in the
 Supabase dashboard).

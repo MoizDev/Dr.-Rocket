@@ -42,3 +42,6 @@ next-env.d.ts
 
 # Release binaries, fetched by scripts/fetch-downloads.sh
 /public/downloads/
+
+# Supabase CLI cache
+/supabase/.temp/

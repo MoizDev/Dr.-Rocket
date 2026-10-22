@@ -52,6 +52,7 @@ for s in 16 32 128 256 512; do
   cp "assets/icon/icon_$d.png" "$iconset/icon_${s}x${s}@2x.png"
 done
 iconutil -c icns "$iconset" -o "$app/Contents/Resources/AppIcon.icns"
+cp -R LICENSE-MIT LICENSE-APACHE NOTICE.md licenses "$app/Contents/Resources/"
 
 version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
 cat > "$app/Contents/Info.plist" <<PLIST
