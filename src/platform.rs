@@ -203,10 +203,10 @@ pub fn trace_layer_colorspace() {
 pub fn trace_layer_colorspace() {}
 
 // ---------------------------------------------------------------------------------------
-// Files opened from Finder ("Open With", double-click, `open -a`).
+// Native application events (macOS).
 //
-// macOS delivers these as `application:openURLs:` to the app delegate. winit's delegate does
-// not implement it, so we add the method to its class at startup and queue the paths.
+// winit's delegate has no open-file or quit guard, so add those handlers at startup.
+// Queue events for the app, where unsaved files can be checked before quitting.
 
 static OPENED: std::sync::Mutex<Vec<std::path::PathBuf>> = std::sync::Mutex::new(Vec::new());
 static REPAINT: std::sync::OnceLock<egui::Context> = std::sync::OnceLock::new();
@@ -216,18 +216,18 @@ pub fn take_opened_files() -> Vec<std::path::PathBuf> {
     OPENED.lock().map(|mut v| std::mem::take(&mut *v)).unwrap_or_default()
 }
 
-/// Remember the egui context so a file opened from Finder wakes the UI.
+/// Remember the egui context so native application events wake the UI.
 pub fn set_repaint_context(ctx: &egui::Context) {
     let _ = REPAINT.set(ctx.clone());
 }
 
 #[cfg(target_os = "macos")]
-mod open_files {
+mod app_events {
     use super::{OPENED, REPAINT};
     use objc2::rc::Retained;
     use objc2::runtime::{AnyClass, AnyObject, Imp, NSObject, Sel};
     use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
-    use objc2_app_kit::{NSApplication, NSApplicationWillFinishLaunchingNotification};
+    use objc2_app_kit::{NSApplication, NSApplicationTerminateReply, NSApplicationWillFinishLaunchingNotification};
     use objc2_foundation::{NSArray, NSNotification, NSNotificationCenter, NSURL};
 
     unsafe extern "C-unwind" fn open_urls(_this: &AnyObject, _cmd: Sel, _app: &AnyObject, urls: &NSArray<NSURL>) {
@@ -240,17 +240,29 @@ mod open_files {
         }
     }
 
-    /// Teach the app delegate (winit's) to accept `application:openURLs:`.
-    fn add_open_urls_to_delegate(mtm: MainThreadMarker) {
+    unsafe extern "C-unwind" fn should_terminate(_this: &AnyObject, _cmd: Sel, _app: &AnyObject) -> NSApplicationTerminateReply {
+        super::post_menu_action(super::MenuAction::Quit);
+        // Let the normal quit flow show the dialog and close the viewport after confirmation.
+        NSApplicationTerminateReply::TerminateCancel
+    }
+
+    /// Teach the app delegate (winit's) to handle native application events.
+    fn add_handlers_to_delegate(mtm: MainThreadMarker) {
         let app = NSApplication::sharedApplication(mtm);
         let Some(delegate) = app.delegate() else { return };
         let obj: &AnyObject = delegate.as_ref();
-        let cls: &AnyClass = obj.class();
+        add_handlers_to_class(obj.class());
+    }
+
+    fn add_handlers_to_class(cls: &AnyClass) {
         // SAFETY: matches `-(void)application:(NSApplication*)app openURLs:(NSArray<NSURL*>*)urls`
         // ("v@:@@"); `class_addMethod` leaves the class untouched if the method already exists.
         unsafe {
             let imp: Imp = std::mem::transmute::<unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject, &NSArray<NSURL>), Imp>(open_urls);
             objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, sel!(application:openURLs:), imp, c"v@:@@".as_ptr());
+            // SAFETY: `NSApplicationTerminateReply` is an NSUInteger (Q) on 64-bit macOS.
+            let imp: Imp = std::mem::transmute::<unsafe extern "C-unwind" fn(&AnyObject, Sel, &AnyObject) -> NSApplicationTerminateReply, Imp>(should_terminate);
+            objc2::ffi::class_addMethod(cls as *const AnyClass as *mut AnyClass, sel!(applicationShouldTerminate:), imp, c"Q@:@".as_ptr());
         }
     }
 
@@ -263,10 +275,32 @@ mod open_files {
         impl LaunchObserver {
             #[unsafe(method(willFinishLaunching:))]
             fn will_finish_launching(&self, _note: &NSNotification) {
-                add_open_urls_to_delegate(self.mtm());
+                add_handlers_to_delegate(self.mtm());
             }
         }
     );
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use objc2::{ClassType, runtime::ClassBuilder};
+
+        #[test]
+        fn native_quit_is_cancelled_and_queued() {
+            let cls = ClassBuilder::new(c"DrRocketQuitTestDelegate", NSObject::class()).unwrap().register();
+            add_handlers_to_class(cls);
+            assert!(cls.instance_method(sel!(applicationShouldTerminate:)).is_some());
+            let delegate: Retained<AnyObject> = unsafe { msg_send![cls, new] };
+            let sender = NSObject::new();
+            // SAFETY: the installed handler ignores sender; no NSApplication is needed.
+            for _ in 0..2 {
+                let reply: NSApplicationTerminateReply = unsafe { msg_send![&*delegate, applicationShouldTerminate: &*sender] };
+                assert_eq!(reply, NSApplicationTerminateReply::TerminateCancel);
+                assert_eq!(super::super::take_menu_actions(), vec![super::super::MenuAction::Quit]);
+                assert!(super::super::take_menu_actions().is_empty());
+            }
+        }
+    }
 
     /// Must run before the event loop starts: macOS delivers documents during launch.
     pub fn install() {
@@ -285,14 +319,14 @@ mod open_files {
     }
 }
 
-/// Install the Finder open-file hook. Call from `main` before starting the event loop.
+/// Install native open-file and quit hooks before starting the event loop.
 #[cfg(target_os = "macos")]
-pub fn install_open_handler() {
-    open_files::install();
+pub fn install_app_handlers() {
+    app_events::install();
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn install_open_handler() {}
+pub fn install_app_handlers() {}
 
 // ---------------------------------------------------------------------------------------
 // Native menu bar (macOS).
@@ -312,6 +346,16 @@ pub enum MenuAction {
 }
 
 static MENU_ACTIONS: std::sync::Mutex<Vec<MenuAction>> = std::sync::Mutex::new(Vec::new());
+
+#[cfg(target_os = "macos")]
+fn post_menu_action(action: MenuAction) {
+    if let Ok(mut q) = MENU_ACTIONS.lock() {
+        q.push(action);
+    }
+    if let Some(ctx) = REPAINT.get() {
+        ctx.request_repaint();
+    }
+}
 
 /// Menu actions chosen since the last call.
 pub fn take_menu_actions() -> Vec<MenuAction> {
@@ -357,7 +401,7 @@ pub fn event_loop_hook() -> Option<eframe::EventLoopBuilderHook> {
 
 #[cfg(target_os = "macos")]
 mod menu {
-    use super::{MENU_ACTIONS, MenuAction, MenuSpec, REPAINT};
+    use super::{MenuAction, MenuSpec, post_menu_action};
     use objc2::rc::Retained;
     use objc2::runtime::{AnyObject, NSObject, Sel};
     use objc2::{MainThreadMarker, MainThreadOnly, define_class, msg_send, sel};
@@ -383,12 +427,7 @@ mod menu {
             fn menu_action(&self, sender: &NSMenuItem) {
                 let tag = sender.tag();
                 let action = if tag < 0 { MenuAction::Quit } else { MenuAction::Command(tag as usize) };
-                if let Ok(mut q) = MENU_ACTIONS.lock() {
-                    q.push(action);
-                }
-                if let Some(ctx) = REPAINT.get() {
-                    ctx.request_repaint();
-                }
+                post_menu_action(action);
             }
         }
     );
