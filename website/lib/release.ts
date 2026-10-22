@@ -4,6 +4,7 @@ import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import release from "../release.json";
+import signedRelease from "../update-signatures.json";
 
 export type Os = "mac" | "windows" | "linux";
 export const OSES: Os[] = ["mac", "windows", "linux"];
@@ -65,7 +66,7 @@ const SITE = "https://doctorocket.com";
  * checksum. The file URLs stay the same across releases (purge the CDN after a release, see
  * CLAUDE.md); a stale copy fails the app's checksum and is never installed. */
 export function updateFeed() {
-  const downloads: Partial<Record<Os, { url: string; sha256: string; size: number }>> = {};
+  const downloads: Partial<Record<Os, { url: string; sha256: string; size: number; signature?: string }>> = {};
   for (const os of OSES) {
     const file = release.downloads[os].file;
     let data: Buffer;
@@ -79,6 +80,14 @@ export function updateFeed() {
       sha256: crypto.createHash("sha256").update(data).digest("hex"),
       size: data.length,
     };
+  }
+  const signed = signedRelease.downloads as Partial<Record<Os, { url: string; sha256: string; signature: string }>>;
+  for (const os of OSES) {
+    const asset = downloads[os];
+    const signature = signed[os];
+    if (asset && signature && signedRelease.version === VERSION && signature.url === asset.url && signature.sha256 === asset.sha256) {
+      asset.signature = signature.signature;
+    }
   }
   return { version: VERSION, downloads };
 }

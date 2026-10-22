@@ -233,6 +233,8 @@ pub struct Tab {
     pub id: u64,
     pub path: Option<PathBuf>,
     pub untitled: usize,
+    /// Explicit execution consent for this open tab; never restored from the session.
+    pub trusted: bool,
     pub editor: EditorView,
     /// The language level (DrRacket's "Choose Language"); teaching languages are saved as a
     /// hidden DrRacket metadata header.
@@ -264,6 +266,14 @@ impl Tab {
     pub fn dirty(&self) -> bool {
         self.editor.doc.buffer.is_dirty() || self.lang_changed
     }
+
+    fn check_writable(&self) -> Result<(), &'static str> {
+        if self.editor.read_only {
+            Err("This file contains unsupported content and is read-only. Open it in DrRacket to save changes.")
+        } else {
+            Ok(())
+        }
+    }
 }
 
 /// Modal overlays.
@@ -278,6 +288,8 @@ pub enum Modal {
     Language(crate::ui::language_dialog::LanguageDialog),
     Prompt(crate::ui::language_dialog::Prompt),
     About,
+    TrustFile { tab: u64, command: Option<Command> },
+    TrustWxme(PathBuf),
 }
 
 /// Transient notification shown at the bottom-right.
@@ -640,7 +652,8 @@ impl App {
             rk.input.completion_words = words.clone();
         }
         let zoom = path.as_ref().and_then(|p| self.file_zooms.get(p)).copied().unwrap_or(1.0);
-        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
+        let trusted = path.as_ref().is_some_and(|p| self.racket.trusted_wxme.contains(p));
+        self.tabs.push(Tab { id, path, untitled, trusted, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
         self.tabs.len() - 1
     }
 
@@ -692,6 +705,7 @@ impl App {
             self.tabs.clear();
         }
         let i = self.new_tab(Some(path.clone()), &text);
+        self.racket.trusted_wxme.remove(&path);
         if let Some(w) = wxme {
             self.tabs[i].editor.doc.images.load(&w.images);
             if !w.unsupported.is_empty() {
@@ -715,6 +729,10 @@ impl App {
     fn read_source(&mut self, path: &Path) -> Result<(String, Option<crate::racket::protocol::WxmeFile>), String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         if crate::racket_ui::is_wxme(&bytes) {
+            if !self.racket.trusted_wxme.contains(path) && !self.tabs.iter().any(|t| t.trusted && t.path.as_deref() == Some(path)) {
+                self.modal = Modal::TrustWxme(path.to_path_buf());
+                return Err("approval is required to decode this DrRacket file".into());
+            }
             let w = crate::racket_ui::read_wxme(self, path)?;
             return Ok((w.text.replace("\r\n", "\n"), Some(w)));
         }
@@ -729,6 +747,10 @@ impl App {
 
     pub fn save_tab(&mut self, idx: usize, save_as: bool) -> bool {
         let Some(tab) = self.tabs.get(idx) else { return false };
+        if let Err(message) = tab.check_writable() {
+            self.toast(message, ToastKind::Error);
+            return false;
+        }
         let path = match (&tab.path, save_as) {
             (Some(p), false) => p.clone(),
             _ => {
@@ -742,8 +764,7 @@ impl App {
                 }
             }
         };
-        self.tabs[idx].path = Some(path.clone());
-        let text = crate::racket_ui::save_text(&self.tabs[idx]);
+        let text = crate::racket_ui::save_text(&self.tabs[idx], &path);
         // Text with pasted images is saved in DrRacket's editor format; everything else as text.
         let images = self.tabs[idx].editor.doc.images.for_text(&text);
         let written = if images.is_empty() {
@@ -753,6 +774,7 @@ impl App {
         };
         match written {
             Ok(()) => {
+                self.tabs[idx].path = Some(path.clone());
                 let language = self.tabs[idx].language;
                 crate::racket_ui::remember_language(self, &path, language);
                 let tab = &mut self.tabs[idx];
@@ -814,6 +836,7 @@ impl App {
                 let (_, _, body) = crate::racket_ui::load_text(self, Some(&p), &text);
                 let tab = &mut self.tabs[i];
                 if let Some(w) = wxme {
+                    tab.editor.read_only |= !w.unsupported.is_empty();
                     tab.editor.doc.images.load(&w.images);
                 }
                 let text = body;
@@ -1078,6 +1101,7 @@ impl App {
                         let (_, _, body) = crate::racket_ui::load_text(self, Some(&path), &text);
                         if let Some(t) = self.active_tab_mut() {
                             if let Some(w) = wxme {
+                                t.editor.read_only |= !w.unsupported.is_empty();
                                 t.editor.doc.images.load(&w.images);
                             }
                             // One undoable edit: ⌘Z brings the discarded changes back.
@@ -1097,7 +1121,7 @@ impl App {
                 let title = t.title();
                 let page = crate::print::html(&title, &mut t.editor.doc, &light);
                 let path = std::env::temp_dir().join(format!("dr-rocket-print-{}.html", t.id));
-                match std::fs::write(&path, page) {
+                match crate::config::atomic_write(&path, page.as_bytes()) {
                     Ok(()) => {
                         let _ = open::that(&path);
                     }
@@ -1625,5 +1649,33 @@ impl eframe::App for App {
 
     fn clear_color(&self, _visuals: &egui::Visuals) -> [f32; 4] {
         self.tokens().window.to_normalized_gamma_f32()
+    }
+}
+
+#[cfg(test)]
+mod save_tests {
+    use super::*;
+
+    #[test]
+    fn unsupported_content_remains_unsaveable_after_edits() {
+        let language = crate::racket::lang::Language::Module;
+        let mut tab = Tab {
+            id: 1, path: None, untitled: 1, trusted: false,
+            editor: EditorView::new("partial WXME text", Id::unique("save-test")),
+            language, lang_settings: language.default_settings(), lang_changed: false,
+            disk_mtime: None, rk: crate::racket_ui::RacketTab::new(1), zoom: 1.0,
+            edit_seen: (0, 0.0),
+        };
+        assert!(tab.check_writable().is_ok());
+        tab.editor.doc.buffer.set_text("#lang s-exp \"malicious-language.rkt\"\n");
+        assert!(crate::racket_ui::completion_key(&tab).is_none());
+        tab.trusted = true;
+        assert!(crate::racket_ui::completion_key(&tab).is_some());
+        tab.editor.read_only = true;
+        tab.editor.doc.buffer.set_text("modified partial text");
+        tab.lang_changed = true;
+        assert!(tab.check_writable().is_err());
+        tab.path = Some(PathBuf::from("another-name.rkt"));
+        assert!(tab.check_writable().is_err());
     }
 }

@@ -3,7 +3,7 @@
 use super::protocol::*;
 use super::transport::Process;
 use super::Backend;
-use crossbeam_channel::{Receiver, unbounded};
+use crossbeam_channel::{Receiver, bounded};
 use std::path::PathBuf;
 
 /// Everything needed to start a run.
@@ -37,7 +37,7 @@ pub struct IdleRunner {
 
 impl IdleRunner {
     pub fn spawn(backend: &Backend) -> std::io::Result<IdleRunner> {
-        let (tx, events) = unbounded();
+        let (tx, events) = bounded(super::transport::QUEUE_CAPACITY);
         let process = Process::spawn(backend.command("runner.rkt", None), tx, backend.ctx(), |code, stderr| {
             Some(RunEvent::Terminated { code, stderr })
         })?;
@@ -125,7 +125,9 @@ impl RunSession {
 
     /// All events received so far.
     pub fn drain(&self) -> Vec<RunEvent> {
-        self.events.try_iter().collect()
+        let events = self.events.try_iter().take(super::transport::FRAME_EVENTS).collect();
+        if !self.events.is_empty() { self.process.repaint(); }
+        events
     }
 
     pub fn events(&self) -> &Receiver<RunEvent> {

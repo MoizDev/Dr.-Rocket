@@ -102,6 +102,45 @@ impl App {
             Modal::ConfirmQuit => self.confirm_quit_ui(ctx),
             Modal::ConfirmCloseProject => self.confirm_close_project_ui(ctx),
             Modal::About => self.about_ui(ctx),
+            Modal::TrustFile { tab, command } => self.trust_ui(ctx, Some((tab, command)), None),
+            Modal::TrustWxme(path) => self.trust_ui(ctx, None, Some(path)),
+        }
+    }
+
+    fn trust_ui(&mut self, ctx: &egui::Context, tab: Option<(u64, Option<Command>)>, path: Option<std::path::PathBuf>) {
+        let name = path.as_ref().map(|p| p.display().to_string()).or_else(|| {
+            tab.and_then(|(id, _)| self.tabs.iter().find(|t| t.id == id).map(|t| t.title()))
+        });
+        let Some(name) = name else { return };
+        let mut choice = None;
+        self.dialog(ctx, "Trust this file to execute code?", 460.0, |_, ui| {
+            ui.label(&name);
+            ui.label("Racket readers, macros, imports and DrRacket file decoders can run code with your account's access to files and the network. Approve only files and dependencies you trust.");
+            ui.label("Approval lasts for this open tab. Without approval, plain text editing remains available. After approving, retry interactions or module browsing if needed.");
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() { choice = Some(false); }
+                if ui.button("Trust and enable Racket").clicked() { choice = Some(true); }
+            });
+        });
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) { choice = Some(false); }
+        match choice {
+            Some(true) => {
+                if let Some(path) = path {
+                    self.racket.trusted_wxme.insert(path.clone());
+                    self.open_file(&path);
+                } else if let Some((id, command)) = tab
+                    && let Some(i) = self.tabs.iter().position(|t| t.id == id) {
+                    self.tabs[i].trusted = true;
+                    self.active = i;
+                    if let Some(command) = command { self.run_command(command); }
+                }
+            }
+            Some(false) => {}
+            None => {
+                self.modal = if let Some(path) = path { Modal::TrustWxme(path) }
+                    else if let Some((tab, command)) = tab { Modal::TrustFile { tab, command } }
+                    else { Modal::None };
+            }
         }
     }
 

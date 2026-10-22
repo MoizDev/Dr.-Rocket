@@ -1,5 +1,5 @@
 -- Download counter for doctorocket.com (Supabase project "dr-rocket", zfacelxxebqfxwhkwrrd).
--- Applied as migrations "downloads" and "record_download_anon_only"; kept here for reference.
+-- Fresh-install base schema. Existing installations should apply only the new migration.
 
 -- One row per download started from doctorocket.com. No IPs or user agents are kept.
 create table public.downloads (
@@ -13,20 +13,8 @@ create table public.downloads (
 alter table public.downloads enable row level security;
 revoke all on public.downloads from anon, authenticated;
 
--- The website's only way in: record a download. Runs as the owner, so the table itself
--- stays closed to the publishable key.
-create function public.record_download(p_os text, p_version text, p_country text)
-returns void
-language sql
-security definer
-set search_path = ''
-as $$
-  insert into public.downloads (os, version, country)
-  values (p_os, left(p_version, 32), left(p_country, 2));
-$$;
-
-revoke all on function public.record_download(text, text, text) from public;
-grant execute on function public.record_download(text, text, text) to anon;
+-- Apply migrations/20261019_harden_download_counter.sql after creating this base schema.
+-- No anonymous write RPC is installed by this file.
 
 -- Totals for reading in the dashboard.
 create view public.download_totals with (security_invoker = true) as
