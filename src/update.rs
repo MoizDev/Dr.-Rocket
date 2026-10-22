@@ -366,10 +366,12 @@ fn verify_with_key(version: &str, os: &str, asset: &Asset, key: &str) -> Result<
 }
 
 fn verify_asset(version: &str, asset: &Asset) -> Result<(), String> {
-    let key = option_env!("DRROCKET_UPDATE_PUBLIC_KEY").filter(|s| !s.is_empty())
-        .ok_or("Automatic updates are disabled: this build has no trusted release key. Download the update manually.")?;
-    verify_with_key(version, OS, asset, key)
+    verify_with_key(version, OS, asset, RELEASE_KEY.trim())
 }
+
+/// The public half of the release signing key (`release-key.pub`, base64 of the raw 32 bytes).
+/// Every build has it, so no release can ship without the ability to verify its updates.
+const RELEASE_KEY: &str = include_str!("../release-key.pub");
 
 fn archive_name() -> &'static str {
     match OS { "mac" => "update.dmg", "windows" => "update.zip", _ => "update.tar.gz" }
