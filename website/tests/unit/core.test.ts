@@ -27,7 +27,7 @@ describe("keywords", () => {
 });
 
 describe("lexer", () => {
-  const cls = (src: string) => lex(src).filter((t) => t.cls !== "space").map((t) => [src.slice(t.start, t.end), t.cls]);
+  const cls = (src: string) => lex(src).map((t) => [src.slice(t.start, t.end), t.cls]);
   it("colours heads by the app's rule", () => {
     expect(cls("(define (f x) (+ x 1))")).toEqual([
       ["(", "bracket"], ["define", "keyword"], ["(", "bracket"], ["f", "function"], ["x", "variable"], [")", "bracket"],
