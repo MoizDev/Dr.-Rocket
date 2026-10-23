@@ -1,0 +1,92 @@
+/* Dr. Rocket's window at 1200×753 app points (editor.png / terminal.png / light.png). */
+.ide { position: absolute; inset: 0; background: var(--d-window); color: var(--d-text); font-size: 12px; }
+.grow { flex: 1; }
+.sr { position: absolute; width: 1PX; height: 1PX; overflow: hidden; clip: rect(0 0 0 0); }
+
+.title { position: absolute; left: 0; right: 0; top: 0; height: 38px; display: flex; align-items: center; color: var(--d-muted); }
+.menu { margin-left: 6px; }
+.projects { display: flex; margin-left: 11px; height: 20px; }
+.project { width: 145px; height: 20px; border-radius: 5px !important; font-size: 11px; color: var(--d-text) !important; position: relative; }
+.project + .project::before { content: ""; position: absolute; left: -1PX; top: 5px; bottom: 5px; border-left: 1PX solid var(--d-selection); }
+.projectOn { background: var(--d-elevated) !important; }
+.projectOn + .project::before, .project:has(+ .projectOn)::after { display: none; }
+.plus { margin-left: 8px; display: inline-flex; color: var(--d-text); }
+.titleRight { margin-left: auto; margin-right: 10px; display: flex; align-items: center; gap: 8px; }
+.langPill { display: inline-flex; align-items: center; gap: 4px; height: 20px; padding: 0 6px; border-radius: 5px; background: var(--d-elevated); color: var(--d-text); font-size: 11px; font-weight: 500; }
+.capIcon { color: var(--d-c-keyword); }
+.codeIcon { color: var(--d-muted); }
+.run { color: var(--d-success) !important; display: inline-flex; margin: 0 10px 0 4px; }
+.layoutIcon { color: var(--d-muted); margin-left: 2px; }
+
+.panel { position: absolute; background: var(--d-panel); border-radius: 7px; overflow: hidden; }
+[data-theme="light"] .panel { background: var(--d-editor); border: 1PX solid var(--d-border); }
+.side { left: 5px; top: 39px; width: 190px; bottom: 29px; }
+.editor { left: 201px; top: 39px; width: 607px; bottom: 29px; display: flex; flex-direction: column; }
+.editorSplit { bottom: 376px; }
+.bottom { left: 201px; top: 383px; width: 607px; bottom: 29px; }
+.right { left: 814px; top: 39px; width: 380px; bottom: 29px; display: flex; flex-direction: column; }
+
+.sidebar { display: flex; flex-direction: column; height: 100%; color: var(--d-muted); }
+.sideTools { display: flex; align-items: center; gap: 9px; height: 28px; padding: 0 9px 0 6px; flex: none; }
+.sideToolOn { display: inline-flex; padding: 3px; border-radius: 4px; background: var(--d-selection); color: var(--d-text); }
+.sideBtn { display: inline-flex; color: inherit !important; }
+.sideHead { font-size: 9.5px; color: var(--d-muted); padding: 7px 0 3px 7px; letter-spacing: 0.2px; }
+.tree { flex: 1; min-height: 0; overflow: hidden; padding: 0 4px; }
+.row { display: flex; align-items: center; gap: 4px; height: 19px; padding-left: calc(var(--depth) * 13px + 4px); border-radius: 4px; color: var(--d-text); cursor: pointer; font-size: 11.5px; outline-offset: -2PX; }
+.row:hover { background: color-mix(in srgb, var(--d-selection) 60%, transparent); }
+.rowOn, .rowOn:hover { background: var(--d-selection); }
+.chev { width: 12px; display: inline-flex; color: var(--d-muted); }
+.rowName { white-space: nowrap; }
+
+.tabBar { display: flex; align-items: center; height: 28px; flex: none; padding: 0 8px 0 6px; color: var(--d-muted); }
+.tabs { display: flex; gap: 4px; height: 21px; }
+.tab { display: flex; align-items: center; gap: 6px; padding: 0 8px; border-radius: 5px; font-size: 11.5px; color: var(--d-muted); }
+.tabOn { background: var(--d-elevated); color: var(--d-text); }
+.tabBtn { display: inline-flex !important; align-items: center; gap: 5px; height: 100%; white-space: nowrap; }
+.tabClose { display: inline-flex; color: var(--d-muted); margin-left: 8px; }
+.dirty { color: var(--d-r1); font-size: 10px; margin-left: 2px; }
+.tabTool { margin-left: 10px; }
+.codeArea { position: relative; flex: 1; min-height: 0; }
+
+.rHead { display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 4px; flex: none; color: var(--d-muted); }
+.rTabOn { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 7px; border-radius: 5px; background: var(--d-elevated); color: var(--d-text); font-size: 11.5px; margin-right: 3px; }
+.rTool { margin-left: 3px; }
+
+.welcome { font-family: var(--font-app), sans-serif; font-size: 11px; color: var(--d-text); line-height: 16px; margin: 0 0 8px; }
+.welcomeLang { font-size: 9.5px; color: var(--d-muted); }
+.testCard { display: flex; align-items: center; gap: 6px; height: 32px; margin: 4px 0 6px -9px; padding: 0 10px; border-radius: 6px; background: var(--d-success-bg); border: 1PX solid var(--d-success-border); color: var(--d-text); font-family: var(--font-app), sans-serif; font-size: 11px; }
+.testIcon { color: var(--d-success); }
+
+/* The Interactions pane, laid out like the app: a tall rounded input with the language chip. */
+.repl > div:first-child { padding: 6px 8px 6px 10px; font-size: 13px; line-height: 23px; }
+.repl > div:first-child > div { margin-bottom: 0; }
+.repl form { position: relative; height: 60px; margin: 6px 7px 7px 7px; display: block; padding: 0; border-radius: 8px; }
+.repl form:focus-within { border-color: var(--d-accent); }
+.repl input { position: absolute; left: 10px; right: 10px; top: 9px; height: 18px; font-size: 12px; }
+.repl form > span { position: absolute; left: 8px; bottom: 7px; display: inline-flex; align-items: center; gap: 3px; font-size: 9.5px; padding: 2px 5px; }
+.replOut { color: var(--d-c-number); font-family: var(--font-code), monospace; }
+.send { position: absolute; right: 15px; bottom: 15px; width: 16px; height: 16px; border-radius: 50%; background: var(--d-selection); color: var(--d-muted); display: flex; align-items: center; justify-content: center; pointer-events: none; }
+
+.status { position: absolute; left: 0; right: 0; bottom: 0; height: 26px; display: flex; align-items: center; gap: 8px; padding: 0 10px 0 11px; font-size: 10.5px; color: var(--d-muted); }
+.crumbs { display: inline-flex; align-items: center; gap: 3px; margin-left: 12px; color: var(--d-text); }
+.crumb { display: inline-flex; align-items: center; gap: 3px; }
+.crumbFile { margin-left: 1px; }
+.lnCol { margin-left: 6px; color: var(--d-text); }
+.status > span:last-child { color: var(--d-text); }
+
+/* Check-expect badges (CodeMirror widgets and static spans). */
+.passed { display: inline-flex; align-items: center; margin-left: 12px; padding: 0 6px; height: 15px; vertical-align: 2px; border-radius: 4px; background: var(--d-success-bg); border: 1PX solid var(--d-success-border); color: var(--d-success); font-family: var(--font-app), sans-serif; font-size: 10px; line-height: 15px; }
+.summary { position: absolute; top: 9px; right: 12px; z-index: 2; display: inline-flex; align-items: center; gap: 2px; height: 15px; padding: 0 5px; border-radius: 4px; background: var(--d-success-bg); color: var(--d-success); font-size: 10px; pointer-events: none; }
+.noticeWrap { padding: 0 2px; }
+.val { font-family: var(--font-code), monospace; color: var(--d-fg); white-space: pre-wrap; }
+.val :global(.tk-number), .val :global(.tk-constant), .val :global(.tk-symbol) { color: var(--d-c-number); }
+.val :global(.tk-string) { color: var(--d-c-string); }
+.val :global(.tk-function) { color: var(--d-c-function); }
+.val :global(.tk-keyword) { color: var(--d-c-keyword); }
+.val :global(.tk-variable) { color: var(--d-c-variable); }
+.val :global(.rb-1) { color: var(--d-r1); }
+.val :global(.rb-2) { color: var(--d-r2); }
+.val :global(.rb-3) { color: var(--d-r3); }
+.fill { position: absolute; inset: 0; }
+.replChip { position: absolute; left: 16px; bottom: 15px; display: inline-flex; align-items: center; gap: 3px; height: 15px; padding: 0 5px; border-radius: 4px; background: var(--d-selection); color: var(--d-muted); font-size: 9.5px; pointer-events: none; }
+.replChip svg { color: var(--d-c-keyword); }
