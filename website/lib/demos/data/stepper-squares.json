@@ -1,0 +1,825 @@
+{
+ "define": "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+ "steps": [
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(sum-squares (cons 3 (cons 4 empty)))",
+   "beforeHl": [
+    21,
+    35
+   ],
+   "after": "(sum-squares (cons 3 (list 4)))",
+   "afterHl": [
+    21,
+    29
+   ],
+   "lines": [
+    10,
+    10
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(sum-squares (cons 3 (list 4)))",
+   "beforeHl": [
+    13,
+    30
+   ],
+   "after": "(sum-squares (list 3 4))",
+   "afterHl": [
+    13,
+    23
+   ],
+   "lines": [
+    10,
+    10
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(sum-squares (list 3 4))",
+   "beforeHl": [
+    0,
+    24
+   ],
+   "after": "(cond ((empty? (list 3 4)) 0) (else (+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))))",
+   "afterHl": [
+    0,
+    98
+   ],
+   "lines": [
+    3,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(cond ((empty? (list 3 4)) 0) (else (+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))))",
+   "beforeHl": [
+    7,
+    26
+   ],
+   "after": "(cond (#false 0) (else (+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))))",
+   "afterHl": [
+    7,
+    13
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(cond (#false 0) (else (+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))))",
+   "beforeHl": [
+    0,
+    85
+   ],
+   "after": "(cond (else (+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))))",
+   "afterHl": [
+    0,
+    74
+   ],
+   "lines": [
+    4,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(cond (else (+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))))",
+   "beforeHl": [
+    0,
+    74
+   ],
+   "after": "(+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))",
+   "afterHl": [
+    0,
+    60
+   ],
+   "lines": [
+    4,
+    6
+   ],
+   "rest": true
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ (sqr (first (list 3 4))) (sum-squares (rest (list 3 4))))",
+   "beforeHl": [
+    8,
+    26
+   ],
+   "after": "(+ (sqr 3) (sum-squares (rest (list 3 4))))",
+   "afterHl": [
+    8,
+    9
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ (sqr 3) (sum-squares (rest (list 3 4))))",
+   "beforeHl": [
+    3,
+    10
+   ],
+   "after": "(+ 9 (sum-squares (rest (list 3 4))))",
+   "afterHl": [
+    3,
+    4
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (sum-squares (rest (list 3 4))))",
+   "beforeHl": [
+    18,
+    35
+   ],
+   "after": "(+ 9 (sum-squares (list 4)))",
+   "afterHl": [
+    18,
+    26
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (sum-squares (list 4)))",
+   "beforeHl": [
+    5,
+    27
+   ],
+   "after": "(+ 9 (cond ((empty? (list 4)) 0) (else (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))))",
+   "afterHl": [
+    5,
+    97
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (cond ((empty? (list 4)) 0) (else (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))))",
+   "beforeHl": [
+    12,
+    29
+   ],
+   "after": "(+ 9 (cond (#false 0) (else (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))))",
+   "afterHl": [
+    12,
+    18
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (cond (#false 0) (else (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))))",
+   "beforeHl": [
+    5,
+    86
+   ],
+   "after": "(+ 9 (cond (else (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))))",
+   "afterHl": [
+    5,
+    75
+   ],
+   "lines": [
+    4,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (cond (else (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))))",
+   "beforeHl": [
+    5,
+    75
+   ],
+   "after": "(+ 9 (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))",
+   "afterHl": [
+    5,
+    61
+   ],
+   "lines": [
+    4,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ (sqr (first (list 4))) (sum-squares (rest (list 4)))))",
+   "beforeHl": [
+    13,
+    29
+   ],
+   "after": "(+ 9 (+ (sqr 4) (sum-squares (rest (list 4)))))",
+   "afterHl": [
+    13,
+    14
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ (sqr 4) (sum-squares (rest (list 4)))))",
+   "beforeHl": [
+    8,
+    15
+   ],
+   "after": "(+ 9 (+ 16 (sum-squares (rest (list 4)))))",
+   "afterHl": [
+    8,
+    10
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ 16 (sum-squares (rest (list 4)))))",
+   "beforeHl": [
+    24,
+    39
+   ],
+   "after": "(+ 9 (+ 16 (sum-squares '())))",
+   "afterHl": [
+    24,
+    27
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ 16 (sum-squares '())))",
+   "beforeHl": [
+    11,
+    28
+   ],
+   "after": "(+ 9 (+ 16 (cond ((empty? '()) 0) (else (+ (sqr (first '())) (sum-squares (rest '())))))))",
+   "afterHl": [
+    11,
+    88
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ 16 (cond ((empty? '()) 0) (else (+ (sqr (first '())) (sum-squares (rest '())))))))",
+   "beforeHl": [
+    18,
+    30
+   ],
+   "after": "(+ 9 (+ 16 (cond (#true 0) (else (+ (sqr (first '())) (sum-squares (rest '())))))))",
+   "afterHl": [
+    18,
+    23
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ 16 (cond (#true 0) (else (+ (sqr (first '())) (sum-squares (rest '())))))))",
+   "beforeHl": [
+    11,
+    81
+   ],
+   "after": "(+ 9 (+ 16 0))",
+   "afterHl": [
+    11,
+    12
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 (+ 16 0))",
+   "beforeHl": [
+    5,
+    13
+   ],
+   "after": "(+ 9 16)",
+   "afterHl": [
+    5,
+    7
+   ],
+   "lines": [
+    5,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))"
+   ],
+   "before": "(+ 9 16)",
+   "beforeHl": [
+    0,
+    8
+   ],
+   "after": "25",
+   "afterHl": [
+    0,
+    2
+   ],
+   "lines": [
+    5,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (sum-squares (cons 1 (cons 2 empty))) 5)",
+   "beforeHl": [
+    35,
+    49
+   ],
+   "after": "(check-expect (sum-squares (cons 1 (list 2))) 5)",
+   "afterHl": [
+    35,
+    43
+   ],
+   "lines": [
+    8,
+    8
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (sum-squares (cons 1 (list 2))) 5)",
+   "beforeHl": [
+    27,
+    44
+   ],
+   "after": "(check-expect (sum-squares (list 1 2)) 5)",
+   "afterHl": [
+    27,
+    37
+   ],
+   "lines": [
+    8,
+    8
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (sum-squares (list 1 2)) 5)",
+   "beforeHl": [
+    14,
+    38
+   ],
+   "after": "(check-expect (cond ((empty? (list 1 2)) 0) (else (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))))) 5)",
+   "afterHl": [
+    14,
+    112
+   ],
+   "lines": [
+    3,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (cond ((empty? (list 1 2)) 0) (else (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))))) 5)",
+   "beforeHl": [
+    21,
+    40
+   ],
+   "after": "(check-expect (cond (#false 0) (else (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))))) 5)",
+   "afterHl": [
+    21,
+    27
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (cond (#false 0) (else (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))))) 5)",
+   "beforeHl": [
+    14,
+    99
+   ],
+   "after": "(check-expect (cond (else (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))))) 5)",
+   "afterHl": [
+    14,
+    88
+   ],
+   "lines": [
+    4,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (cond (else (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))))) 5)",
+   "beforeHl": [
+    14,
+    88
+   ],
+   "after": "(check-expect (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))) 5)",
+   "afterHl": [
+    14,
+    74
+   ],
+   "lines": [
+    4,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ (sqr (first (list 1 2))) (sum-squares (rest (list 1 2)))) 5)",
+   "beforeHl": [
+    22,
+    40
+   ],
+   "after": "(check-expect (+ (sqr 1) (sum-squares (rest (list 1 2)))) 5)",
+   "afterHl": [
+    22,
+    23
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ (sqr 1) (sum-squares (rest (list 1 2)))) 5)",
+   "beforeHl": [
+    17,
+    24
+   ],
+   "after": "(check-expect (+ 1 (sum-squares (rest (list 1 2)))) 5)",
+   "afterHl": [
+    17,
+    18
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (sum-squares (rest (list 1 2)))) 5)",
+   "beforeHl": [
+    32,
+    49
+   ],
+   "after": "(check-expect (+ 1 (sum-squares (list 2))) 5)",
+   "afterHl": [
+    32,
+    40
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (sum-squares (list 2))) 5)",
+   "beforeHl": [
+    19,
+    41
+   ],
+   "after": "(check-expect (+ 1 (cond ((empty? (list 2)) 0) (else (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))))) 5)",
+   "afterHl": [
+    19,
+    111
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (cond ((empty? (list 2)) 0) (else (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))))) 5)",
+   "beforeHl": [
+    26,
+    43
+   ],
+   "after": "(check-expect (+ 1 (cond (#false 0) (else (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))))) 5)",
+   "afterHl": [
+    26,
+    32
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (cond (#false 0) (else (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))))) 5)",
+   "beforeHl": [
+    19,
+    100
+   ],
+   "after": "(check-expect (+ 1 (cond (else (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))))) 5)",
+   "afterHl": [
+    19,
+    89
+   ],
+   "lines": [
+    4,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (cond (else (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))))) 5)",
+   "beforeHl": [
+    19,
+    89
+   ],
+   "after": "(check-expect (+ 1 (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))) 5)",
+   "afterHl": [
+    19,
+    75
+   ],
+   "lines": [
+    4,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ (sqr (first (list 2))) (sum-squares (rest (list 2))))) 5)",
+   "beforeHl": [
+    27,
+    43
+   ],
+   "after": "(check-expect (+ 1 (+ (sqr 2) (sum-squares (rest (list 2))))) 5)",
+   "afterHl": [
+    27,
+    28
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ (sqr 2) (sum-squares (rest (list 2))))) 5)",
+   "beforeHl": [
+    22,
+    29
+   ],
+   "after": "(check-expect (+ 1 (+ 4 (sum-squares (rest (list 2))))) 5)",
+   "afterHl": [
+    22,
+    23
+   ],
+   "lines": [
+    5,
+    5
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ 4 (sum-squares (rest (list 2))))) 5)",
+   "beforeHl": [
+    37,
+    52
+   ],
+   "after": "(check-expect (+ 1 (+ 4 (sum-squares '()))) 5)",
+   "afterHl": [
+    37,
+    40
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ 4 (sum-squares '()))) 5)",
+   "beforeHl": [
+    24,
+    41
+   ],
+   "after": "(check-expect (+ 1 (+ 4 (cond ((empty? '()) 0) (else (+ (sqr (first '())) (sum-squares (rest '()))))))) 5)",
+   "afterHl": [
+    24,
+    101
+   ],
+   "lines": [
+    6,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ 4 (cond ((empty? '()) 0) (else (+ (sqr (first '())) (sum-squares (rest '()))))))) 5)",
+   "beforeHl": [
+    31,
+    43
+   ],
+   "after": "(check-expect (+ 1 (+ 4 (cond (#true 0) (else (+ (sqr (first '())) (sum-squares (rest '()))))))) 5)",
+   "afterHl": [
+    31,
+    36
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ 4 (cond (#true 0) (else (+ (sqr (first '())) (sum-squares (rest '()))))))) 5)",
+   "beforeHl": [
+    24,
+    94
+   ],
+   "after": "(check-expect (+ 1 (+ 4 0)) 5)",
+   "afterHl": [
+    24,
+    25
+   ],
+   "lines": [
+    4,
+    4
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 (+ 4 0)) 5)",
+   "beforeHl": [
+    19,
+    26
+   ],
+   "after": "(check-expect (+ 1 4) 5)",
+   "afterHl": [
+    19,
+    20
+   ],
+   "lines": [
+    5,
+    6
+   ]
+  },
+  {
+   "context": [
+    "(define (sum-squares lon)\n  (cond\n    ((empty? lon) 0)\n    (else (+ (sqr (first lon)) (sum-squares (rest lon))))))",
+    "25"
+   ],
+   "before": "(check-expect (+ 1 4) 5)",
+   "beforeHl": [
+    14,
+    21
+   ],
+   "after": "(check-expect 5 5)",
+   "afterHl": [
+    14,
+    15
+   ],
+   "lines": [
+    5,
+    6
+   ]
+  }
+ ]
+}
