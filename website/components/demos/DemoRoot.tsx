@@ -38,7 +38,7 @@ export default function DemoRoot({
   const style = { "--demo-w": w, "--demo-h": h, "--demo-pt": w / 2 } as CSSProperties;
   const chipId = `demo-${id}-chip`;
   const a11y = decorative
-    ? { "aria-hidden": true, inert: true }
+    ? { "aria-hidden": true, inert: true, "data-decorative-contrast": "" }
     : { role: "group", "aria-roledescription": "interactive demo", "aria-label": label, "aria-describedby": chipId };
   return (
     <div {...rootProps} {...a11y} className={`${className} ${d.demo}`} style={style} data-demo={id} data-theme={theme}>

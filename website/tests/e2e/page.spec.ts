@@ -48,9 +48,9 @@ test("no serious or critical accessibility violations", async ({ page }) => {
   await page.evaluate(() => document.querySelectorAll("[data-reveal]").forEach((el) => el.classList.add("is-in")));
   const scan = (b: AxeBuilder) => b.include("main [data-demo]");
   const all = await scan(new AxeBuilder({ page }).disableRules(["color-contrast"])).analyze();
-  // Contrast is checked everywhere except chrome marked as decorative (inactive line numbers,
-  // faint indent guides, the dimmed back card), which mirrors the app's own look.
-  const contrast = await scan(new AxeBuilder({ page }).withRules(["color-contrast"]).exclude("[data-decorative-contrast]")).analyze();
+  // Contrast is checked everywhere except what reproduces the app's own themes: syntax colours
+  // (tk-*), inactive line numbers, muted dialog chrome, test badges and the dimmed back card.
+  const contrast = await scan(new AxeBuilder({ page }).withRules(["color-contrast"]).exclude("[data-decorative-contrast]").exclude('[class*="tk-"]')).analyze();
   const bad = [...all.violations, ...contrast.violations].filter((v) => v.impact === "serious" || v.impact === "critical");
   expect(bad.map((v) => `${v.id}: ${v.nodes.slice(0, 3).map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
 });

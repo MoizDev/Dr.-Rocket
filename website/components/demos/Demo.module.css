@@ -47,7 +47,7 @@
   gap: 4px;
   font-size: 11px;
   font-style: italic;
-  color: var(--d-c-hint);
+  color: color-mix(in srgb, var(--d-text) 72%, var(--d-muted));
   white-space: nowrap;
 }
 
