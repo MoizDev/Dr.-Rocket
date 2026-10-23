@@ -118,18 +118,22 @@ test("lazy editors cause no layout shift", async ({ page, browserName }) => {
   expect(await page.evaluate(() => (window as unknown as { __cls: number }).__cls)).toBeLessThan(0.02);
 });
 
-test("CodeMirror is not in the initial bundle, and stays within budget", async ({ page, request }) => {
-  const scripts: string[] = [];
-  page.on("response", (r) => r.request().resourceType() === "script" && scripts.push(r.url()));
-  await page.goto("/", { waitUntil: "domcontentloaded" });
-  const initial = [...new Set(scripts)];
+test("CodeMirror is not in the initial bundle, and stays within budget", async ({ page, request, baseURL }) => {
+  // The initial bundle is the scripts the HTML names. They load async, so when they arrive can't
+  // tell them apart from the lazy chunks.
+  const html = await (await request.get("/")).text();
+  const initial = [...html.matchAll(/<script[^>]+src="([^"]+)"/g)].map((m) => new URL(m[1], baseURL).href);
   let initialHasCm = false;
   for (const u of initial) if ((await (await request.get(u)).text()).includes("cm-scroller")) initialHasCm = true;
   expect(initialHasCm).toBe(false);
+  const scripts: string[] = [];
+  page.on("response", (r) => r.request().resourceType() === "script" && scripts.push(r.url()));
+  await page.goto("/");
   await page.locator('[data-demo="hero-ide"] [data-live]').first().waitFor({ state: "attached" });
   for (const id of IDS) await page.locator(`[data-demo="${id}"]`).scrollIntoViewIfNeeded();
   await page.waitForTimeout(1000);
   const lazy = [...new Set(scripts)].filter((u) => !initial.includes(u));
+  expect(lazy.length, "lazy demo chunks").toBeGreaterThan(0);
   let bytes = 0;
   for (const u of lazy) bytes += gzipSync(await (await request.get(u)).body()).length;
   expect(bytes, "lazy demo chunks, gzip").toBeLessThanOrEqual(180 * 1024);
