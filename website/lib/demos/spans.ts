@@ -33,7 +33,10 @@ export function styleSpans(text: string): Span[] {
 export function lineCol(text: string, pos: number) {
   let line = 1;
   let ls = 0;
-  for (let i = 0; i < pos && i < text.length; i++) if (text[i] === "\n") (line++, (ls = i + 1));
+  for (let i = 0; i < pos && i < text.length; i++) if (text[i] === "\n") {
+      line++;
+      ls = i + 1;
+    }
   return { line, col: pos - ls };
 }
 
