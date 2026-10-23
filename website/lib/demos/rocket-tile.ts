@@ -1,5 +1,5 @@
 // The rocket image pasted into poster.rkt: the brand rocket (public/brand/rocket.svg) on a blue
-// tile, 140×140 image pixels as Racket sees it. Drawn as inline SVG, never an <img>. No ids, so
+// tile, 140×140 image pixels as Racket sees it. Drawn as inline SVG, never an image element. No ids, so
 // any number of copies can sit in one page.
 
 /** The brand rocket's two paths, in its own 94.53 × 145.79 viewBox. */
