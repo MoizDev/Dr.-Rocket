@@ -88,7 +88,8 @@ export default function DebuggerDemo({ className }: { className: string }) {
 
   const edited = file.status === "edited";
   const bpOk = breakpointsValid(bps);
-  const valid = !edited && bpOk;
+  // Edits don't block the demo: the same prepared pauses still play (the edited text never runs).
+  const valid = bpOk;
   const pause = typeof pos === "number" && pos >= 0 ? PAUSES[pos] : null;
 
   const go = useCallback((p: Pos, say = true) => {
@@ -231,9 +232,7 @@ export default function DebuggerDemo({ className }: { className: string }) {
 
           {!valid ? (
             <div className={s.notice}>
-              {edited ? (
-                <Notice onRestore={() => file.set(file.original)} />
-              ) : (
+              {(
                 <Notice
                   title="Breakpoints changed"
                   text={`This page doesn't run code. These pauses were prepared for a breakpoint on line ${BREAK_LINE}.`}
@@ -244,6 +243,9 @@ export default function DebuggerDemo({ className }: { className: string }) {
             </div>
           ) : (
             <div className={s.body}>
+              {edited && (
+                <Notice compact onRestore={() => file.set(file.original)} text="Simulated preview: the prepared pauses of the original file. Your edits aren't run." />
+              )}
               <div className={s.head}>VARIABLES</div>
               <ul className={s.vars} aria-label="Variables">
                 {vars.map((v) => (

@@ -76,7 +76,9 @@ function Segs({ segs }: { segs: Seg[] }) {
 
 export default function VisualizerDemo({ className }: { className: string }) {
   const file = useFile(FILE);
-  const valid = file.status !== "edited";
+  // After an edit the same prepared run still plays; only the editor highlights drop if they no
+  // longer fit the text. Nothing the visitor typed is run.
+  const edited = file.status === "edited";
   const [i, setI] = useState(REST);
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(2);
@@ -85,16 +87,14 @@ export default function VisualizerDemo({ className }: { className: string }) {
   const [work, setWork] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [announce, setAnnounce] = useState("");
-  const [lastValid, setLastValid] = useState(REST);
   const [recenter, setRecenter] = useState(0);
   const root = useRef<HTMLDivElement>(null);
-  const step = TRACE[valid ? i : lastValid];
+  const step = TRACE[i];
 
   const go = useCallback(
     (n: number, user = true) => {
       const j = Math.max(0, Math.min(TRACE.length - 1, n));
       setI(j);
-      setLastValid(j);
       setWork(false);
       if (user) {
         const t = TRACE[j];
@@ -107,7 +107,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
   // Play: a timeout chain that stops at the end, on pause, and when the window loses focus or
   // the tab is hidden. Never loops.
   useEffect(() => {
-    if (!playing || !valid) return;
+    if (!playing) return;
     if (i >= TRACE.length - 1) return;
     const t = window.setTimeout(() => {
       go(i + 1, false);
@@ -122,7 +122,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
       window.removeEventListener("blur", stop);
       document.removeEventListener("visibilitychange", vis);
     };
-  }, [playing, i, speed, valid, go]);
+  }, [playing, i, speed, go]);
 
   useEntryHint(
     root,
@@ -133,22 +133,19 @@ export default function VisualizerDemo({ className }: { className: string }) {
     () => setI(REST),
   );
 
-  const decor = useMemo(() => (valid ? stepDecor(step, file.original, file.text) : {}), [valid, step, file.original, file.text]);
-  const disabled = !valid;
+  const decor = useMemo(() => stepDecor(step, file.original, file.text), [step, file.original, file.text]);
   const overIdx = (dir: "over" | "out") => {
     const d = step.depth;
     for (let j = i + 1; j < TRACE.length; j++) if (dir === "over" ? TRACE[j].depth <= d : TRACE[j].depth < d) return j;
     return TRACE.length - 1;
   };
-  const why = disabled ? "bst.rkt was edited on this page, so the prepared steps don't apply" : undefined;
   const btn = (label: string, icon: Parameters<typeof Glyph>[0]["name"], run: () => void, extra?: object) => (
     <button
       type="button"
       className={s.tbtn}
       aria-label={label}
-      title={why ?? label}
-      aria-disabled={disabled || undefined}
-      onClick={() => !disabled && run()}
+      title={label}
+      onClick={run}
       tabIndex={-1}
       data-tool
       {...extra}
@@ -163,10 +160,10 @@ export default function VisualizerDemo({ className }: { className: string }) {
     if (e.key === "ArrowRight" || e.key === "ArrowLeft") {
       e.preventDefault();
       items[(k + (e.key === "ArrowRight" ? 1 : items.length - 1)) % items.length]?.focus();
-    } else if (e.key === "Home" && !disabled) {
+    } else if (e.key === "Home") {
       e.preventDefault();
       go(0);
-    } else if (e.key === "End" && !disabled) {
+    } else if (e.key === "End") {
       e.preventDefault();
       go(TRACE.length - 1);
     }
@@ -179,7 +176,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
 
   return (
     <DemoRoot id="visualizer" className={className} w={1920} h={1362} label={LABEL}>
-      <div ref={root} className={s.root} data-expanded={expanded || undefined} data-edited={!valid || undefined}>
+      <div ref={root} className={s.root} data-expanded={expanded || undefined} data-edited={edited || undefined}>
         <header className={s.title}>
           <span className={s.menu} aria-hidden="true">
             <Glyph name="menu" />
@@ -289,6 +286,20 @@ export default function VisualizerDemo({ className }: { className: string }) {
                   el.querySelectorAll<HTMLElement>("[data-tool]").forEach((b, k) => (b.tabIndex = k === toolFocus ? 0 : -1));
                 }}
               >
+                <button
+                  type="button"
+                  className={`${s.tbtn} ${s.runDemo}`}
+                  title="Replay the prepared run of bst.rkt from the first step"
+                  onClick={() => {
+                    go(0, false);
+                    setPlaying(true);
+                  }}
+                  tabIndex={-1}
+                  data-tool
+                >
+                  <Glyph name="play" />
+                  Run demo
+                </button>
                 {btn("First step", "first", () => go(0))}
                 {btn("Previous step", "prev", () => go(i - 1))}
                 {btn(playing ? "Pause" : "Play", playing ? "pause" : "play", () => {
@@ -300,7 +311,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
                 {btn("Step over", "over", () => go(overIdx("over")))}
                 {btn("Step out", "out", () => go(overIdx("out")))}
                 <span className={s.count}>
-                  Step {(valid ? i : lastValid) + 1} of {TRACE.length}
+                  Step {i + 1} of {TRACE.length}
                 </span>
                 <span className={s.grow} />
                 <button
@@ -336,14 +347,13 @@ export default function VisualizerDemo({ className }: { className: string }) {
                 {announce}
               </span>
 
-              <Timeline i={valid ? i : lastValid} disabled={disabled} onSeek={(n) => go(n)} />
+              <Timeline i={i} onSeek={(n) => go(n)} />
 
-              <Stage key={recenter} step={step} dim={!valid} />
+              <Stage key={recenter} step={step} dim={false} />
 
               <div className={s.explain}>
-                {!valid ? (
-                  <Notice onRestore={restore} />
-                ) : (
+                {edited && <Notice compact onRestore={restore} text="Edited. Run demo replays the same prepared run of the original bst.rkt; your edits aren't run." />}
+                {(
                   <>
                     <div className={s.label}>
                       <span className={s[`k${step.kind}`]}>{step.kind === "START" || step.kind === "DEFINE" ? "STEP" : step.kind}</span>
@@ -406,7 +416,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
 }
 
 /** The depth timeline: one bar per step, height by call depth. A slider. */
-function Timeline({ i, disabled, onSeek }: { i: number; disabled: boolean; onSeek: (n: number) => void }) {
+function Timeline({ i, onSeek }: { i: number; onSeek: (n: number) => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const n = TRACE.length;
   const seekAt = (x: number) => {
@@ -424,9 +434,7 @@ function Timeline({ i, disabled, onSeek }: { i: number; disabled: boolean; onSee
       aria-valuemax={n}
       aria-valuenow={i + 1}
       aria-valuetext={`Step ${i + 1} of ${n}`}
-      aria-disabled={disabled || undefined}
       onKeyDown={(e) => {
-        if (disabled) return;
         const m: Record<string, number> = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1, PageUp: 10, PageDown: -10 };
         if (e.key in m) onSeek(i + m[e.key]);
         else if (e.key === "Home") onSeek(0);
@@ -435,12 +443,11 @@ function Timeline({ i, disabled, onSeek }: { i: number; disabled: boolean; onSee
         e.preventDefault();
       }}
       onPointerDown={(e) => {
-        if (disabled) return;
         e.currentTarget.setPointerCapture(e.pointerId);
         seekAt(e.clientX);
       }}
       onPointerMove={(e) => {
-        if (!disabled && e.currentTarget.hasPointerCapture(e.pointerId)) seekAt(e.clientX);
+        if (e.currentTarget.hasPointerCapture(e.pointerId)) seekAt(e.clientX);
       }}
     >
       {TRACE.map((t, k) => (

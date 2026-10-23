@@ -67,6 +67,6 @@ export function missReply(table: Table): string {
   return `This demo only has prepared answers for a few expressions. Try ${ex.join(" or ")}.`;
 }
 
-export const DISCLOSURE = "Interactive demo · results are prepared, not run";
+export const DISCLOSURE = "Simulated preview";
 export const EDITED_NOTICE =
   "This page doesn't run code. These results were prepared for the original file, so they're hidden while it's changed.";
