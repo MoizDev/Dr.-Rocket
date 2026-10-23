@@ -5,8 +5,11 @@
 Next.js site deployed to the Vercel project `dr-rocket` (scope `moizs-projects-49365057`).
 The site hosts the downloads itself: `scripts/fetch-downloads.sh` pulls the assets of the
 public GitHub releases into `public/downloads/` (gitignored), with no login needed. Every Vercel
-build runs it, so a push to `master` deploys production and other branches get previews. A
-build fails rather than go out without the macOS or Windows files.
+build runs it, so a push to `master` deploys production and other branches get previews. When
+GitHub won't serve a file (while the repo is private), it copies the live site's file of the same
+version instead, checked against the SHA-256 in its `version.json`; so until the repo is public,
+a new release goes out with a deploy from this Mac. A build fails rather than go out without the
+macOS or Windows files.
 
 To deploy from this Mac instead (it uses the `gh` login when there is one):
 

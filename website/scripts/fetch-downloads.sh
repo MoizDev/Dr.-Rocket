@@ -10,9 +10,13 @@
 #
 # A token ($GITHUB_TOKEN, or a logged-in gh CLI) is used when there is one: it lifts GitHub's
 # rate limit for anonymous requests and also reads a private repo. If the release list can't be
-# read, the version already in release.json is used. An asset missing from the release (say, a
-# Linux build that hasn't been attached yet) is skipped with a warning; missing macOS or Windows
-# files fail the build.
+# read, the version already in release.json is used.
+#
+# If GitHub won't hand a file over (while the repo is private, say), the live site's own copy is
+# used when the site serves that same version, checked against the SHA-256 in its version.json.
+# So a build without GitHub access still deploys the same files, and their update signatures
+# still match. An asset missing from the release (say, a Linux build that hasn't been attached
+# yet) is skipped with a warning; missing macOS or Windows files fail the build.
 #
 # Usage: scripts/fetch-downloads.sh            (from anywhere)
 set -eu
@@ -24,6 +28,7 @@ manifest="$here/release.json"
 field() { node -e "const r=require(process.argv[1]); const v=process.argv[2].split('.').reduce((o,k)=>o[k],r); console.log(String(v).replaceAll('{version}', r.version))" "$manifest" "$1"; }
 
 repo="$(field repo)"
+site="https://doctorocket.com" # SITE in lib/release.ts
 mkdir -p "$out"
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
@@ -106,13 +111,41 @@ fetch() { # fetch ASSET DEST -> 0 when downloaded
   mv "$tmp/$asset" "$dest"
 }
 
+from_site() { # from_site OS DEST -> 0 when the live site's copy of this version was downloaded and verified
+  [ -s "$tmp/live.json" ] || curl -fsSL "$site/version.json" -o "$tmp/live.json" || return 1
+  live="$(node -e '
+    const [feed, version, os] = process.argv.slice(1);
+    const f = JSON.parse(require("fs").readFileSync(feed, "utf8"));
+    const d = f.downloads && f.downloads[os];
+    if (f.version !== version || !d) process.exit(1);
+    console.log(d.url + " " + d.sha256);
+  ' "$tmp/live.json" "$version" "$1")" || return 1
+  curl -fsSL "${live% *}" -o "$tmp/site-$1" || return 1
+  node -e '
+    const [path, want, url] = process.argv.slice(1);
+    const got = require("crypto").createHash("sha256").update(require("fs").readFileSync(path)).digest("hex");
+    if (got !== want) { console.error(`fetch-downloads: ${url} has SHA-256 ${got}, not ${want}`); process.exit(1); }
+  ' "$tmp/site-$1" "${live#* }" "${live% *}" || return 1
+  mv "$tmp/site-$1" "$2"
+}
+
 status=0
 for os in mac windows linux; do
   asset="$(field "downloads.$os.asset")"
   file="$(field "downloads.$os.file")"
-  # GitHub downloads occasionally fail mid-transfer: retry before giving up.
-  if fetch "$asset" "$out/$file" || { sleep 3; fetch "$asset" "$out/$file"; } || { sleep 10; fetch "$asset" "$out/$file"; }; then
-    echo "  $file  <- $asset ($(du -h "$out/$file" | cut -f1 | tr -d ' '))"
+  # GitHub first, then the live site's copy, then GitHub again: its downloads occasionally fail
+  # mid-transfer.
+  if fetch "$asset" "$out/$file"; then
+    from="$asset"
+  elif from_site "$os" "$out/$file"; then
+    from="$site/downloads/$file (the live copy, same SHA-256)"
+  elif { sleep 3; fetch "$asset" "$out/$file"; } || { sleep 10; fetch "$asset" "$out/$file"; }; then
+    from="$asset"
+  else
+    from=""
+  fi
+  if [ -n "$from" ]; then
+    echo "  $file  <- $from ($(du -h "$out/$file" | cut -f1 | tr -d ' '))"
   else
     echo "  $file  skipped: couldn't download $asset from release $tag" >&2
     [ "$os" = linux ] || status=1
