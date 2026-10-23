@@ -3,21 +3,18 @@
 ## Website (website/, live at doctorocket.com)
 
 Next.js site deployed to the Vercel project `dr-rocket` (scope `moizs-projects-49365057`).
-The site hosts the downloads itself: `scripts/fetch-downloads.sh` pulls the release assets into
-`public/downloads/` (gitignored) using the local `gh` login.
+The site hosts the downloads itself: `scripts/fetch-downloads.sh` pulls the assets of the
+public GitHub releases into `public/downloads/` (gitignored), with no login needed. Every Vercel
+build runs it, so a push to `master` deploys production and other branches get previews. A
+build fails rather than go out without the macOS or Windows files.
 
-Deploy by building locally and uploading the build, so the binaries go up with it and Vercel
-never needs a GitHub token:
+To deploy from this Mac instead (it uses the `gh` login when there is one):
 
 ```sh
 cd website
 vercel build --prod            # runs fetch-downloads.sh, then next build
 vercel deploy --prebuilt --prod
 ```
-
-Don't use a plain `vercel deploy` or git-triggered builds for production: they can't fetch the
-downloads, so they fail. Git pushes still get Vercel previews, which skip the downloads (their
-download buttons don't work).
 
 Release notes live in `release-notes/<version>.md` (a little Markdown: headings, paragraphs,
 lists, bold, code, links). The app embeds them all and shows them in its What's New tab on the
@@ -48,10 +45,11 @@ the background, checked, and installed when the app quits or the user clicks Res
 So a release reaches existing users as soon as the site is deployed and the CDN purged; a stale
 file fails the checksum and is never installed.
 
-Updates must also be signed with the release key (`docs/signed-updates.md`). Before each deploy,
-after `vercel build --prod` has fetched the new files, run
-`node tools/sign-updates.mjs ~/.drrocket-release/release-key.pem` from the repo root, commit
-`website/update-signatures.json`, and build again so `version.json` carries the signatures. Check
+Updates must also be signed with the release key (`docs/signed-updates.md`). For each release,
+fetch the new files (`sh website/scripts/fetch-downloads.sh`), run
+`node tools/sign-updates.mjs ~/.drrocket-release/release-key.pem` from the repo root, then commit
+and push `website/update-signatures.json` (and `website/release.json`) so the deployed
+`version.json` carries the signatures. Until then the app sees the new version but won't install it. Check
 that every platform in https://doctorocket.com/version.json has a `signature`. The private key
 never goes in Git or on the website.
 
