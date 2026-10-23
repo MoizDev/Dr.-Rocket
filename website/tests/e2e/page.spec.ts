@@ -11,7 +11,8 @@ const IDS = ["hero-ide", "hero-terminal", "visualizer", "stepper", "debugger", "
 test("all 11 demos replace the media, in order", async ({ page }) => {
   await page.goto("/");
   expect(await page.locator("main [data-demo]").evaluateAll((els) => els.map((e) => e.getAttribute("data-demo")))).toEqual(IDS);
-  expect(await page.locator("main img, main video, main picture").count()).toBe(0);
+  // CodeMirror's empty cursor-buffer <img>s around widgets aren't media.
+  expect(await page.locator("main img:not(.cm-widgetBuffer), main video, main picture").count()).toBe(0);
   for (const id of IDS.filter((i) => i !== "theme-dark")) {
     const root = page.locator(`[data-demo="${id}"]`);
     await expect(root).toHaveAttribute("role", "group");
