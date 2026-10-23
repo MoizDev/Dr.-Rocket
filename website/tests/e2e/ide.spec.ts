@@ -67,7 +67,9 @@ test.describe("projects", () => {
     const root = await live(page, "projects");
     await root.getByRole("tab", { name: "math239" }).first().click();
     await expect(root.getByRole("tree", { name: "math239 files" })).toBeVisible();
-    await root.getByRole("button", { name: "Quick open (⌘P)" }).click();
+    // The sidebar's search button can sit in the card's cropped edge, so use the shortcut.
+    await root.getByRole("tree", { name: "math239 files" }).locator("[role=treeitem]").first().focus();
+    await page.keyboard.press("ControlOrMeta+p");
     const search = root.getByLabel("Search files by name");
     await search.fill("degree");
     await expect(root.getByRole("option").first()).toContainText("degree");
