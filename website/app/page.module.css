@@ -1550,6 +1550,12 @@
   border-radius: 12px 12px 0 0;
 }
 
+/* Inset on both sides, so the card's rounded corner doesn't cut the stepper's status bar. */
+.featureCard .cardInsetFit,
+.feature:nth-of-type(even) .featureCard .cardInsetFit {
+  padding: clamp(28px, 4vw, 48px) clamp(28px, 4vw, 48px) 0;
+}
+
 @media (max-width: 900px) {
   .vizStage {
     max-width: 100%;

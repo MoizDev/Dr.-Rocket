@@ -192,7 +192,7 @@ export default function Home() {
                 </>
               }
             >
-              <div className={s.cardInset}>
+              <div className={`${s.cardInset} ${s.cardInsetFit}`}>
                 <StepperDemo className={`${s.shot} ${s.cardShot} ${s.stepperShot}`} />
               </div>
             </Feature>
