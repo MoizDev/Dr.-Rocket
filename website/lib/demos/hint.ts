@@ -57,3 +57,22 @@ export function useEntryHint(root: RefObject<HTMLElement | null>, start: () => H
 }
 
 const EVENTS = ["pointerdown", "keydown", "wheel", "focusin"] as const;
+
+/**
+ * After Run demo: lights up the step controls one after another, left to right, so a visitor
+ * sees they can be pressed. A tinted fill and ring that fade back within a second, drawn as a
+ * box-shadow because no control sets one (their colours are `!important`).
+ */
+export function flashInTurn(els: Iterable<HTMLElement>) {
+  [...els].forEach((el, k) => {
+    const css = getComputedStyle(el);
+    const ring = css.getPropertyValue("--d-accent").trim();
+    const fill = css.getPropertyValue("--d-hl-strong").trim();
+    el.animate([{ offset: 0.35, boxShadow: `inset 0 0 0 1px ${ring}, inset 0 0 0 40px ${fill}` }], {
+      id: "run-hint",
+      duration: 450,
+      delay: k * 110,
+      easing: "ease-in-out",
+    });
+  });
+}

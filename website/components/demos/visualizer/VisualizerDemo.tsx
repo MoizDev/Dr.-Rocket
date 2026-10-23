@@ -10,7 +10,7 @@ import { Icon } from "../icons";
 import { FileIcon } from "../file-icons";
 import { useFile } from "@/lib/demos/useFile";
 import { remapRange } from "@/lib/demos/fixtures";
-import { useEntryHint } from "@/lib/demos/hint";
+import { flashInTurn, useEntryHint } from "@/lib/demos/hint";
 import type { CodeDecor } from "@/lib/demos/editor/types";
 import type { Seg, VStep } from "@/lib/demos/bst-walk";
 import traceJson from "@/lib/demos/data/visualizer-trace.json";
@@ -167,6 +167,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
     go(0, false);
     setAnnounce(`Running the prepared demo from step 1 of ${TRACE.length}.`);
     setPlaying(true);
+    flashInTurn(root.current?.querySelectorAll<HTMLElement>("[data-transport]") ?? []);
   };
 
   const onToolbarKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -305,11 +306,11 @@ export default function VisualizerDemo({ className }: { className: string }) {
                   if (k >= 0) setToolFocus(k);
                 }}
               >
-                {btn(0, "First step", "first", () => go(0))}
-                {btn(1, "Previous step", "prev", () => go(i - 1))}
-                {btn(2, playing ? "Pause" : "Play", playing ? "pause" : "play", togglePlay, { "aria-pressed": playing })}
-                {btn(3, "Next step", "next", () => go(i + 1))}
-                {btn(4, "Last step", "last", () => go(TRACE.length - 1))}
+                {btn(0, "First step", "first", () => go(0), { "data-transport": "" })}
+                {btn(1, "Previous step", "prev", () => go(i - 1), { "data-transport": "" })}
+                {btn(2, playing ? "Pause" : "Play", playing ? "pause" : "play", togglePlay, { "aria-pressed": playing, "data-transport": "" })}
+                {btn(3, "Next step", "next", () => go(i + 1), { "data-transport": "" })}
+                {btn(4, "Last step", "last", () => go(TRACE.length - 1), { "data-transport": "" })}
                 {btn(5, "Step over", "over", () => go(overIdx("over")))}
                 {btn(6, "Step out", "out", () => go(overIdx("out")))}
                 <span className={s.count}>

@@ -1,6 +1,6 @@
 // The Visualizer and the debugger: prepared steps and pauses, how they move, and how they keep
 // replaying after edits and breakpoint changes.
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
   await page.emulateMedia({ reducedMotion: "reduce" });
@@ -22,7 +22,20 @@ const typeAtEnd = async (page: Page, root: ReturnType<Page["locator"]>, text: st
   await page.keyboard.type(text);
 };
 
+/** The step controls' labels and their flash delays, in page order. */
+const flashes = (root: Locator) =>
+  root.locator("[data-transport]").evaluateAll((els) => els.map((e) => [e.getAttribute("aria-label"), Number(e.getAnimations().find((a) => a.id === "run-hint")?.effect?.getTiming().delay)] as const));
+
 test.describe("visualizer", () => {
+  test("Run demo plays from step 1 and lights up the step controls, left to right", async ({ page }) => {
+    const root = await live(page, "visualizer");
+    await root.getByRole("button", { name: "Run demo" }).click();
+    const lit = await flashes(root);
+    expect(lit.map(([label]) => label)).toEqual(["First step", "Previous step", "Pause", "Next step", "Last step"]);
+    expect(lit.map(([, delay]) => delay)).toEqual([0, 110, 220, 330, 440]);
+    await expect(root.getByText(/^Step [1-3] of 92$/)).toBeVisible(); // restarted (it rests on 68)
+  });
+
   test("selected code keeps its colours on the selection colour, also on the current line", async ({ page }) => {
     const root = await live(page, "visualizer");
     const lines = root.locator(".cm-content .cm-line");

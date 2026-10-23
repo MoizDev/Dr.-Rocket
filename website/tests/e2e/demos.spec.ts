@@ -37,6 +37,13 @@ test("stepper steps, restarts, and keeps stepping after an edit", async ({ page 
   await expect(root.getByText("reduction")).toBeVisible();
 });
 
+test("stepper's Run demo lights up the step controls, left to right", async ({ page }) => {
+  const root = await live(page, "stepper");
+  await root.getByRole("button", { name: "Run demo" }).click();
+  const lit = await root.locator("[data-transport]").evaluateAll((els) => els.map((e) => [e.getAttribute("aria-label"), Number(e.getAnimations().find((a) => a.id === "run-hint")?.effect?.getTiming().delay)]));
+  expect(lit).toEqual([["First step", 0], ["Previous step", 110], ["Pause", 220], ["Next step", 330], ["Last step", 440]]);
+});
+
 test("rich source runs to prepared images", async ({ page }) => {
   const root = await live(page, "rich-source");
   await root.getByRole("button", { name: "Run poster.rkt" }).click();

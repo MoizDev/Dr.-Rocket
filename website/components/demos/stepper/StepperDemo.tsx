@@ -9,7 +9,7 @@ import KeysHelp, { EDITOR_KEYS } from "../KeysHelp";
 import { Icon, type IconName } from "../icons";
 import { FileIcon } from "../file-icons";
 import { useFile } from "@/lib/demos/useFile";
-import { useEntryHint } from "@/lib/demos/hint";
+import { flashInTurn, useEntryHint } from "@/lib/demos/hint";
 import { styleSpans } from "@/lib/demos/spans";
 import { remapRange } from "@/lib/demos/fixtures";
 import type { CodeDecor } from "@/lib/demos/editor/types";
@@ -121,6 +121,7 @@ export default function StepperDemo({ className }: { className: string }) {
     setUser(true);
     setAt(0);
     setPlaying(true);
+    flashInTurn(root.current?.querySelectorAll<HTMLElement>("[data-transport]") ?? []);
   }, []);
 
   // Play: a timeout chain that stops at the last step, on pause or any manual move, and when the
@@ -172,6 +173,8 @@ export default function StepperDemo({ className }: { className: string }) {
       title={label}
       aria-disabled={off || undefined}
       onClick={() => !off && run()}
+      // The step controls (all but Restart) light up in turn after Run demo.
+      data-transport={icon !== "restart" || undefined}
     >
       <Icon name={icon} size={14} />
     </button>
