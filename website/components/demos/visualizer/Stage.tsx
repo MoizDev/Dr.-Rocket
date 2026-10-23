@@ -1,16 +1,18 @@
 "use client";
 // The Visualizer's drawing: call frames on the left, the tree on the right, pointer arrows
-// between them. Zoom (buttons, ⌘/Ctrl-wheel) and drag-to-pan are CSS transforms only.
+// between them. Zoom (buttons, ⌘/Ctrl-wheel) and drag-to-pan are CSS transforms only. A frame or
+// node can be clicked to jump to the step where it appeared; hovering one marks that step on the
+// timeline (it never changes the drawing under the pointer).
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import type { ThenSeg, VFrame, VStep } from "@/lib/demos/bst-walk";
 import { Glyph } from "./glyphs";
 import s from "./Visualizer.module.css";
 
-// Stage units are app points.
-const VIEW_W = 420;
-const VIEW_H = 412;
+// Stage units are app points. VIEW_* is the drawing's box before it is measured (server render).
+const VIEW_W = 426;
+const VIEW_H = 420;
 const TREE_X = 300;
-const FRAME_W = 214;
+const FRAME_W = 232;
 const TOP_W = 128;
 const NODE_R = 11;
 const POS: Record<number, [number, number]> = { 5: [110, 14], 3: [58, 60], 8: [162, 60], 1: [30, 106], 4: [86, 106], 9: [190, 106] };
@@ -22,7 +24,7 @@ function layout(frames: VFrame[]): Placed[] {
   let y = 20;
   return frames.map((f, i) => {
     const w = f.fn === null ? TOP_W : FRAME_W;
-    const x = f.fn === null ? 44 : i % 2 ? 0 : 36;
+    const x = f.fn === null ? 44 : i % 2 ? 0 : 26;
     const rows: number[] = [];
     let h = 26;
     const row = () => {
@@ -68,19 +70,71 @@ const Then = ({ segs }: { segs: ThenSeg[] }) => (
   </>
 );
 
-export default function Stage({ step, dim }: { step: VStep; dim: boolean }) {
+type Drag = { x: number; y: number; px: number; py: number; moved: boolean; jump: number | null };
+
+const jumpOf = (t: EventTarget | null) => {
+  const el = t instanceof Element ? t.closest("[data-jump]") : null;
+  return el ? Number(el.getAttribute("data-jump")) : null;
+};
+
+export default function Stage({
+  step,
+  recenter,
+  frameStep,
+  nodeStep,
+  onJump,
+  onPeek,
+}: {
+  step: VStep;
+  /** Changes when Recenter is pressed: resets zoom and pan. */
+  recenter: number;
+  /** The step where the frame at this index (in the current step) began. */
+  frameStep: (index: number) => number;
+  /** The step where the node with this key first appears. */
+  nodeStep: (key: number) => number;
+  onJump: (step: number) => void;
+  onPeek: (step: number | null) => void;
+}) {
   const placed = layout(step.frames);
   const last = placed.at(-1)!;
   const cw = TREE_X + 220;
   const ch = Math.max(last.y + last.h + 20, 170);
-  const fit = Math.min(1, VIEW_W / cw, VIEW_H / ch);
+  const [view, setView] = useState({ w: VIEW_W, h: VIEW_H });
+  // Up to 1.4× when there is room (Focus the drawing), never cropped at the default zoom.
+  const fit = Math.min(1.4, view.w / cw, view.h / ch);
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
   const box = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; px: number; py: number } | null>(null);
+  const drag = useRef<Drag | null>(null);
   const sc = fit * zoom;
   const pct = Math.round(sc * 100);
   const clampZoom = (z: number) => Math.max(0.5, Math.min(3, z));
+
+  // Recenter: back to the fitted view.
+  useEffect(() => {
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
+  }, [recenter]);
+
+  // The drawing's box in app points, so it fits and centres at any size (and when focused).
+  useEffect(() => {
+    const el = box.current!;
+    const demo = el.closest<HTMLElement>("[data-demo]");
+    if (!demo) return;
+    const measure = () => {
+      const pt = Number(getComputedStyle(demo).getPropertyValue("--demo-pt")) || 960;
+      const u = demo.clientWidth / pt;
+      if (!u || !el.clientWidth || !el.clientHeight) return;
+      const w = Math.round(el.clientWidth / u);
+      const h = Math.round(el.clientHeight / u);
+      setView((v) => (v.w === w && v.h === h ? v : { w, h }));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
 
   useEffect(() => {
     const el = box.current!;
@@ -147,33 +201,59 @@ export default function Stage({ step, dim }: { step: VStep; dim: boolean }) {
   });
 
   return (
-    <div className={s.stage} data-dim={dim || undefined}>
+    <div className={s.stage}>
       <div
         ref={box}
         className={s.stageView}
         role="img"
         aria-label={summary(step)}
+        data-dragging={dragging || undefined}
         onPointerDown={(e) => {
-          if ((e.target as HTMLElement).closest("button")) return;
-          e.currentTarget.setPointerCapture(e.pointerId);
-          drag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y };
+          if (e.button !== 0) return;
+          // Capture only once the pointer moves, so a plain click still reaches a frame or node.
+          drag.current = { x: e.clientX, y: e.clientY, px: pan.x, py: pan.y, moved: false, jump: jumpOf(e.target) };
         }}
         onPointerMove={(e) => {
-          const d = drag.current;
-          if (!d) return;
+          let d = drag.current;
+          // A press that ended outside the drawing without a drag: forget it.
+          if (d && e.buttons === 0) d = drag.current = null;
+          if (!d) {
+            onPeek(jumpOf(e.target));
+            return;
+          }
+          const dx = e.clientX - d.x;
+          const dy = e.clientY - d.y;
+          if (!d.moved) {
+            if (Math.hypot(dx, dy) < 4) return;
+            d.moved = true;
+            e.currentTarget.setPointerCapture(e.pointerId);
+            setDragging(true);
+            onPeek(null);
+          }
           const r = e.currentTarget.getBoundingClientRect();
-          const k = VIEW_W / r.width; // screen px → stage points
-          setPan({ x: d.px + (e.clientX - d.x) * k, y: d.py + (e.clientY - d.y) * k });
+          const k = view.w / r.width; // screen px → stage points
+          setPan({ x: d.px + dx * k, y: d.py + dy * k });
         }}
-        onPointerUp={() => (drag.current = null)}
-        onPointerCancel={() => (drag.current = null)}
+        onPointerUp={() => {
+          const d = drag.current;
+          drag.current = null;
+          setDragging(false);
+          if (d && !d.moved && d.jump !== null) onJump(d.jump);
+        }}
+        onPointerCancel={() => {
+          drag.current = null;
+          setDragging(false);
+        }}
+        onPointerLeave={() => {
+          if (!drag.current) onPeek(null);
+        }}
       >
         <div
           className={s.world}
           style={{
             width: `calc(${cw} * var(--u))`,
             height: `calc(${ch} * var(--u))`,
-            transform: `translate(calc(${(VIEW_W - cw * sc) / 2 + pan.x} * var(--u)), calc(${pan.y} * var(--u))) scale(${sc})`,
+            transform: `translate(calc(${(view.w - cw * sc) / 2 + pan.x} * var(--u)), calc(${pan.y} * var(--u))) scale(${sc})`,
           }}
         >
           <svg className={s.svg} viewBox={`0 0 ${cw} ${ch}`} aria-hidden="true">
@@ -185,8 +265,10 @@ export default function Stage({ step, dim }: { step: VStep; dim: boolean }) {
             {svg}
             {step.nodes.map((k) => {
               const [x, y] = node(k);
+              const n = nodeStep(k);
               return (
-                <g key={k} className={pointed.has(k) ? s.nodeHot : s.node}>
+                <g key={k} className={pointed.has(k) ? s.nodeHot : s.node} data-jump={n}>
+                  <title>{`Node ${k}: jump to step ${n + 1}, where it was added`}</title>
                   <circle cx={x} cy={y} r={NODE_R} />
                   <text x={x} y={y + 4} textAnchor="middle">{k}</text>
                 </g>
@@ -198,6 +280,8 @@ export default function Stage({ step, dim }: { step: VStep; dim: boolean }) {
               key={k}
               className={`${s.frame} ${s[`st_${p.f.status}`]}`}
               style={{ left: `calc(${p.x} * var(--u))`, top: `calc(${p.y} * var(--u))`, width: `calc(${p.w} * var(--u))` }}
+              data-jump={frameStep(k)}
+              title={`Jump to step ${frameStep(k) + 1}, where ${p.f.fn === null ? "the program started" : "this call began"}`}
             >
               <div className={s.fhead}>
                 {p.f.fn === null ? (

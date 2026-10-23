@@ -1,6 +1,8 @@
 "use client";
 // The debugger paused on bst.rkt. Every pause (position, variables, call stack) comes from
-// lib/demos/data/debugger-pauses.json, generated at development time; nothing runs here.
+// lib/demos/data/debugger-pauses.json, generated at development time; nothing runs here. Edits
+// and breakpoint changes never block the controls: they always replay the prepared pauses of the
+// original file (Continue stops at the prepared line-20 entries while that breakpoint is set).
 import { useCallback, useMemo, useRef, useState } from "react";
 import DemoRoot, { DisclosureChip } from "../DemoRoot";
 import Code, { StaticLines } from "../Code";
@@ -12,7 +14,7 @@ import { Glyph } from "../visualizer/glyphs";
 import { useFile } from "@/lib/demos/useFile";
 import { remapRange } from "@/lib/demos/fixtures";
 import { useEntryHint } from "@/lib/demos/hint";
-import { BREAK_LINE, breakpointsValid, next, parseVal, type Val } from "@/lib/demos/bst-debug";
+import { BREAK_LINE, next, parseVal, type Val } from "@/lib/demos/bst-debug";
 import type { CodeDecor } from "@/lib/demos/editor/types";
 import type { DPause } from "@/lib/demos/bst-walk";
 import pausesJson from "@/lib/demos/data/debugger-pauses.json";
@@ -30,13 +32,14 @@ const STICKY = 7;
 const TOP = 10;
 
 type Pos = number | "done";
-type Cmd = "continue" | "into" | "over" | "out";
+type Cmd = "continue" | "into" | "over" | "out" | "restart";
 
 const KEYS: [string, string][] = [
   ["F5", "Continue"],
   ["F10", "Step over"],
   ["F11", "Step into"],
   ["⇧F11", "Step out"],
+  ["⇧⌘F5", "Restart"],
   ["Gutter click", "Toggle a breakpoint"],
   ...EDITOR_KEYS,
 ];
@@ -50,12 +53,14 @@ export function pauseDecor(p: DPause | null, bps: Set<number>, original: string,
   return { gutter, marks: [{ ...r, cls: s.paused }] };
 }
 
-function ValView({ v, depth = 0 }: { v: Val; depth?: number }) {
-  const [open, setOpen] = useState(false);
+function ValView({ v, depth = 0, open: shown, onToggle }: { v: Val; depth?: number; open?: boolean; onToggle?: () => void }) {
+  const [own, setOwn] = useState(false);
+  const open = shown ?? own;
+  const toggle = onToggle ?? (() => setOwn((o) => !o));
   if (typeof v === "string") return <span className={s.val}>{v}</span>;
   return (
     <span className={s.struct}>
-      <button type="button" className={s.disclose} aria-expanded={open} onClick={() => setOpen((o) => !o)} aria-label={open ? "Collapse node" : "Expand node"}>
+      <button type="button" className={s.disclose} aria-expanded={open} onClick={toggle} aria-label={open ? "Collapse node" : "Expand node"}>
         {open ? "▾" : "▸"}
       </button>
       {open ? (
@@ -77,6 +82,32 @@ function ValView({ v, depth = 0 }: { v: Val; depth?: number }) {
 
 const show = (v: Val): string => (typeof v === "string" ? v : `(make-node ${v.key} ${show(v.left)} ${show(v.right)})`);
 
+/** One variable: clicking its name selects the row and opens or closes a structure value. */
+function VarRow({ name, value, selected, onSelect }: { name: string; value: string; selected: boolean; onSelect: () => void }) {
+  const v = parseVal(value);
+  const struct = typeof v !== "string";
+  const [open, setOpen] = useState(false);
+  return (
+    <li className={s.var} data-selected={selected || undefined}>
+      <button
+        type="button"
+        className={s.vbtn}
+        aria-pressed={selected}
+        aria-label={struct ? `${name}: ${open ? "collapse" : "expand"} the value` : `${name} = ${value}`}
+        title={struct ? (open ? "Collapse the value" : "Expand the value") : `${name} = ${value}`}
+        onClick={() => {
+          onSelect();
+          if (struct) setOpen((o) => !o);
+        }}
+      >
+        <span className={s.vname}>{name}</span>
+        <span className={s.eq}> = </span>
+      </button>
+      <ValView v={v} open={open} onToggle={() => setOpen((o) => !o)} />
+    </li>
+  );
+}
+
 export default function DebuggerDemo({ className }: { className: string }) {
   const file = useFile(FILE);
   const root = useRef<HTMLDivElement>(null);
@@ -85,24 +116,27 @@ export default function DebuggerDemo({ className }: { className: string }) {
   const [frame, setFrame] = useState(0);
   const [raised, setRaised] = useState(false);
   const [announce, setAnnounce] = useState("");
+  const [sel, setSel] = useState<string | null>(null);
 
+  // Neither edits nor breakpoint changes block anything: the same prepared pauses replay (the
+  // edited text never runs).
   const edited = file.status === "edited";
-  const bpOk = breakpointsValid(bps);
-  // Edits don't block the demo: the same prepared pauses still play (the edited text never runs).
-  const valid = bpOk;
   const pause = typeof pos === "number" && pos >= 0 ? PAUSES[pos] : null;
 
   const go = useCallback((p: Pos, say = true) => {
     setPos(p);
     setFrame(0);
+    setSel(null);
     if (say) setAnnounce(p === "done" ? `Finished. Result ${RESULT}.` : `Paused on line ${PAUSES[p].line}: ${PAUSES[p].expr}`);
   }, []);
 
   const run = (cmd: Cmd) => {
-    if (!valid) return;
-    // After the run finishes, Continue starts it again.
-    const from = pos === "done" ? -1 : pos;
-    go(next(PAUSES, from, cmd, bps));
+    // Restart, and Continue after the run finishes, start the prepared run again.
+    if (cmd === "restart" || pos === "done") {
+      go(next(PAUSES, -1, cmd === "restart" ? "continue" : cmd, bps));
+      return;
+    }
+    go(next(PAUSES, pos, cmd, bps));
   };
 
   useEntryHint(
@@ -117,7 +151,7 @@ export default function DebuggerDemo({ className }: { className: string }) {
     () => setPos(REST),
   );
 
-  const decor = useMemo(() => pauseDecor(valid ? pause : null, bps, file.original, file.text), [valid, pause, bps, file.original, file.text]);
+  const decor = useMemo(() => pauseDecor(pause, bps, file.original, file.text), [pause, bps, file.original, file.text]);
   const toggle = (line: number) =>
     setBps((b) => {
       const n = new Set(b);
@@ -126,31 +160,33 @@ export default function DebuggerDemo({ className }: { className: string }) {
       return n;
     });
 
-  const why = !valid ? "The prepared pauses don't apply right now" : undefined;
-  const btn = (label: string, icon: Parameters<typeof Glyph>[0]["name"], cmd: Cmd | null, extra?: object) => (
+  const btn = (label: string, icon: Parameters<typeof Glyph>[0]["name"], cmd: Cmd | null, keys?: string) => (
     <button
       type="button"
       className={s.tbtn}
       aria-label={label}
-      title={why ?? label}
-      aria-disabled={!valid || cmd === null || undefined}
+      title={keys ? `${label} (${keys})` : label}
+      aria-disabled={cmd === null || undefined}
       onClick={() => cmd && run(cmd)}
       data-tool
-      {...extra}
     >
       <Glyph name={icon} size={14} />
     </button>
   );
 
   const onKey = (e: React.KeyboardEvent) => {
-    const m: Record<string, Cmd> = { F5: "continue", F10: "over", F11: e.shiftKey ? "out" : "into" };
+    const m: Record<string, Cmd> = {
+      F5: e.shiftKey && (e.metaKey || e.ctrlKey) ? "restart" : "continue",
+      F10: "over",
+      F11: e.shiftKey ? "out" : "into",
+    };
     const cmd = m[e.key];
     if (!cmd) return;
     e.preventDefault();
     run(cmd);
   };
 
-  const shown = pause && valid ? pause : null;
+  const shown = pause;
   const fr = shown ? shown.frames[Math.min(frame, shown.frames.length - 1)] : null;
   const vars = fr && shown ? [...fr.vars, ...shown.globals] : [];
   const stickyText = file.text.split("\n")[STICKY - 1] ?? "";
@@ -217,58 +253,55 @@ export default function DebuggerDemo({ className }: { className: string }) {
             </span>
           </div>
           <div className={s.toolbar} role="toolbar" aria-label="Debugger controls">
-            {btn(pos === "done" ? "Run again" : "Continue", "play", "continue")}
+            {btn(pos === "done" ? "Run again" : "Continue", "play", "continue", "F5")}
             {btn("Pause", "pause", null)}
-            {btn("Step over", "over", "over")}
-            {btn("Step into", "into", "into")}
-            {btn("Step out", "out", "out")}
+            {btn("Step over", "over", "over", "F10")}
+            {btn("Step into", "into", "into", "F11")}
+            {btn("Step out", "out", "out", "⇧F11")}
+            {btn("Restart", "restart", "restart", "⇧⌘F5")}
             <span className={pos === "done" ? s.finished : s.state} data-debug-state>
-              {!valid ? "Paused" : pos === "done" ? `Finished · result ${RESULT}` : "Paused"}
+              {pos === "done" ? `Finished · result ${RESULT}` : "Paused"}
             </span>
           </div>
           <span className={s.srOnly} aria-live="polite">
             {announce}
           </span>
 
-          {!valid ? (
-            <div className={s.notice}>
-              {(
-                <Notice
-                  title="Breakpoints changed"
-                  text={`This page doesn't run code. These pauses were prepared for a breakpoint on line ${BREAK_LINE}.`}
-                  restoreLabel="Restore breakpoint"
-                  onRestore={() => setBps(new Set([BREAK_LINE]))}
+          <div className={s.body}>
+            {edited && <Notice compact onRestore={() => file.set(file.original)} text="Edited · replaying the original bst.rkt" />}
+            <div className={s.head}>VARIABLES</div>
+            <ul className={s.vars} aria-label="Variables">
+              {vars.map((v) => (
+                <VarRow
+                  key={`${pos}-${frame}-${v.name}`}
+                  name={v.name}
+                  value={v.value}
+                  selected={sel === v.name}
+                  onSelect={() => setSel(v.name)}
                 />
-              )}
-            </div>
-          ) : (
-            <div className={s.body}>
-              {edited && (
-                <Notice compact onRestore={() => file.set(file.original)} text="Simulated preview: the prepared pauses of the original file. Your edits aren't run." />
-              )}
-              <div className={s.head}>VARIABLES</div>
-              <ul className={s.vars} aria-label="Variables">
-                {vars.map((v) => (
-                  <li key={v.name} className={s.var}>
-                    <span className={s.vname}>{v.name}</span>
-                    <span className={s.eq}> = </span>
-                    <ValView key={`${pos}-${frame}-${v.name}`} v={parseVal(v.value)} />
-                  </li>
-                ))}
-                {!shown && <li className={s.empty}>Not paused</li>}
-              </ul>
-              <div className={s.head}>CALL STACK</div>
-              <ul className={s.stack} aria-label="Call stack">
-                {shown?.frames.map((f, k) => (
-                  <li key={k}>
-                    <button type="button" className={s.frame} aria-current={k === frame || undefined} onClick={() => setFrame(k)} title={f.label}>
-                      {f.label}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
+              ))}
+              {!shown && <li className={s.empty}>{pos === "done" ? `Not paused · result ${RESULT}` : "Not paused"}</li>}
+            </ul>
+            <div className={s.head}>CALL STACK</div>
+            <ul className={s.stack} aria-label="Call stack">
+              {shown?.frames.map((f, k) => (
+                <li key={k}>
+                  <button
+                    type="button"
+                    className={s.frame}
+                    aria-current={k === frame || undefined}
+                    onClick={() => {
+                      setFrame(k);
+                      setSel(null);
+                    }}
+                    title={`${f.label}: show its variables`}
+                  >
+                    {f.label}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
           <div className={s.foot}>
             <DisclosureChip />
             <KeysHelp keys={KEYS} />

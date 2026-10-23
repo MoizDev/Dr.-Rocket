@@ -28,12 +28,24 @@ const SPEEDS = [0.5, 1, 2, 4];
 const MAX_DEPTH = Math.max(...TRACE.map((t) => t.depth));
 
 const KEYS: [string, string][] = [
-  ["← / →", "Previous / next step"],
+  ["← / →", "Previous / next step (timeline)"],
   ["Home / End", "First / last step"],
-  ["Space", "Play or pause (in the step bar)"],
-  ["⌘-scroll", "Zoom the drawing"],
+  ["Space", "Play or pause (timeline)"],
+  ["Click a frame or node", "Jump to the step where it began"],
+  ["Drag / ⌘-scroll", "Pan / zoom the drawing"],
   ...EDITOR_KEYS,
 ];
+
+/** The first step where each tree node exists. */
+const NODE_STEP = new Map<number, number>();
+TRACE.forEach((t, j) => t.nodes.forEach((k) => NODE_STEP.has(k) || NODE_STEP.set(k, j)));
+
+/** The step where frame `k` of step `i` was pushed: the latest CALL at or before `i` that made the stack k+1 deep. */
+export function frameStart(i: number, k: number) {
+  if (k === 0) return 0;
+  for (let j = i; j >= 0; j--) if (TRACE[j].kind === "CALL" && TRACE[j].frames.length === k + 1) return j;
+  return 0;
+}
 
 export function lineOfPos(text: string, pos: number) {
   let n = 1;
@@ -88,6 +100,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [announce, setAnnounce] = useState("");
   const [recenter, setRecenter] = useState(0);
+  const [peek, setPeek] = useState<number | null>(null);
   const root = useRef<HTMLDivElement>(null);
   const step = TRACE[i];
 
@@ -95,7 +108,6 @@ export default function VisualizerDemo({ className }: { className: string }) {
     (n: number, user = true) => {
       const j = Math.max(0, Math.min(TRACE.length - 1, n));
       setI(j);
-      setWork(false);
       if (user) {
         const t = TRACE[j];
         setAnnounce(`Step ${j + 1} of ${TRACE.length}. ${t.kind}. ${t.lines[0]?.map((g) => g.s).join("") ?? ""}`);
@@ -139,20 +151,23 @@ export default function VisualizerDemo({ className }: { className: string }) {
     for (let j = i + 1; j < TRACE.length; j++) if (dir === "over" ? TRACE[j].depth <= d : TRACE[j].depth < d) return j;
     return TRACE.length - 1;
   };
-  const btn = (label: string, icon: Parameters<typeof Glyph>[0]["name"], run: () => void, extra?: object) => (
-    <button
-      type="button"
-      className={s.tbtn}
-      aria-label={label}
-      title={label}
-      onClick={run}
-      tabIndex={-1}
-      data-tool
-      {...extra}
-    >
+  // Roving focus in the step bar: one tool is the Tab stop, arrows move between them.
+  const [toolFocus, setToolFocus] = useState(2);
+  const tool = (k: number) => ({ tabIndex: k === toolFocus ? 0 : -1, "data-tool": true });
+  const btn = (k: number, label: string, icon: Parameters<typeof Glyph>[0]["name"], run: () => void, extra?: object) => (
+    <button type="button" className={s.tbtn} aria-label={label} title={label} onClick={run} {...tool(k)} {...extra}>
       <Glyph name={icon} />
     </button>
   );
+  const togglePlay = () => {
+    if (!playing && i >= TRACE.length - 1) go(0, false);
+    setPlaying((p) => !p);
+  };
+  const runDemo = () => {
+    go(0, false);
+    setAnnounce(`Running the prepared demo from step 1 of ${TRACE.length}.`);
+    setPlaying(true);
+  };
 
   const onToolbarKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
     const items = Array.from(e.currentTarget.querySelectorAll<HTMLElement>("[data-tool]"));
@@ -168,8 +183,6 @@ export default function VisualizerDemo({ className }: { className: string }) {
       go(TRACE.length - 1);
     }
   };
-  const [toolFocus, setToolFocus] = useState(2);
-
   const restore = () => file.set(file.original);
   const tabs = ["Interactions", "Stepper", "Visualizer", "Tests", "Macro Stepper"] as const;
   const tabIcons = ["terminal", "stepper", "viz", "tests", "macro"] as const;
@@ -185,19 +198,28 @@ export default function VisualizerDemo({ className }: { className: string }) {
           <span className={s.plus} aria-hidden="true">
             <Icon name="add" size={15} />
           </span>
-          <span className={s.titleRight} aria-hidden="true">
-            <span className={s.langPill}>
+          <span className={s.titleRight}>
+            <span className={s.langPill} aria-hidden="true">
               <Glyph name="cap" />
               ISL+
               <Icon name="chevronDown" size={13} />
             </span>
-            <span className={s.run}>
-              <Icon name="play" size={18} />
+            <button
+              type="button"
+              className={s.runDemo}
+              title="Replay the prepared run of bst.rkt from the first step (your edits aren't run)"
+              aria-pressed={playing}
+              onClick={runDemo}
+            >
+              <Icon name="play" size={14} />
+              Run demo
+            </button>
+            <span className={s.titleIcons} aria-hidden="true">
+              <span className={s.sep} />
+              <Icon name="sidebar" size={15} />
+              <Icon name="panelBottom" size={15} />
+              <Icon name="panelRight" size={15} />
             </span>
-            <span className={s.sep} />
-            <Icon name="sidebar" size={15} />
-            <Icon name="panelBottom" size={15} />
-            <Icon name="panelRight" size={15} />
           </span>
         </header>
 
@@ -281,35 +303,14 @@ export default function VisualizerDemo({ className }: { className: string }) {
                   const k = items.indexOf(e.target as HTMLElement);
                   if (k >= 0) setToolFocus(k);
                 }}
-                ref={(el) => {
-                  if (!el) return;
-                  el.querySelectorAll<HTMLElement>("[data-tool]").forEach((b, k) => (b.tabIndex = k === toolFocus ? 0 : -1));
-                }}
               >
-                <button
-                  type="button"
-                  className={`${s.tbtn} ${s.runDemo}`}
-                  title="Replay the prepared run of bst.rkt from the first step"
-                  onClick={() => {
-                    go(0, false);
-                    setPlaying(true);
-                  }}
-                  tabIndex={-1}
-                  data-tool
-                >
-                  <Glyph name="play" />
-                  Run demo
-                </button>
-                {btn("First step", "first", () => go(0))}
-                {btn("Previous step", "prev", () => go(i - 1))}
-                {btn(playing ? "Pause" : "Play", playing ? "pause" : "play", () => {
-                  if (i >= TRACE.length - 1) go(0, false);
-                  setPlaying((p) => !p);
-                }, { "aria-pressed": playing })}
-                {btn("Next step", "next", () => go(i + 1))}
-                {btn("Last step", "last", () => go(TRACE.length - 1))}
-                {btn("Step over", "over", () => go(overIdx("over")))}
-                {btn("Step out", "out", () => go(overIdx("out")))}
+                {btn(0, "First step", "first", () => go(0))}
+                {btn(1, "Previous step", "prev", () => go(i - 1))}
+                {btn(2, playing ? "Pause" : "Play", playing ? "pause" : "play", togglePlay, { "aria-pressed": playing })}
+                {btn(3, "Next step", "next", () => go(i + 1))}
+                {btn(4, "Last step", "last", () => go(TRACE.length - 1))}
+                {btn(5, "Step over", "over", () => go(overIdx("over")))}
+                {btn(6, "Step out", "out", () => go(overIdx("out")))}
                 <span className={s.count}>
                   Step {i + 1} of {TRACE.length}
                 </span>
@@ -320,13 +321,12 @@ export default function VisualizerDemo({ className }: { className: string }) {
                   aria-label={`Speed ${speed}×`}
                   title="Speed"
                   onClick={() => setSpeed(SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length])}
-                  tabIndex={-1}
-                  data-tool
+                  {...tool(7)}
                 >
                   <Glyph name="speed" />
                   {speed}×
                 </button>
-                <button type="button" className={s.tbtn} aria-label="Recenter" title="Recenter" tabIndex={-1} data-tool data-recenter onClick={() => setRecenter((r) => r + 1)}>
+                <button type="button" className={s.tbtn} aria-label="Recenter" title="Recenter" {...tool(8)} data-recenter onClick={() => setRecenter((r) => r + 1)}>
                   <Glyph name="center" />
                 </button>
                 <button
@@ -336,57 +336,59 @@ export default function VisualizerDemo({ className }: { className: string }) {
                   aria-pressed={expanded}
                   title="Focus the drawing"
                   onClick={() => setExpanded((x) => !x)}
-                  tabIndex={-1}
-                  data-tool
+                  {...tool(9)}
                 >
                   <Glyph name="expand" />
                 </button>
-                {btn("Restart", "restart", () => (setPlaying(false), go(0)))}
+                {btn(10, "Restart", "restart", () => (setPlaying(false), go(0)))}
               </div>
               <span className={s.srOnly} aria-live="polite">
                 {announce}
               </span>
 
-              <Timeline i={i} onSeek={(n) => go(n)} />
+              <Timeline i={i} peek={peek} onSeek={(n) => go(n)} onToggle={togglePlay} />
 
-              <Stage key={recenter} step={step} dim={false} />
+              <Stage
+                step={step}
+                recenter={recenter}
+                frameStep={(k) => frameStart(i, k)}
+                nodeStep={(k) => NODE_STEP.get(k) ?? 0}
+                onJump={(n) => go(n)}
+                onPeek={setPeek}
+              />
 
               <div className={s.explain}>
-                {edited && <Notice compact onRestore={restore} text="Edited. Run demo replays the same prepared run of the original bst.rkt; your edits aren't run." />}
-                {(
+                {edited && <Notice compact onRestore={restore} text="Edited · replaying the original bst.rkt" />}
+                <div className={s.label}>
+                  <span className={s[`k${step.kind}`]}>{step.kind === "START" || step.kind === "DEFINE" ? "STEP" : step.kind}</span>
+                  {step.chip && <code className={s.chipCode}>{step.chip}</code>}
+                </div>
+                {step.lines.map((l, k) => (
+                  <p key={k} className={k === 0 ? s.lead : s.line}>
+                    <Segs segs={l} />
+                  </p>
+                ))}
+                {step.work.length > 0 && (
                   <>
-                    <div className={s.label}>
-                      <span className={s[`k${step.kind}`]}>{step.kind === "START" || step.kind === "DEFINE" ? "STEP" : step.kind}</span>
-                      {step.chip && <code className={s.chipCode}>{step.chip}</code>}
-                    </div>
-                    {step.lines.map((l, k) => (
-                      <p key={k} className={k === 0 ? s.lead : s.line}>
-                        <Segs segs={l} />
-                      </p>
-                    ))}
-                    {step.work.length > 0 && (
-                      <>
-                        <button type="button" className={s.work} aria-expanded={work} onClick={() => setWork((w) => !w)}>
-                          {work ? "▾" : "▸"} Show the work ({step.work.length})
-                        </button>
-                        {work && (
-                          <ul className={s.workList}>
-                            {step.work.map((w) => (
-                              <li key={w}>
-                                <code className={s.chipCode}>{w}</code>
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </>
-                    )}
-                    {step.output && (
-                      <div className={s.output}>
-                        <div className={s.outLabel}>OUTPUT SO FAR</div>
-                        <code>{step.output}</code>
-                      </div>
+                    <button type="button" className={s.work} aria-expanded={work} onClick={() => setWork((w) => !w)}>
+                      {work ? "▾" : "▸"} Show the work ({step.work.length})
+                    </button>
+                    {work && (
+                      <ul className={s.workList}>
+                        {step.work.map((w, k) => (
+                          <li key={k}>
+                            <code className={s.chipCode}>{w}</code>
+                          </li>
+                        ))}
+                      </ul>
                     )}
                   </>
+                )}
+                {step.output && (
+                  <div className={s.output}>
+                    <div className={s.outLabel}>OUTPUT SO FAR</div>
+                    <code>{step.output}</code>
+                  </div>
                 )}
               </div>
             </div>
@@ -416,7 +418,7 @@ export default function VisualizerDemo({ className }: { className: string }) {
 }
 
 /** The depth timeline: one bar per step, height by call depth. A slider. */
-function Timeline({ i, onSeek }: { i: number; onSeek: (n: number) => void }) {
+function Timeline({ i, peek, onSeek, onToggle }: { i: number; peek: number | null; onSeek: (n: number) => void; onToggle: () => void }) {
   const ref = useRef<HTMLDivElement>(null);
   const n = TRACE.length;
   const seekAt = (x: number) => {
@@ -439,6 +441,7 @@ function Timeline({ i, onSeek }: { i: number; onSeek: (n: number) => void }) {
         if (e.key in m) onSeek(i + m[e.key]);
         else if (e.key === "Home") onSeek(0);
         else if (e.key === "End") onSeek(n - 1);
+        else if (e.key === " ") onToggle();
         else return;
         e.preventDefault();
       }}
@@ -457,6 +460,7 @@ function Timeline({ i, onSeek }: { i: number; onSeek: (n: number) => void }) {
           style={{ height: `${18 + (t.depth / MAX_DEPTH) * 82}%` }}
         />
       ))}
+      {peek !== null && peek !== i && <span className={s.ghost} style={{ left: `${(peek / (n - 1)) * 100}%` }} aria-hidden="true" />}
       <span className={s.thumb} style={{ left: `${(i / (n - 1)) * 100}%` }} />
     </div>
   );
