@@ -11,4 +11,5 @@ const demoUnits = () => ({
 });
 demoUnits.postcss = true;
 
-export default { plugins: [demoUnits] };
+const config = { plugins: [demoUnits] };
+export default config;

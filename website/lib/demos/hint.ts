@@ -2,7 +2,7 @@
 // The entry hint: once per page load, when ≥35% of the demo is visible and the tab is visible.
 // It runs ≤ 2.5 s, never under reduced motion, and stops at once on any input inside the demo.
 // It must end on the static (rest) state. Afterwards nothing runs: no timers, no rAF.
-import { useEffect, useRef, type RefObject } from "react";
+import { useEffect, useLayoutEffect, useRef, type RefObject } from "react";
 
 export const HINT_MAX_MS = 2500;
 
@@ -14,7 +14,9 @@ export type HintStep = { at: number; run: () => void };
  */
 export function useEntryHint(root: RefObject<HTMLElement | null>, start: () => HintStep[], finish: () => void, enabled = true) {
   const fns = useRef({ start, finish });
-  fns.current = { start, finish };
+  useLayoutEffect(() => {
+    fns.current = { start, finish };
+  });
   useEffect(() => {
     const el = root.current;
     if (!el || !enabled) return;

@@ -1,7 +1,7 @@
 "use client";
 // A code view. The server renders static highlighted lines; CodeMirror is loaded only when the
 // demo nears the viewport or is touched, and then takes over with the same metrics.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { styleSpans } from "@/lib/demos/spans";
 import { IMAGE_CHAR } from "@/lib/demos/racket-lexer";
 import { rocketTile } from "@/lib/demos/rocket-tile";
@@ -36,7 +36,10 @@ function segments(text: string, from: number, to: number, ranges: { from: number
     cuts.add(Math.max(r.from, from));
     cuts.add(Math.min(r.to, to));
   }
-  for (let i = text.indexOf(IMAGE_CHAR, from); i >= 0 && i < to; i = text.indexOf(IMAGE_CHAR, i + 1)) cuts.add(i), cuts.add(i + 1);
+  for (let i = text.indexOf(IMAGE_CHAR, from); i >= 0 && i < to; i = text.indexOf(IMAGE_CHAR, i + 1)) {
+    cuts.add(i);
+    cuts.add(i + 1);
+  }
   const pts = [...cuts].sort((a, b) => a - b);
   const out: { from: number; to: number; cls: string; title?: string }[] = [];
   for (let i = 0; i + 1 < pts.length; i++) {
@@ -50,11 +53,11 @@ function segments(text: string, from: number, to: number, ranges: { from: number
 export function StaticLines({ text, decor = EMPTY, firstLine = 1, breakpointGutter }: Pick<CodeProps, "text" | "decor" | "firstLine" | "breakpointGutter">) {
   const ranges = [...styleSpans(text), ...(decor.marks ?? [])];
   const lines = text.split("\n");
-  let pos = 0;
+  const starts: number[] = [];
+  lines.reduce((at, line) => (starts.push(at), at + line.length + 1), 0);
   const rows: ReactNode[] = lines.map((line, i) => {
     const n = i + 1;
-    const start = pos;
-    pos += line.length + 1;
+    const start = starts[i];
     const lineCls = (decor.lines ?? []).filter((l) => l.line === n).map((l) => l.cls).join(" ");
     const bp = (decor.gutter ?? []).find((g) => g.line === n);
     const after = (decor.after ?? []).filter((a) => a.line === n);
@@ -90,7 +93,9 @@ export default function Code(p: CodeProps) {
   const host = useRef<HTMLDivElement>(null);
   const handle = useRef<EditorHandle | null>(null);
   const cb = useRef(p);
-  cb.current = p;
+  useLayoutEffect(() => {
+    cb.current = p;
+  });
   const [live, setLive] = useState(false);
 
   // Upgrade when near the viewport, or at once on first touch/focus.
