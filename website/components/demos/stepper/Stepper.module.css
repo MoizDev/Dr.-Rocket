@@ -1,4 +1,6 @@
-/* App points (1200 × 753), measured from stepper.png. */
+/* App points (1080 × 720). No file tree: the editor fits squares.rkt's longest line and the
+   stepper pane gets the rest, so the whole stepper (controls, BEFORE and AFTER) stays in the box.
+   Everything scales with the box (px → --u), so the layout holds at every width. */
 .app { position: absolute; inset: 0; }
 .titlebar { position: absolute; left: 0; right: 0; top: 0; height: 37px; display: flex; align-items: center; gap: 10px; padding: 0 12px; color: var(--d-muted); font-size: 12px; }
 .tbIcon { font-size: 15px; width: 14px; }
@@ -9,45 +11,81 @@
 .langDot { width: 9px; height: 9px; border-radius: 50%; background: var(--d-c-keyword); }
 .run { color: var(--d-success); }
 
-.sidebar, .editor, .panel { position: absolute; top: 41px; bottom: 25px; background: var(--d-panel); border-radius: 8px; overflow: hidden; }
-.sidebar { left: 5px; width: 192px; font-size: 11px; }
-.sideTools { display: flex; gap: 12px; align-items: center; height: 26px; padding: 0 8px; color: var(--d-muted); }
-.sideActive { color: var(--d-text); background: var(--d-elevated); border-radius: 4px; padding: 0 4px; }
-.sideTitle { margin: 7px 0 4px 10px; font-size: 9px; letter-spacing: 0.04em; color: var(--d-muted); }
-.treeRow { display: flex; align-items: center; gap: 5px; height: 19.3px; padding-left: calc(6px + var(--depth) * 14px); margin: 0 4px; border-radius: 4px; color: var(--d-text); }
-.treeSel { background: var(--d-selection); }
-.chev { width: 8px; color: var(--d-muted); }
+.editor, .panel { position: absolute; top: 41px; bottom: 25px; background: var(--d-panel); border-radius: 8px; overflow: hidden; }
 
-.editor { left: 201px; width: 607px; }
+/* 54pt gutter + 55 columns at 9pt: the check-expect line fits without scrolling. */
+.editor { left: 5px; width: 556px; }
 .tabs { height: 27px; display: flex; align-items: center; padding: 0 4px; }
 .tab { display: flex; align-items: center; gap: 6px; height: 21px; padding: 0 8px; background: var(--d-elevated); border-radius: 6px; font-size: 11px; color: var(--d-text); }
 .dirty { color: var(--d-text); font-size: 9px; }
 .codeBox { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; }
-.srcLine { background: repeating-linear-gradient(135deg, rgb(82 173 242 / 0.2) 0 4px, rgb(82 173 242 / 0.13) 4px 8px); }
+.srcLine { background: rgb(82 173 242 / 0.08); }
+/* AFTER's source first, so BEFORE's colour wins where the two overlap. */
+.srcAfter { background: rgb(152 195 121 / 0.2); border-radius: 2px; }
+.srcBefore { background: rgb(82 173 242 / 0.3); border-radius: 2px; }
 
-.panel { left: 813px; right: 6px; display: flex; flex-direction: column; }
+.panel { left: 565px; right: 6px; display: flex; flex-direction: column; }
 .panelTabs { height: 27px; display: flex; align-items: center; padding: 0 10px; flex: none; }
-.panelTab { display: flex; align-items: center; gap: 4px; padding: 3px 7px; background: var(--d-elevated); border-radius: 6px; font-size: 11px; margin-left: 15px; }
-.controls { display: flex; align-items: center; gap: 4px; height: 36px; padding: 0 12px; flex: none; }
-.ctl { width: 20px; height: 20px; display: inline-flex !important; align-items: center; justify-content: center; border-radius: 5px; color: var(--d-text); }
+.panelTab { display: flex; align-items: center; gap: 4px; padding: 3px 7px; background: var(--d-elevated); border-radius: 6px; font-size: 11px; }
+.controls { display: flex; align-items: center; gap: 4px; height: 34px; padding: 0 12px; flex: none; min-width: 0; }
+.controls > * { flex: none; }
+.ctl { width: 22px; height: 22px; display: inline-flex !important; align-items: center; justify-content: center; border-radius: 5px; color: var(--d-text); }
 .ctl:hover:not([aria-disabled]) { background: var(--d-selection); }
 .ctlMain { background: var(--d-selection) !important; }
-.counter { margin-left: 8px; font-size: 11px; color: var(--d-text); }
-.spacer { flex: 1; }
-.steps { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; padding: 0 8px 12px 12px; user-select: text; }
-.kind { font-size: 10px; color: var(--d-muted); margin: 4px 0 12px; }
-.cardHead { display: flex; align-items: center; gap: 4px; font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; color: var(--d-muted); margin-bottom: 10px; }
+.controls .runDemo {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 9px 0 7px;
+  margin-right: 6px;
+  border-radius: 5px;
+  background: var(--d-accent);
+  color: var(--d-window);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.controls .runDemo:hover { filter: brightness(1.1); }
+.counter { margin-left: 8px; font-size: 11px; color: var(--d-text); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.controls .speed { display: inline-flex; align-items: center; gap: 3px; height: 22px; padding: 0 6px; border-radius: 5px; font-size: 10.5px; color: var(--d-muted); font-variant-numeric: tabular-nums; }
+.controls .speed:hover { background: var(--d-selection); color: var(--d-text); }
+.spacer { flex: 1 1 auto !important; min-width: 0; }
+
+.scrub { display: flex; align-items: center; height: 18px; padding: 0 14px 4px; flex: none; }
+.slider { -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 14px; margin: 0; padding: 0; background: transparent; cursor: pointer; }
+.slider::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(var(--d-accent), var(--d-accent)) 0 0 / var(--fill, 0%) 100% no-repeat, var(--d-selection);
+}
+.slider::-webkit-slider-thumb { -webkit-appearance: none; appearance: none; width: 12px; height: 12px; margin-top: -4px; border: 0; border-radius: 50%; background: var(--d-text); }
+.slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--d-selection); }
+.slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--d-accent); }
+.slider::-moz-range-thumb { width: 12px; height: 12px; border: 0; border-radius: 50%; background: var(--d-text); }
+/* Fields lose the generic focus ring in demos; the slider shows focus on its thumb instead. */
+.slider:focus-visible::-webkit-slider-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--d-accent) 55%, transparent); }
+.slider:focus-visible::-moz-range-thumb { box-shadow: 0 0 0 3px color-mix(in srgb, var(--d-accent) 55%, transparent); }
+
+.editedNote { flex: none; margin: 0 12px 2px; font-size: 10.5px; color: var(--d-muted); }
+
+.steps { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; padding: 0 10px 12px 12px; user-select: text; }
+.kind { font-size: 10px; color: var(--d-muted); margin: 4px 0 10px; }
+.cardHead { display: flex; align-items: center; gap: 4px; font-size: 8.5px; font-weight: 600; letter-spacing: 0.06em; color: var(--d-muted); margin-bottom: 8px; }
 .dotBefore, .dotAfter { width: 5px; height: 5px; border-radius: 50%; background: var(--d-accent); }
 .dotAfter { background: var(--d-success); }
-.context, .redex { margin: 0 0 4px 6px; font-family: var(--font-code), monospace; font-size: 12px; line-height: 14.6px; white-space: pre-wrap; word-break: break-word; color: var(--d-fg); opacity: 0.72; }
+.context, .redex { margin: 0 0 4px 6px; font-family: var(--font-code), monospace; font-size: 12.5px; line-height: 16px; white-space: pre-wrap; word-break: break-word; color: var(--d-fg); opacity: 0.72; }
 .redex { opacity: 1; margin: 8px 0 0; padding: 4px 6px; background: var(--d-elevated); border-radius: 4px; }
 .hlBefore { background: rgb(82 173 242 / 0.28); }
 .hlAfter { background: rgb(152 195 121 / 0.3); }
-.arrow { text-align: center; color: var(--d-muted); font-size: 11px; margin: 4px 0 10px; }
+.arrow { text-align: center; color: var(--d-muted); font-size: 11px; margin: 4px 0 8px; }
 
-.status { position: absolute; left: 0; right: 0; bottom: 0; height: 25px; display: flex; align-items: center; gap: 14px; padding: 0 10px 0 16px; font-size: 10.5px; color: var(--d-muted); }
-.crumbs { display: flex; align-items: center; gap: 5px; margin-left: 50px; color: var(--d-text); }
+.status { position: absolute; left: 0; right: 0; bottom: 0; height: 25px; display: flex; align-items: center; gap: 14px; padding: 0 10px 0 16px; font-size: 10.5px; color: var(--d-muted); white-space: nowrap; }
+.status > * { flex: none; }
+.crumbs { display: flex; align-items: center; gap: 5px; margin-left: 4px; color: var(--d-text); min-width: 0; overflow: hidden; flex: 0 1 auto !important; }
 .crumbs > span { color: var(--d-muted); }
+.status .restore { height: 17px; padding: 0 8px; border-radius: 4px; background: var(--d-accent); color: var(--d-window); font-size: 10.5px; font-weight: 600; }
+.status .restore:hover { filter: brightness(1.1); }
 
 .steps :global(.tk-keyword) { color: var(--d-c-keyword); }
 .steps :global(.tk-function) { color: var(--d-c-function); }

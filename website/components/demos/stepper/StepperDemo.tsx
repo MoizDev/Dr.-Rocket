@@ -1,18 +1,20 @@
 "use client";
-// The algebraic stepper on squares.rkt (BSL). Steps are prepared (stepper-squares.json): they are
-// shown, never computed. Editing the file withdraws them until it is restored.
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+// The algebraic stepper on squares.rkt (BSL). Steps are prepared (stepper-squares.json) for the
+// original file: they are shown, never computed. Edits stay in the editor and never stop the
+// stepper; only the source highlights drop when they no longer map onto the edited text.
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import DemoRoot, { DisclosureChip } from "../DemoRoot";
 import Code from "../Code";
-import Notice from "../Notice";
 import KeysHelp, { EDITOR_KEYS } from "../KeysHelp";
-import { Icon } from "../icons";
+import { Icon, type IconName } from "../icons";
 import { FileIcon } from "../file-icons";
 import { useFile } from "@/lib/demos/useFile";
 import { useEntryHint } from "@/lib/demos/hint";
 import { styleSpans } from "@/lib/demos/spans";
+import { remapRange } from "@/lib/demos/fixtures";
 import type { CodeDecor } from "@/lib/demos/editor/types";
 import data from "@/lib/demos/data/stepper-squares.json";
+import { STEP_SOURCE } from "@/lib/demos/data/stepper-source";
 import { pretty } from "./sexpr";
 import s from "./Stepper.module.css";
 
@@ -20,9 +22,13 @@ export const LABEL = "The stepper showing a cond expression before and after one
 
 type Step = { context: string[]; before: string; beforeHl: number[]; after: string; afterHl: number[]; lines: number[]; rest?: boolean };
 const STEPS = data.steps as Step[];
+const LAST = STEPS.length - 1;
 export const REST = STEPS.findIndex((x) => x.rest);
 const FILE = "cs135/a03/squares.rkt";
-const WIDTH = 34;
+/** Columns BEFORE is laid out to, as the stepper does for its pane width. */
+const WIDTH = 46;
+const SPEEDS = [0.5, 1, 2] as const;
+const STEP_MS = 1100;
 
 /** Highlighted expression text: syntax colours plus the reducing range. */
 function Expr({ text, hl, hlCls }: { text: string; hl?: [number, number]; hlCls?: string }) {
@@ -68,32 +74,73 @@ function Card({ step, side }: { step: Step; side: "before" | "after" }) {
   );
 }
 
-const TREE: [number, string, "dir-open" | "dir" | "file" | "readme", boolean?][] = [
-  [0, "a03", "dir-open"],
-  [1, "grades.rkt", "file"],
-  [1, "squares.rkt", "file", true],
-  [0, "a05", "dir"],
-  [0, "notes", "dir"],
-  [0, "README.md", "readme"],
-];
+const lineOf = (text: string, pos: number) => text.slice(0, pos).split("\n").length;
+
+/** The step's source ranges in the current text; a range that no longer maps is dropped. */
+function stepDecor(at: number, original: string, text: string, edited: boolean): CodeDecor {
+  const src = STEP_SOURCE[at];
+  if (!src || edited) return {};
+  const marks: NonNullable<CodeDecor["marks"]> = [];
+  const lines: NonNullable<CodeDecor["lines"]> = [];
+  const after = src.after && remapRange(src.after, original, text);
+  if (after) marks.push({ ...after, cls: s.srcAfter, title: "Where AFTER comes from" });
+  const before = src.before && remapRange(src.before, original, text);
+  if (before) {
+    marks.push({ ...before, cls: s.srcBefore, title: "Being reduced" });
+    for (let l = lineOf(text, before.from); l <= lineOf(text, before.to); l++) lines.push({ line: l, cls: s.srcLine });
+  }
+  return { marks, lines };
+}
 
 export default function StepperDemo({ className }: { className: string }) {
   const root = useRef<HTMLDivElement>(null);
   const file = useFile(FILE);
   const [at, setAt] = useState(REST);
+  const [playing, setPlaying] = useState(false);
+  const [speed, setSpeed] = useState<(typeof SPEEDS)[number]>(1);
   const [user, setUser] = useState(false);
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
+  const changed = file.text !== file.original;
   const edited = file.status === "edited";
   const step = STEPS[at];
 
-  const go = useCallback(
-    (i: number) => {
-      if (edited) return;
-      setUser(true);
-      setAt(Math.max(0, Math.min(STEPS.length - 1, i)));
-    },
-    [edited],
-  );
+  /** A manual move: pauses playback. */
+  const go = useCallback((i: number) => {
+    setUser(true);
+    setPlaying(false);
+    setAt(Math.max(0, Math.min(LAST, i)));
+  }, []);
+
+  const play = useCallback(() => {
+    setUser(true);
+    if (at >= LAST) setAt(0);
+    setPlaying(true);
+  }, [at]);
+
+  const runDemo = useCallback(() => {
+    setUser(true);
+    setAt(0);
+    setPlaying(true);
+  }, []);
+
+  // Play: a timeout chain that stops at the last step, on pause or any manual move, and when the
+  // window loses focus or the tab is hidden. Never loops; nothing runs while paused.
+  useEffect(() => {
+    if (!playing || at >= LAST) return;
+    const t = window.setTimeout(() => {
+      setAt(at + 1);
+      if (at + 1 >= LAST) setPlaying(false);
+    }, STEP_MS / speed);
+    const stop = () => setPlaying(false);
+    const vis = () => document.hidden && stop();
+    window.addEventListener("blur", stop);
+    document.addEventListener("visibilitychange", vis);
+    return () => {
+      clearTimeout(t);
+      window.removeEventListener("blur", stop);
+      document.removeEventListener("visibilitychange", vis);
+    };
+  }, [playing, at, speed]);
 
   useEntryHint(
     root,
@@ -105,31 +152,42 @@ export default function StepperDemo({ className }: { className: string }) {
     () => setAt(REST),
   );
 
-  const decor = useMemo<CodeDecor>(() => {
-    if (edited) return {};
-    const lines = [];
-    for (let l = step.lines[0]; l <= step.lines[1]; l++) lines.push({ line: l, cls: s.srcLine });
-    return { lines };
-  }, [edited, step]);
+  const decor = useMemo(() => stepDecor(at, file.original, file.text, edited), [at, file.original, file.text, edited]);
 
-  const ctl = (label: string, icon: Parameters<typeof Icon>[0]["name"], to: number, extra?: string) => {
-    const off = edited || to === at || to < 0 || to >= STEPS.length;
-    return (
-      <button
-        type="button"
-        className={`${s.ctl} ${extra ?? ""}`}
-        aria-label={label}
-        title={edited ? "The steps were prepared for the original file" : label}
-        aria-disabled={off || undefined}
-        onClick={() => !off && go(to)}
-      >
-        <Icon name={icon} size={14} />
-      </button>
-    );
+  /** ← / → / Home / End step, except where a field or the slider has its own keys. */
+  const onKey = (e: KeyboardEvent<HTMLElement>) => {
+    const t = e.target as HTMLElement;
+    if (t.closest("input, textarea, [contenteditable], [role='textbox'], [role='dialog']")) return;
+    const k = { ArrowLeft: at - 1, ArrowRight: at + 1, Home: 0, End: LAST }[e.key];
+    if (k === undefined || e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    go(k);
   };
 
+  const ctl = (label: string, icon: IconName, run: () => void, off: boolean, extra?: string) => (
+    <button
+      type="button"
+      className={`${s.ctl} ${extra ?? ""}`}
+      aria-label={label}
+      title={label}
+      aria-disabled={off || undefined}
+      onClick={() => !off && run()}
+    >
+      <Icon name={icon} size={14} />
+    </button>
+  );
+
+  const counter = `Step ${at + 1} of ${STEPS.length}`;
+
   return (
-    <DemoRoot id="stepper" className={className} w={2400} h={1506} label={LABEL} rootProps={{ ref: root, tabIndex: -1 }}>
+    <DemoRoot
+      id="stepper"
+      className={className}
+      w={2160}
+      h={1440}
+      label={LABEL}
+      rootProps={{ ref: root, tabIndex: -1, onKeyDown: (e: KeyboardEvent<HTMLElement>) => e.target === e.currentTarget && onKey(e) }}
+    >
       <div className={s.app}>
         <div className={s.titlebar} aria-hidden="true">
           <span className={s.tbIcon}>≡</span>
@@ -142,33 +200,17 @@ export default function StepperDemo({ className }: { className: string }) {
               <Icon name="chevronDown" size={12} />
             </span>
             <Icon name="play" size={18} className={s.run} />
-            <Icon name="sidebar" size={14} />
             <Icon name="panelBottom" size={14} />
             <Icon name="panelRight" size={14} />
           </span>
         </div>
-
-        <aside className={s.sidebar} aria-hidden="true">
-          <div className={s.sideTools}>
-            <span className={s.sideActive}>▣</span>
-            <Icon name="search" size={13} />
-          </div>
-          <div className={s.sideTitle}>CS135</div>
-          {TREE.map(([depth, name, kind, sel]) => (
-            <div key={name} className={`${s.treeRow} ${sel ? s.treeSel : ""}`} style={{ ["--depth" as string]: depth }}>
-              <span className={s.chev}>{kind === "dir-open" ? "⌄" : kind === "dir" ? "›" : ""}</span>
-              <FileIcon name={kind === "dir-open" ? "folder-open" : kind === "dir" ? "folder" : kind === "readme" ? "readme" : "racket"} size={13} />
-              <span>{name}</span>
-            </div>
-          ))}
-        </aside>
 
         <section className={s.editor}>
           <div className={s.tabs} aria-hidden="true">
             <span className={s.tab}>
               <FileIcon name="racket" size={12} />
               squares.rkt
-              {file.text !== file.original ? <span className={s.dirty}>●</span> : <Icon name="close" size={11} />}
+              {changed ? <span className={s.dirty}>●</span> : <Icon name="close" size={11} />}
             </span>
           </div>
           <div className={s.codeBox}>
@@ -182,44 +224,64 @@ export default function StepperDemo({ className }: { className: string }) {
           </div>
         </section>
 
-        <section className={s.panel} aria-label="Stepper">
+        <section className={s.panel} aria-label="Stepper" onKeyDown={onKey}>
           <div className={s.panelTabs} aria-hidden="true">
             <span className={s.panelTab}>
               <Icon name="next" size={12} /> Stepper
             </span>
           </div>
-          <div
-            className={s.controls}
-            role="toolbar"
-            aria-label="Stepper controls"
-            onKeyDown={(e) => {
-              const k = { ArrowLeft: at - 1, ArrowRight: at + 1, Home: 0, End: STEPS.length - 1 }[e.key];
-              if (k !== undefined) {
-                e.preventDefault();
-                go(k);
-              }
-            }}
-          >
-            {ctl("First step", "first", 0)}
-            {ctl("Previous step", "prev", at - 1)}
-            {ctl("Next step", "next", at + 1, s.ctlMain)}
-            {ctl("Last step", "last", STEPS.length - 1)}
-            <span className={s.counter} aria-live={user ? "polite" : undefined}>
-              Step {at + 1} of {STEPS.length}
+          <div className={s.controls} role="toolbar" aria-label="Stepper controls">
+            <button
+              type="button"
+              className={s.runDemo}
+              title="Replay the prepared steps of squares.rkt from the first one"
+              onClick={runDemo}
+            >
+              <Icon name="play" size={12} />
+              Run demo
+            </button>
+            {ctl("First step", "first", () => go(0), at === 0)}
+            {ctl("Previous step", "prev", () => go(at - 1), at === 0)}
+            {ctl(playing ? "Pause" : "Play", playing ? "pause" : "play", playing ? () => setPlaying(false) : play, false, s.ctlMain)}
+            {ctl("Next step", "next", () => go(at + 1), at === LAST)}
+            {ctl("Last step", "last", () => go(LAST), at === LAST)}
+            <span className={s.counter} aria-live={user && !playing ? "polite" : undefined}>
+              {counter}
             </span>
             <span className={s.spacer} />
-            {ctl("Restart", "restart", 0)}
+            <button
+              type="button"
+              className={s.speed}
+              aria-label={`Speed ${speed}×`}
+              title="Play speed"
+              onClick={() => setSpeed(SPEEDS[(SPEEDS.indexOf(speed) + 1) % SPEEDS.length])}
+            >
+              <Icon name="speed" size={12} />
+              {speed}×
+            </button>
+            {ctl("Restart", "restart", () => go(0), at === 0 && !playing)}
           </div>
-          {edited ? (
-            <Notice onRestore={() => file.set(file.original)} />
-          ) : (
-            <div className={s.steps}>
-              <div className={s.kind}>reduction</div>
-              <Card step={step} side="before" />
-              <div className={s.arrow} aria-hidden="true">↓</div>
-              <Card step={step} side="after" />
-            </div>
-          )}
+          <div className={s.scrub}>
+            <input
+              type="range"
+              className={s.slider}
+              min={1}
+              max={STEPS.length}
+              step={1}
+              value={at + 1}
+              aria-label="Step"
+              aria-valuetext={counter}
+              style={{ ["--fill" as string]: `${(at / LAST) * 100}%` }}
+              onChange={(e) => go(Number(e.target.value) - 1)}
+            />
+          </div>
+          {edited && <div className={s.editedNote}>Steps of the original squares.rkt; your edits aren&rsquo;t run.</div>}
+          <div className={s.steps} tabIndex={0} role="group" aria-label="Before and after">
+            <div className={s.kind}>reduction</div>
+            <Card step={step} side="before" />
+            <div className={s.arrow} aria-hidden="true">↓</div>
+            <Card step={step} side="after" />
+          </div>
         </section>
 
         <footer className={s.status}>
@@ -227,6 +289,11 @@ export default function StepperDemo({ className }: { className: string }) {
             cs135 <span>›</span> a03 <span>›</span> <FileIcon name="racket" size={11} /> squares.rkt
           </span>
           <span className={s.spacer} />
+          {changed && (
+            <button type="button" className={s.restore} title="Restore the original squares.rkt" onClick={() => file.set(file.original)} data-restore>
+              Restore
+            </button>
+          )}
           <DisclosureChip />
           <span>
             Ln {cursor.line}, Col {cursor.col}
