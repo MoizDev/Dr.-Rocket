@@ -22,7 +22,7 @@ const typeAtEnd = async (page: Page, root: ReturnType<Page["locator"]>, text: st
 };
 
 test.describe("hero ide", () => {
-  test("REPL answers from the table, Run replays, edit withdraws", async ({ page }) => {
+  test("REPL answers from the table, Run replays, also after an edit", async ({ page }) => {
     const root = await live(page, "hero-ide");
     const log = root.getByRole("log", { name: "Interactions" });
     await expect(log).toContainText("All 4 tests passed");
@@ -35,7 +35,10 @@ test.describe("hero ide", () => {
 
     await typeAtEnd(page, root, "\n(define x 1)");
     await root.getByRole("button", { name: "Run" }).first().click();
-    await expect(log).toContainText("doesn't run code");
+    // A fresh run of the original: the earlier REPL input is gone and its results are back.
+    await expect(log).toContainText("Edited · replaying the original grades.rkt");
+    await expect(log).not.toContainText("(letter 64)");
+    await expect(log).toContainText("All 4 tests passed");
     await root.getByRole("button", { name: /Restore/ }).first().click();
     await expect(root.locator(".cm-content")).not.toContainText("(define x 1)");
   });
@@ -79,6 +82,33 @@ test.describe("projects", () => {
     await term.fill("racket graphs/degree.rkt");
     await term.press("Enter");
     await expect(root.getByRole("log", { name: "Terminal output" })).toContainText("(c . 3)");
+  });
+
+  test("closes the active file tab with its ✕ or the Delete key", async ({ page }) => {
+    const root = await live(page, "projects");
+    await root.getByRole("tab", { name: "math239" }).first().click();
+    const list = root.getByRole("tablist", { name: "Open files" });
+    const tabs = list.getByRole("tab");
+    const readme = tabs.filter({ hasText: "README.md" });
+    const openReadme = async () => {
+      await root.getByRole("tree", { name: "math239 files" }).locator("[role=treeitem]").first().focus();
+      await page.keyboard.press("ControlOrMeta+p");
+      await root.getByLabel("Search files by name").fill("readme");
+      await root.getByLabel("Search files by name").press("Enter");
+      await expect(readme).toHaveAttribute("aria-selected", "true");
+    };
+    await openReadme();
+    const n = await tabs.count();
+    expect(n).toBeGreaterThan(1);
+    await list.locator('[title="Close"]').click();
+    await expect(tabs).toHaveCount(n - 1);
+    await expect(readme).toHaveCount(0);
+    await openReadme();
+    await readme.focus();
+    await page.keyboard.press("Delete");
+    await expect(tabs).toHaveCount(n - 1);
+    await expect(readme).toHaveCount(0);
+    await expect(list.getByRole("tab", { selected: true })).toBeFocused();
   });
 });
 

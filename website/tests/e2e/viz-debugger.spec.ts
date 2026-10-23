@@ -1,5 +1,5 @@
-// The Visualizer and the debugger: prepared steps and pauses, how they move, and how edits and
-// breakpoint changes withdraw them.
+// The Visualizer and the debugger: prepared steps and pauses, how they move, and how they keep
+// replaying after edits and breakpoint changes.
 import { expect, test, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
@@ -40,14 +40,35 @@ test.describe("visualizer", () => {
     await expect(slider).toHaveAttribute("aria-valuenow", "1");
   });
 
-  test("an edit withdraws the steps until the file is restored", async ({ page }) => {
+  test("an edit keeps the steps playing, with a notice until restored", async ({ page }) => {
     const root = await live(page, "visualizer");
     await typeAtEnd(page, root, "\n(+ 1 2)");
-    await expect(root.locator("[data-notice]")).toBeVisible();
-    await expect(root.getByRole("button", { name: "Next step" })).toHaveAttribute("aria-disabled", "true");
+    await expect(root.locator("[data-notice]")).toContainText("Edited · replaying the original bst.rkt");
+    await root.getByRole("button", { name: "Next step" }).click();
+    await expect(root.getByText("Step 69 of 92", { exact: true })).toBeVisible();
     await root.locator("[data-restore]").click();
     await expect(root.locator("[data-notice]")).toHaveCount(0);
-    await expect(root.getByText("Step 68 of 92", { exact: true })).toBeVisible();
+    await expect(root.locator(".cm-content")).not.toContainText("(+ 1 2)");
+  });
+
+  test("Recenter undoes zoom and pan", async ({ page }) => {
+    const root = await live(page, "visualizer");
+    const pct = root.getByText(/^\d+%$/);
+    const world = root.getByRole("img").locator("> div");
+    const transform = () => world.evaluate((e) => getComputedStyle(e).transform);
+    const fitted = await pct.textContent();
+    const at = await transform();
+    await root.getByRole("button", { name: "Zoom in" }).click();
+    await expect(pct).not.toHaveText(fitted!);
+    const box = (await root.getByRole("img").boundingBox())!;
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height - 10);
+    await page.mouse.down();
+    await page.mouse.move(box.x + box.width / 2 - 60, box.y + box.height - 40, { steps: 5 });
+    await page.mouse.up();
+    await expect.poll(transform).not.toBe(at);
+    await root.getByRole("button", { name: "Recenter" }).click();
+    await expect(pct).toHaveText(fitted!);
+    await expect.poll(transform).toBe(at);
   });
 
   test("reformatting keeps the steps", async ({ page }) => {
@@ -96,22 +117,26 @@ test.describe("debugger", () => {
     await expect(root.locator("[data-debug-state]")).toHaveText("Finished · result 30");
   });
 
-  test("other breakpoints show the notice and Restore breakpoint", async ({ page }) => {
+  test("other breakpoints don't block: continue still stops at the prepared line-20 pauses", async ({ page }) => {
     const root = await live(page, "debugger");
     await root.getByRole("button", { name: "Continue" }).focus();
     await root.locator(".cm-lineNumbers .cm-gutterElement", { hasText: /^22$/ }).dispatchEvent("mousedown");
-    await expect(root.locator("[data-notice]")).toContainText("prepared for a breakpoint on line 20");
-    await root.getByRole("button", { name: "Restore breakpoint" }).click();
+    await expect(root.locator('[title="Breakpoint on line 22"]')).toHaveCount(1);
     await expect(root.locator("[data-notice]")).toHaveCount(0);
+    await root.getByRole("button", { name: "Continue" }).click();
     await expect(root.locator("[data-debug-state]")).toHaveText("Paused");
+    await expect(root.getByRole("list", { name: "Call stack" }).locator("li")).toHaveCount(4);
   });
 
-  test("an edit withdraws the pauses until restored", async ({ page }) => {
+  test("an edit keeps the pauses, with a notice until restored", async ({ page }) => {
     const root = await live(page, "debugger");
     await typeAtEnd(page, root, "\n(+ 1 2)");
-    await expect(root.locator("[data-notice]")).toBeVisible();
-    await expect(root.getByRole("list", { name: "Variables" })).toHaveCount(0);
-    await root.locator("[data-restore]").click();
+    await expect(root.locator("[data-notice]")).toContainText("Edited · replaying the original bst.rkt");
     await expect(root.getByRole("list", { name: "Variables" }).locator("li").first()).toHaveText("t = '()");
+    await root.getByRole("button", { name: "Step out" }).click();
+    await expect(root.getByRole("list", { name: "Call stack" }).locator("li")).toHaveCount(3);
+    await root.locator("[data-restore]").click();
+    await expect(root.locator("[data-notice]")).toHaveCount(0);
+    await expect(root.locator(".cm-content")).not.toContainText("(+ 1 2)");
   });
 });

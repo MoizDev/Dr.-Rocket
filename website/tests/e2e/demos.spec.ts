@@ -1,5 +1,5 @@
-// The stepper, Check Syntax, rich source and language demos: prepared results, how they move,
-// and how edits withdraw them until restored.
+// The stepper, rich source and language demos: prepared results, how they move, and how they
+// keep replaying after edits.
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
@@ -21,7 +21,7 @@ const typeAtEnd = async (page: Page, root: Locator, text: string) => {
 };
 const stepNo = async (root: Locator) => Number(/Step (\d+) of/.exec((await root.getByText(/^Step \d+ of \d+$/).textContent()) ?? "")?.[1]);
 
-test("stepper steps, restarts, and withdraws on edit", async ({ page }) => {
+test("stepper steps, restarts, and keeps stepping after an edit", async ({ page }) => {
   const root = await live(page, "stepper");
   const rest = await stepNo(root);
   expect(rest).toBeGreaterThan(1);
@@ -30,20 +30,11 @@ test("stepper steps, restarts, and withdraws on edit", async ({ page }) => {
   await root.getByRole("button", { name: "Restart" }).click();
   await expect.poll(() => stepNo(root)).toBe(1);
   await typeAtEnd(page, root, "\n(define z 3)");
+  await root.getByRole("button", { name: "Next step" }).click();
+  await expect.poll(() => stepNo(root)).toBe(2);
   await root.getByRole("button", { name: /Restore/ }).click();
   await expect(root.locator(".cm-content")).not.toContainText("(define z 3)");
   await expect(root.getByText("reduction")).toBeVisible();
-});
-
-test("check syntax shows prepared arrows and hides them on edit", async ({ page }) => {
-  const root = await live(page, "check-syntax");
-  await expect(root.getByRole("tooltip")).toContainText("3 bound occurrences");
-  expect(await root.locator("svg path").count()).toBeGreaterThanOrEqual(3);
-  await typeAtEnd(page, root, "\n(define z 3)");
-  await expect(root.getByText("Edited: the prepared arrows are hidden.")).toBeVisible();
-  await expect(root.getByRole("tooltip")).toHaveCount(0);
-  await root.getByRole("button", { name: /Restore/ }).click();
-  await expect(root.getByText("Edited: the prepared arrows are hidden.")).toHaveCount(0);
 });
 
 test("rich source runs to prepared images", async ({ page }) => {

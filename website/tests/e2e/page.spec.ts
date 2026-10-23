@@ -1,24 +1,25 @@
-// Page-wide checks for the demos: all present, no media left, downloads unchanged, accessible,
-// idle after the hint, and no layout shift from the lazy editors.
+// Page-wide checks for the demos: all present, only Check Syntax's screenshot left, downloads
+// unchanged, accessible, idle after the hint, and no layout shift from the lazy editors.
 import { expect, test } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
 import { gzipSync } from "node:zlib";
 import baseline from "./footprint-baseline.json" with { type: "json" };
 import { downloadAnchors } from "./measure";
 
-const IDS = ["hero-ide", "hero-terminal", "visualizer", "stepper", "debugger", "check-syntax", "rich-source", "projects", "theme-dark", "theme-light", "languages"];
+const IDS = ["hero-ide", "hero-terminal", "visualizer", "stepper", "debugger", "rich-source", "projects", "theme-dark", "theme-light", "languages"];
 
-test("all 11 demos replace the media, in order", async ({ page }) => {
+test("all 10 demos replace the media, in order; Check Syntax keeps its screenshot", async ({ page }) => {
   await page.goto("/");
   expect(await page.locator("main [data-demo]").evaluateAll((els) => els.map((e) => e.getAttribute("data-demo")))).toEqual(IDS);
   // CodeMirror's empty cursor-buffer <img>s around widgets aren't media.
-  expect(await page.locator("main img:not(.cm-widgetBuffer), main video, main picture").count()).toBe(0);
+  const media = page.locator("main img:not(.cm-widgetBuffer), main video, main picture");
+  expect(await media.evaluateAll((els) => els.map((e) => e.getAttribute("src") ?? e.tagName))).toEqual([expect.stringContaining("checksyntax")]);
   for (const id of IDS.filter((i) => i !== "theme-dark")) {
     const root = page.locator(`[data-demo="${id}"]`);
     await expect(root).toHaveAttribute("role", "group");
     await expect(root).toHaveAttribute("aria-roledescription", "interactive demo");
     const desc = await root.getAttribute("aria-describedby");
-    await expect(page.locator(`#${desc}`)).toHaveText("Interactive demo · results are prepared, not run");
+    await expect(page.locator(`#${desc}`)).toHaveText("Simulated preview");
     await expect(root.locator("[data-disclosure]"), id).toHaveCount(1);
   }
   const dark = page.locator('[data-demo="theme-dark"]');
@@ -30,8 +31,8 @@ test("renders complete without JavaScript", async ({ browser }) => {
   const ctx = await browser.newContext({ javaScriptEnabled: false });
   const page = await ctx.newPage();
   await page.goto("/");
-  await expect(page.locator("main [data-demo]")).toHaveCount(11);
-  for (const id of ["hero-ide", "check-syntax", "rich-source", "stepper"]) {
+  await expect(page.locator("main [data-demo]")).toHaveCount(IDS.length);
+  for (const id of ["hero-ide", "rich-source", "stepper"]) {
     const text = await page.locator(`[data-demo="${id}"]`).innerText();
     expect(text.length, id).toBeGreaterThan(80);
   }
