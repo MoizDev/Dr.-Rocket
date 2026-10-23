@@ -64,7 +64,7 @@ export function StaticLines({ text, decor = EMPTY, firstLine = 1, breakpointGutt
     return (
       <div className={s.row} key={n}>
         {breakpointGutter && <span className={s.bpCell}>{bp && <span className={bp.cls} title={bp.label} />}</span>}
-        <span className={s.num}>{n + firstLine - 1}</span>
+        <span className={s.num} data-decorative-contrast>{n + firstLine - 1}</span>
         <span className={`${s.line} ${lineCls}`}>
           {segments(text, start, start + line.length, ranges).map((g) =>
             text[g.from] === IMAGE_CHAR && g.to === g.from + 1 ? (
@@ -76,7 +76,7 @@ export function StaticLines({ text, decor = EMPTY, firstLine = 1, breakpointGutt
             ),
           )}
           {after.map((a, k) => (
-            <span key={`a${k}`} className={a.cls} aria-label={a.label}>
+            <span key={`a${k}`} className={a.cls} aria-label={a.label} data-decorative-contrast>
               {(a.check ? "✓ " : "") + a.text}
             </span>
           ))}
@@ -103,12 +103,13 @@ export default function Code(p: CodeProps) {
     if (p.staticOnly) return;
     const el = host.current!;
     let done = false;
+    let cancelled = false;
     const go = () => {
       if (done) return;
       done = true;
       io.disconnect();
       import("@/lib/demos/editor").then(({ mountEditor }) => {
-        if (!host.current) return;
+        if (cancelled || !host.current) return;
         const mount = el.querySelector<HTMLElement>(`.${s.mount}`)!;
         handle.current = mountEditor(mount, {
           doc: cb.current.text,
@@ -124,6 +125,8 @@ export default function Code(p: CodeProps) {
           onGutterClick: cb.current.onGutterClick ? (l) => cb.current.onGutterClick?.(l) : undefined,
           onEscape: () => el.closest<HTMLElement>("[data-demo]")?.focus(),
         });
+        // Inactive line numbers are dim on purpose, as in the app.
+        mount.querySelector(".cm-gutters")?.setAttribute("data-decorative-contrast", "");
         setLive(true);
         cb.current.onReady?.(handle.current);
       });
@@ -133,6 +136,7 @@ export default function Code(p: CodeProps) {
     el.addEventListener("pointerdown", go, { once: true });
     el.addEventListener("focusin", go, { once: true });
     return () => {
+      cancelled = true;
       io.disconnect();
       handle.current?.destroy();
       handle.current = null;

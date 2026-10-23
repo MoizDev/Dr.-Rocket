@@ -101,6 +101,7 @@ class AfterWidget extends WidgetType {
   toDOM() {
     const span = document.createElement("span");
     span.className = this.cls;
+    span.setAttribute("data-decorative-contrast", "");
     if (this.label) span.setAttribute("aria-label", this.label);
     span.textContent = (this.check ? "✓ " : "") + this.text;
     return span;

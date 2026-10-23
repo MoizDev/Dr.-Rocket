@@ -102,7 +102,7 @@ export default function LanguagesDemo({ className }: { className: string }) {
     <DemoRoot id="languages" className={className} w={1762} h={1281} label={LABEL} rootProps={{ ref: root, tabIndex: -1 }}>
       <div className={s.dialog}>
         <div className={s.title}>{DIALOG_TITLE}</div>
-        <div className={s.subtitle}>{DIALOG_SUBTITLE}</div>
+        <div className={s.subtitle} data-decorative-contrast>{DIALOG_SUBTITLE}</div>
         <div className={s.headerTools}>
           <DisclosureChip />
           <KeysHelp keys={KEYS} placement="down" />
@@ -113,7 +113,7 @@ export default function LanguagesDemo({ className }: { className: string }) {
             const heading = gi === 0 || GROUPS[gi - 1].heading !== g.heading ? g.heading : null;
             return (
               <div key={gi} role="group" aria-label={g.title || g.heading} className={s.group}>
-                {heading && <div className={s.heading} aria-hidden="true">{heading}</div>}
+                {heading && <div className={s.heading} data-decorative-contrast aria-hidden="true">{heading}</div>}
                 {g.title && <div className={s.groupTitle} aria-hidden="true">{g.title}</div>}
                 {g.languages.map((id) => {
                   const l = level(id);
@@ -146,10 +146,10 @@ export default function LanguagesDemo({ className }: { className: string }) {
           <div className={s.dSummary}>{lv.summary}</div>
           {isTeaching(st.id) ? (
             <>
-              <div className={`${s.section} ${s.first}`} id="lang-in">Input Syntax</div>
+              <div className={`${s.section} ${s.first}`} data-decorative-contrast id="lang-in">Input Syntax</div>
               <Toggle label="Case sensitive" on={cfg.caseSensitive} set={(v) => set({ caseSensitive: v })} />
 
-              <div className={s.section} id="lang-out">Output Syntax</div>
+              <div className={s.section} data-decorative-contrast id="lang-out">Output Syntax</div>
               <div role="radiogroup" aria-labelledby="lang-out">
                 {printingStyles(st.id).map((p) => (
                   <Radio key={p} name={`out-${st.id}`} label={PRINTING_LABEL[p]} on={cfg.printingStyle === p} pick={() => set({ printingStyle: p })} />
@@ -172,7 +172,7 @@ export default function LanguagesDemo({ className }: { className: string }) {
                 )}
               </div>
 
-              <div className={s.section}>Teachpacks</div>
+              <div className={s.section} data-decorative-contrast>Teachpacks</div>
               {cfg.teachpacks.map((tp) => (
                 <div key={tp} className={s.tp}>
                   <svg viewBox="0 0 24 24" className={s.tpIcon} aria-hidden="true">
@@ -228,13 +228,13 @@ export default function LanguagesDemo({ className }: { className: string }) {
             </button>
           )}
           <span className={s.spacer} />
-          <span className={s.current} aria-live="polite" data-confirmed>
+          <span className={s.current} data-decorative-contrast aria-live="polite" data-confirmed>
             Language: {level(confirmed.id).name}
           </span>
           <button type="button" className={s.plain} onClick={cancel}>
             Cancel
           </button>
-          <button type="button" className={s.primary} onClick={ok}>
+          <button type="button" className={s.primary} data-decorative-contrast onClick={ok}>
             OK
           </button>
         </div>
