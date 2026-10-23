@@ -27,6 +27,12 @@
   outline-offset: -2PX;
 }
 
+/* Text fields and editors count as focus-visible even on a click, so the ring showed on every
+   click. They show focus with their own caret, active line and field border instead. */
+.demo :is(input, textarea, [contenteditable], [role="textbox"]):focus-visible {
+  outline: none;
+}
+
 .demo button {
   font: inherit;
   color: inherit;
