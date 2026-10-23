@@ -31,7 +31,9 @@
   text-align: right;
   color: var(--d-line-no);
 }
-.bpCell, .bpGutter { flex: none; width: 14px; display: flex; align-items: center; justify-content: center; }
+.bpCell { flex: none; width: 14px; display: flex; align-items: center; justify-content: center; }
+.bpGutter { width: 14px; }
+.bpGutter :global(.cm-gutterElement) { display: flex; align-items: center; justify-content: center; }
 .line { flex: 1; min-width: 0; }
 .image {
   display: inline-block;

@@ -11,7 +11,7 @@
     "test:e2e": "playwright test",
     "typecheck": "tsc --noEmit",
     "test:node": "node lib/download-counter.test.mjs",
-    "gen:demos": "node scripts/gen-demo-fixtures.ts"
+    "gen:demos": "node scripts/gen-demo-fixtures.mts"
   },
   "dependencies": {
     "@codemirror/autocomplete": "^6.20.4",
