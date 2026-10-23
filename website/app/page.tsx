@@ -2,21 +2,22 @@ import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import NavScroll from "@/components/NavScroll";
 import Reveal from "@/components/Reveal";
-import VizVideo from "@/components/VizVideo";
+import HeroIdeDemo from "@/components/demos/hero-ide/HeroIdeDemo";
+import HeroTerminalDemo from "@/components/demos/hero-terminal/HeroTerminalDemo";
+import VisualizerDemo from "@/components/demos/visualizer/VisualizerDemo";
+import StepperDemo from "@/components/demos/stepper/StepperDemo";
+import DebuggerDemo from "@/components/demos/debugger/DebuggerDemo";
+import RichSourceDemo from "@/components/demos/rich-source/RichSourceDemo";
+import ProjectsDemo from "@/components/demos/projects/ProjectsDemo";
+import ThemeDemo from "@/components/demos/themes/ThemeDemo";
+import LanguagesDemo from "@/components/demos/languages/LanguagesDemo";
 import HeroTitle from "@/components/HeroTitle";
 import { ArrowRight, ArrowUpRight, GitHubIcon, Glyph, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, REPO, VERSION, VERSION_LABEL } from "@/lib/release";
 import s from "./page.module.css";
 
 import checksyntax from "./shots/checksyntax.png";
-import debuggerShot from "./shots/debugger.png";
-import drracketFiles from "./shots/drracket-files.png";
-import editor from "./shots/editor.png";
-import languages from "./shots/languages.png";
-import light from "./shots/light.png";
-import stepper from "./shots/stepper.png";
-import terminal from "./shots/terminal.png";
-import terminalPanel from "./shots/terminal-panel.png";
+
 
 const NAV = [
   ["Features", "#features"],
@@ -109,22 +110,8 @@ export default function Home() {
 
           <div className="container">
             <div className={s.heroPanel} data-reveal style={{ "--reveal-delay": 200 } as React.CSSProperties}>
-              <Image
-                className={`${s.shot} ${s.heroShot}`}
-                src={editor}
-                alt="Dr. Rocket with an Intermediate Student program: the file tree on the left, check-expect results passing inline, and the REPL on the right showing the results of a run."
-                sizes="(max-width: 1248px) 88vw, 1060px"
-                loading="eager"
-                fetchPriority="high"
-                quality={85}
-              />
-              <Image
-                className={`${s.shot} ${s.heroTerm}`}
-                src={terminalPanel}
-                alt="An integrated terminal in Dr. Rocket running raco test on an assignment."
-                sizes="(max-width: 1248px) 46vw, 560px"
-                quality={85}
-              />
+              <HeroIdeDemo className={`${s.shot} ${s.heroShot}`} />
+              <HeroTerminalDemo className={`${s.shot} ${s.heroTerm}`} />
             </div>
           </div>
         </section>
@@ -174,7 +161,7 @@ export default function Home() {
                 </p>
               </div>
               <div className={s.vizStage} data-reveal>
-                <VizVideo className={`${s.shot} ${s.vizShot}`} />
+                <VisualizerDemo className={`${s.shot} ${s.vizShot}`} />
               </div>
               <ul className={s.vizPoints}>
                 {[
@@ -205,8 +192,8 @@ export default function Home() {
                 </>
               }
             >
-              <div className={s.cardInset}>
-                <Image className={`${s.shot} ${s.cardShot}`} src={stepper} alt="The stepper showing a cond expression before and after one reduction, with the matching code highlighted in the editor." sizes="(max-width: 900px) 92vw, 680px" quality={85} />
+              <div className={`${s.cardInset} ${s.cardInsetFit}`}>
+                <StepperDemo className={`${s.shot} ${s.cardShot} ${s.stepperShot}`} />
               </div>
             </Feature>
 
@@ -221,7 +208,7 @@ export default function Home() {
               }
             >
               <div className={s.cardStack}>
-                <Image className={`${s.shot} ${s.stackBack}`} src={debuggerShot} alt="The debugger paused at a breakpoint inside tree-sum, with variables and a call stack of recursive calls." sizes="(max-width: 900px) 88vw, 620px" quality={85} />
+                <DebuggerDemo className={`${s.shot} ${s.stackBack}`} />
                 <Image className={`${s.shot} ${s.stackFront}`} src={checksyntax} alt="Check syntax arrows from the parameter marks to its three uses, with a tooltip reading 3 bound occurrences." sizes="(max-width: 900px) 60vw, 400px" quality={85} />
               </div>
             </Feature>
@@ -238,7 +225,7 @@ export default function Home() {
               }
             >
               <div className={s.cardInset}>
-                <Image className={`${s.shot} ${s.cardShot}`} src={drracketFiles} alt="A Beginning Student file saved by DrRacket with a pasted rocket image, and the REPL showing the images it produced." sizes="(max-width: 900px) 92vw, 680px" quality={85} />
+                <RichSourceDemo className={`${s.shot} ${s.cardShot}`} />
               </div>
             </Feature>
 
@@ -253,7 +240,7 @@ export default function Home() {
               }
             >
               <div className={s.cardInset}>
-                <Image className={`${s.shot} ${s.cardShot}`} src={terminal} alt="Three project tabs, cs136, math239 and cs135, with a #lang racket file open and an integrated terminal showing raco test results." sizes="(max-width: 900px) 92vw, 680px" quality={85} />
+                <ProjectsDemo className={`${s.shot} ${s.cardShot}`} />
               </div>
             </Feature>
 
@@ -269,8 +256,8 @@ export default function Home() {
               code
             >
               <div className={s.cardStack}>
-                <Image className={`${s.shot} ${s.themeBack}`} src={editor} alt="" sizes="(max-width: 900px) 70vw, 480px" quality={85} />
-                <Image className={`${s.shot} ${s.themeFront}`} src={light} alt="The same program in the One Light theme." sizes="(max-width: 900px) 80vw, 540px" quality={85} />
+                <ThemeDemo theme="dark" className={`${s.shot} ${s.themeBack}`} />
+                <ThemeDemo theme="light" className={`${s.shot} ${s.themeFront}`} />
               </div>
             </Feature>
           </div>
@@ -307,7 +294,7 @@ export default function Home() {
               </div>
             </div>
             <div className={s.langVisual} data-reveal>
-              <Image className={`${s.shot} ${s.langShot}`} src={languages} alt="The Choose Language dialog listing the Racket language, the How to Design Programs teaching languages and DeinProgramm, with output and fraction settings for Beginning Student." sizes="(max-width: 900px) 92vw, 600px" quality={85} />
+              <LanguagesDemo className={`${s.shot} ${s.langShot}`} />
             </div>
           </div>
         </section>

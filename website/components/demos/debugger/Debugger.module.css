@@ -1,0 +1,54 @@
+/* App points (1000 × 443.5), measured from debugger.png. */
+.raised { z-index: 3; }
+.app { position: absolute; inset: 0; background: var(--d-window); }
+.editor, .panel { position: absolute; top: 0; bottom: 0; background: var(--d-editor); overflow: hidden; }
+.editor { left: 0; width: 610px; }
+.panel { left: 614px; right: 0; display: flex; flex-direction: column; background: var(--d-panel); }
+
+.tabs { height: 28px; display: flex; align-items: center; padding: 0 8px; }
+.tab { display: inline-flex; align-items: center; gap: 6px; height: 21px; padding: 0 8px; border-radius: 6px; background: var(--d-elevated); color: var(--d-text); font-size: 11.5px; font-weight: 500; }
+.tab svg:last-child { color: var(--d-muted); }
+.dirty { font-size: 9px; }
+.tabTools { margin-left: auto; display: flex; align-items: center; gap: 14px; color: var(--d-muted); }
+.codeBox { position: absolute; top: 25px; left: 0; right: 0; bottom: 0; }
+.sticky { position: absolute !important; top: 4px; left: 0; right: 0; height: 23.5px !important; box-shadow: 0 6px 6px -6px rgb(0 0 0 / 0.6); pointer-events: none; }
+.sticky > div { padding-top: 0 !important; }
+.bp { display: block; width: 8px; height: 8px; border-radius: 50%; background: var(--d-error); }
+.paused { background: color-mix(in srgb, var(--d-warn) 9%, transparent); box-shadow: inset 0 0 0 1PX color-mix(in srgb, var(--d-warn) 30%, transparent); }
+
+.ptabs { height: 28px; flex: none; display: flex; align-items: center; gap: 13px; padding: 0 10px; color: var(--d-muted); }
+.ptab { display: inline-flex; align-items: center; gap: 5px; height: 21px; padding: 0 8px; border-radius: 6px; background: var(--d-elevated); color: var(--d-text); font-size: 11.5px; font-weight: 500; margin-left: -5px; }
+.ptab svg { color: var(--d-accent); }
+.ptabPlus { margin-left: auto; display: flex; color: var(--d-text); }
+
+.toolbar { height: 32px; flex: none; display: flex; align-items: center; gap: 4px; padding: 0 6px; }
+.tbtn { display: inline-flex !important; align-items: center; justify-content: center; width: 24px; height: 22px; border-radius: 5px; color: var(--d-text) !important; }
+.tbtn:hover:not([aria-disabled]) { background: var(--d-elevated) !important; }
+.tbtn:first-child:not([aria-disabled]) { background: var(--d-elevated) !important; }
+.tbtn[aria-disabled] { opacity: 0.45; cursor: default; }
+.state, .finished { margin-left: 10px; font-size: 11px; color: var(--d-c-number); }
+.finished { color: var(--d-success); }
+.srOnly { position: absolute; width: 1PX; height: 1PX; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+
+.body { flex: 1; min-height: 0; overflow: auto; scrollbar-width: none; padding: 0 0 30px 6px; user-select: text; }
+.head { margin: 6px 0 4px; font-size: 8.5px; font-weight: 600; letter-spacing: 0.05em; color: var(--d-muted); }
+.vars, .stack { list-style: none; margin: 0 0 8px; padding: 0; font-family: var(--font-code), "Fira Code", ui-monospace, monospace; font-size: 10.5px; }
+.var { min-height: 20.5px; line-height: 20.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--d-fg); }
+.vname { color: var(--d-c-variable); }
+.var { border-radius: 4px; padding-left: 2px; }
+.var[data-selected] { background: var(--d-elevated); }
+.vbtn { display: inline !important; font: inherit !important; border-radius: 3px; }
+.vbtn:hover .vname { text-decoration: underline; text-underline-offset: 2px; }
+.eq { color: var(--d-muted); }
+.val { color: var(--d-fg); }
+.struct { display: inline; }
+.var:has([aria-expanded="true"]) { white-space: normal; }
+.disclose { display: inline !important; color: var(--d-muted) !important; font-size: 9px !important; padding: 0 3px 0 0 !important; }
+.fields { display: inline-flex; flex-direction: column; vertical-align: top; }
+.field { padding-left: 14px; white-space: nowrap; }
+.fname { color: var(--d-muted); }
+.empty { color: var(--d-muted); font-family: var(--font-app), sans-serif; }
+.frame { display: block !important; width: 100%; height: 20.5px; padding: 0 6px 0 2px !important; text-align: left; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border-radius: 4px; color: var(--d-fg) !important; font: inherit !important; }
+.frame:hover { background: var(--d-elevated) !important; }
+.frame[aria-current] { color: var(--d-text) !important; }
+.foot { position: absolute; right: 8px; bottom: 6px; display: flex; align-items: center; gap: 8px; font-size: 10px; color: var(--d-muted); }

@@ -425,6 +425,8 @@
   margin-top: 56px;
   padding: clamp(24px, 4.5vw, 64px) clamp(20px, 5vw, 72px) 0;
   overflow: hidden;
+  overflow: clip;
+  display: flow-root;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background:
     radial-gradient(120% 90% at 85% 0%, rgb(255 255 255 / 0.35), transparent 60%),
@@ -1523,5 +1525,41 @@
 @media (max-width: 640px) {
   .footerInner ul {
     margin-left: 0;
+  }
+}
+
+/* Interactive demos keep still on hover; only the screenshots drift. */
+.heroPanel:hover [data-demo],
+.vizStage:hover [data-demo],
+.featureCard:hover [data-demo] {
+  transform: none !important;
+}
+
+/* The visualizer demo sits about 20% smaller than the full container, centred. */
+.vizStage {
+  max-width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* The stepper demo stays inside its card: no bleed off the page edge, so its panel shows. */
+.featureCard .stepperShot,
+.feature:nth-of-type(even) .featureCard .stepperShot {
+  width: 100%;
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  border-radius: 12px 12px 0 0;
+}
+
+/* Inset on both sides, so the card's rounded corner doesn't cut the stepper's status bar. */
+.featureCard .cardInsetFit,
+.feature:nth-of-type(even) .featureCard .cardInsetFit {
+  padding: clamp(28px, 4vw, 48px) clamp(28px, 4vw, 48px) 0;
+}
+
+@media (max-width: 900px) {
+  .vizStage {
+    max-width: 100%;
   }
 }

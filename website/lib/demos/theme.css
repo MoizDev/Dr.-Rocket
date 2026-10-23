@@ -1,0 +1,89 @@
+/* Dr. Rocket's colours (Moiz One Dark and One Light), from the app's theme source. */
+[data-theme="dark"] {
+  --d-window: #050507;
+  --d-panel: #0f1015;
+  --d-editor: #0f1015;
+  --d-elevated: #1d1f23;
+  --d-active-line: #191c23;
+  --d-line-no: #495162;
+  --d-line-no-active: #737984;
+  --d-text: #d7dae0;
+  --d-muted: #9da5b4;
+  --d-fg: #abb2bf;
+  --d-border: #1d1f23;
+  --d-accent: #61afef;
+  --d-selection: #2c313a;
+  --d-text-selection: #67769660;
+  --d-success: #98c379;
+  --d-success-bg: #1f2a1c;
+  --d-success-border: #34482d;
+  --d-error: #e06c75;
+  --d-warn: #e5c07b;
+  --d-c-keyword: #d55fde;
+  --d-c-function: #52adf2;
+  --d-c-variable: #ef596f;
+  --d-c-number: #d8985f;
+  --d-c-string: #98c379;
+  --d-c-comment: #7f848e;
+  --d-c-operator: #33d8e4;
+  --d-c-punct: #aab1c0;
+  --d-c-type: #f5c876;
+  --d-c-hint: #7a849c;
+  --d-r1: #e5c07b;
+  --d-r2: #d55fde;
+  --d-r3: #52adf2;
+  --d-band-alpha: 9%;
+  --d-ansi-blue: #4aa5f0;
+  --d-ansi-magenta: #c162de;
+  --d-hl: rgb(82 173 242 / 0.16);
+  --d-hl-strong: rgb(82 173 242 / 0.28);
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --d-window: #eaeaeb;
+  --d-panel: #eaeaeb;
+  --d-editor: #fafafa;
+  --d-elevated: #ffffff;
+  --d-active-line: #f0f0f1;
+  --d-line-no: #9d9d9f;
+  --d-line-no-active: #383a42;
+  --d-text: #383a42;
+  --d-muted: #696c77;
+  --d-fg: #383a42;
+  --d-border: #d3d3d4;
+  --d-accent: #4078f2;
+  --d-selection: #e5e5e6;
+  --d-text-selection: #e5e5e6;
+  --d-success: #50a14f;
+  --d-success-bg: #e7f0e2;
+  --d-success-border: #c9dcc0;
+  --d-error: #e45649;
+  --d-warn: #c18401;
+  --d-c-keyword: #a626a4;
+  --d-c-function: #4078f2;
+  --d-c-variable: #e45649;
+  --d-c-number: #986801;
+  --d-c-string: #50a14f;
+  --d-c-comment: #a0a1a7;
+  --d-c-operator: #0184bc;
+  --d-c-punct: #383a42;
+  --d-c-type: #c18401;
+  --d-c-hint: #a0a1a7;
+  --d-r1: #b07d00;
+  --d-r2: #a626a4;
+  --d-r3: #4078f2;
+  --d-band-alpha: 11%;
+  --d-ansi-blue: #4078f2;
+  --d-ansi-magenta: #a626a4;
+  --d-hl: rgb(64 120 242 / 0.12);
+  --d-hl-strong: rgb(64 120 242 / 0.22);
+  color-scheme: light;
+}
+
+/* One app point, computed once on each demo's stage and inherited as a fixed length. */
+@property --u {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}

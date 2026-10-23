@@ -6,7 +6,8 @@
 # attached; it is written into release.json, which the pages read. Repo and file names come
 # from release.json. Uses the gh CLI when it is logged in, otherwise the GitHub API
 # with $GITHUB_TOKEN (for CI or a Vercel build). An asset missing from the release (say, a
-# Linux build that hasn't been attached yet) is skipped with a warning, not an error.
+# Linux build that hasn't been attached yet) is skipped with a warning, not an error. A Vercel
+# preview build with neither skips all the files; any other build without them fails.
 #
 # Usage: scripts/fetch-downloads.sh            (from anywhere)
 set -eu
@@ -25,6 +26,12 @@ trap 'rm -rf "$tmp"' EXIT
 use_gh=0
 if command -v gh >/dev/null 2>&1 && gh auth token >/dev/null 2>&1; then use_gh=1; fi
 if [ "$use_gh" = 0 ] && [ -z "${GITHUB_TOKEN:-}" ]; then
+  # Vercel's preview builds (from git pushes) can't read GitHub: they build the page without the
+  # files, so only the previews' download buttons don't work. Production always needs them.
+  if [ "${VERCEL_ENV:-}" = preview ]; then
+    echo "fetch-downloads: no GitHub access on this preview build; skipping the downloads, so its download buttons won't work" >&2
+    exit 0
+  fi
   echo "fetch-downloads: need a logged-in gh CLI or GITHUB_TOKEN to read $repo" >&2
   exit 1
 fi

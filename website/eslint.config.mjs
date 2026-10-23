@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Local `vercel build` output.
     ".vercel/**",
+    "playwright-report/**",
+    "test-results/**",
   ]),
 ]);
 

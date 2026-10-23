@@ -1,0 +1,87 @@
+/* App metrics: 15pt Fira Code, 9pt advance, 23.5pt line pitch (pt = demo px, scaled by --u). */
+.code {
+  position: relative;
+  height: 100%;
+  overflow: hidden;
+  font-family: var(--font-code), "Fira Code", ui-monospace, monospace;
+  font-size: 15px;
+  line-height: 23.5px;
+  color: var(--d-fg);
+  background: var(--d-editor);
+  user-select: text;
+}
+.static {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  outline: none;
+}
+.static .lines {
+  transform: translateY(calc(var(--top, 0) * -23.5px));
+}
+.mount { height: 100%; }
+.code:not([data-live]) .mount { display: none; }
+.lines { padding-top: 4px; }
+.row { display: flex; white-space: pre; height: 23.5px; }
+.num {
+  flex: none;
+  width: 37px;
+  padding-right: 17px;
+  box-sizing: content-box;
+  text-align: right;
+  color: var(--d-line-no);
+}
+.bpCell { flex: none; width: 14px; display: flex; align-items: center; justify-content: center; }
+.bpGutter { width: 14px; }
+.bpGutter :global(.cm-gutterElement) { display: flex; align-items: center; justify-content: center; }
+.line { flex: 1; min-width: 0; }
+.image {
+  display: inline-block;
+  width: 23px;
+  height: 23px;
+  vertical-align: -6px;
+}
+
+.cm { height: 100%; font: inherit; color: inherit; background: transparent; }
+.cm:global(.cm-focused) { outline: none; }
+.cm :global(.cm-scroller) { font: inherit; line-height: 23.5px; overflow: auto; scrollbar-width: none; }
+.cm :global(.cm-content) { padding: 4px 0; caret-color: var(--d-accent); }
+.cm :global(.cm-line) { padding: 0; }
+.cm :global(.cm-gutters) { background: transparent; border: none; color: var(--d-line-no); }
+.cm :global(.cm-lineNumbers .cm-gutterElement) { width: 37px; padding: 0 17px 0 0; box-sizing: content-box; min-width: 0; }
+.cm :global(.cm-activeLine), .static :global(.active) { background: var(--d-active-line); }
+.cm :global(.cm-activeLineGutter) { background: transparent; color: var(--d-text); }
+.cm :global(.cm-selectionBackground), .cm:global(.cm-focused) :global(.cm-selectionBackground) { background: var(--d-text-selection) !important; }
+/* The selection is drawn under the text, so while there is one the current line isn't
+   highlighted (as in VS Code): its opaque fill would hide the selection on that line. */
+.cm:has(:global(.cm-selectionBackground)) :global(.cm-activeLine) { background: transparent; }
+/* Selected text keeps its colours: the page's own ::selection is navy, for its light backgrounds. */
+.code ::selection { color: var(--d-fg); background: var(--d-text-selection); }
+.cm :global(.cm-cursor) { border-left: 2px solid var(--d-accent); }
+.cm :global(.cm-matchingBracket) { background: var(--d-hl); outline: 1PX solid var(--d-border); }
+
+/* Token colours, shared by the static lines and CodeMirror, selected or not. */
+.code :global(.tk-keyword), .code :global(.tk-keyword)::selection { color: var(--d-c-keyword); }
+.code :global(.tk-function), .code :global(.tk-function)::selection { color: var(--d-c-function); }
+.code :global(.tk-variable), .code :global(.tk-variable)::selection { color: var(--d-c-variable); }
+.code :global(.tk-number), .code :global(.tk-constant), .code :global(.tk-symbol),
+.code :global(.tk-number)::selection, .code :global(.tk-constant)::selection, .code :global(.tk-symbol)::selection { color: var(--d-c-number); }
+.code :global(.tk-string), .code :global(.tk-string)::selection { color: var(--d-c-string); }
+.code :global(.tk-comment), .code :global(.tk-comment)::selection { color: var(--d-c-comment); font-style: italic; }
+.code :global(.tk-operator), .code :global(.tk-operator)::selection { color: var(--d-c-operator); }
+.code :global(.tk-type), .code :global(.tk-type)::selection { color: var(--d-c-type); }
+.code :global(.tk-punct), .code :global(.tk-punct)::selection { color: var(--d-c-punct); }
+.code :global(.rb-1), .code :global(.rb-1)::selection { color: var(--d-r1); }
+.code :global(.rb-2), .code :global(.rb-2)::selection { color: var(--d-r2); }
+.code :global(.rb-3), .code :global(.rb-3)::selection { color: var(--d-r3); }
+/* Indent bands as in paint_indent_bands: a faint fill per 2-column step, a dot on each space. */
+.code :global(.band) {
+  background-color: color-mix(in srgb, var(--band) var(--band-alpha, 9%), transparent);
+  background-image: radial-gradient(circle, color-mix(in srgb, var(--d-line-no) 80%, transparent) 0.9px, transparent 1.3px);
+  background-size: 9px 100%;
+  background-position: 0 55%;
+}
+.code[data-theme="light"] :global(.band), [data-theme="light"] .code :global(.band) { --band-alpha: 11%; }
+.code :global(.band-1) { --band: var(--d-r1); }
+.code :global(.band-2) { --band: var(--d-r2); }
+.code :global(.band-3) { --band: var(--d-r3); }

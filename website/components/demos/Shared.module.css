@@ -1,0 +1,134 @@
+/* Shared demo widgets. Sizes are app points (converted by postcss.config.mjs). */
+/* The edited notice: a single quiet line that wraps only when its box is narrow. */
+.notice {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  column-gap: 6px;
+  row-gap: 2px;
+  margin: 8px;
+  padding: 4px 8px;
+  background: var(--d-elevated);
+  border: 1px solid var(--d-selection);
+  border-radius: 6px;
+  color: var(--d-text);
+  font-family: var(--font-app), sans-serif;
+  font-size: 11px;
+  font-style: normal;
+  line-height: 16px;
+  white-space: normal;
+  user-select: text;
+}
+.noticeCompact { margin: 0 0 6px; }
+.noticeDot { color: var(--d-r1); font-size: 8px; align-self: center; }
+.noticeTitle { font-weight: 600; }
+.noticeText { color: var(--d-muted); flex: 1 1 auto; min-width: 0; }
+.restore {
+  color: var(--d-accent) !important;
+  font-weight: 600 !important;
+  white-space: nowrap;
+  border-radius: 4px;
+  padding: 0 4px !important;
+}
+.restore:hover { text-decoration: underline; }
+
+/* The editor's small Restore, shown while the open file is edited. */
+.editRestore {
+  position: absolute;
+  top: 7px;
+  right: 12px;
+  z-index: 2;
+  display: inline-flex !important;
+  align-items: center;
+  gap: 4px;
+  height: 18px;
+  padding: 0 7px !important;
+  border-radius: 4px;
+  background: var(--d-elevated) !important;
+  border: 1px solid var(--d-selection) !important;
+  color: var(--d-muted) !important;
+  font-family: var(--font-app), sans-serif !important;
+  font-size: 10px !important;
+}
+.editRestore:hover { color: var(--d-text) !important; }
+
+/* A clickable panel tool (the Interactions broom). */
+.toolBtn { display: inline-flex !important; align-items: center; border-radius: 4px; }
+.toolBtn:hover { color: var(--d-text) !important; }
+
+.keys { position: relative; display: inline-flex; }
+.keysBtn { display: inline-flex; align-items: center; color: var(--d-muted); padding: 2px !important; border-radius: 4px; }
+.keysBtn:hover { color: var(--d-text); }
+.keysPop {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 240px;
+  background: var(--d-elevated);
+  border: 1px solid var(--d-border);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.35);
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--d-text);
+}
+.keysDown { bottom: auto; top: calc(100% + 6px); }
+.keysPop dl { margin: 0; display: grid; gap: 4px; }
+.keysRow { display: flex; justify-content: space-between; gap: 12px; }
+.keysRow dd { margin: 0; color: var(--d-muted); text-align: right; }
+.keysPop kbd { font-family: inherit; font-size: 11px; background: var(--d-selection); border-radius: 4px; padding: 1px 5px; }
+.keysClose { margin-top: 8px; font-size: 11px; color: var(--d-accent) !important; }
+
+.repl { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+.replLog {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-width: none;
+  padding: 10px 14px;
+  font-family: var(--font-code), monospace;
+  font-size: 13px;
+  line-height: 20px;
+  color: var(--d-fg);
+  user-select: text;
+}
+.replIn { display: flex; gap: 8px; color: var(--d-text); }
+.replPrompt { color: var(--d-accent); }
+.replCode { white-space: pre-wrap; }
+.replOut { white-space: pre-wrap; color: var(--d-c-function); margin-bottom: 6px; }
+.replError { white-space: pre-wrap; color: var(--d-r1); margin-bottom: 6px; }
+/* A muted reply given in place of an answer (e.g. "Run squares.rkt first"). */
+.replHint { white-space: pre-wrap; color: var(--d-c-hint); font-style: italic; font-family: var(--font-app), sans-serif; font-size: 12px; }
+/* Marks a REPL answer as the original file's while that file is edited. */
+.sampleTag { margin-left: 8px; font-family: var(--font-app), sans-serif; font-size: 10px; font-style: italic; color: var(--d-c-hint); white-space: nowrap; }
+.replMuted { white-space: pre-wrap; color: var(--d-c-hint); font-style: italic; font-family: var(--font-app), sans-serif; font-size: 12px; margin-bottom: 6px; }
+.replForm {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 10px 10px;
+  padding: 0 10px;
+  height: 34px;
+  border: 1px solid var(--d-border);
+  border-radius: 8px;
+  background: var(--d-editor);
+}
+.replInput {
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: 0;
+  outline: none;
+  color: var(--d-text);
+  font-family: var(--font-code), monospace;
+  font-size: 13px;
+}
+.replInput::placeholder { color: var(--d-c-hint); }
+.langChip {
+  font-size: 11px;
+  color: var(--d-muted);
+  background: var(--d-selection);
+  border-radius: 4px;
+  padding: 2px 6px;
+}

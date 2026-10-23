@@ -1,0 +1,13 @@
+/* The front theme card: a skin carrying the chosen theme's tokens, and the theme selector. */
+.skin { position: absolute; inset: 0; background: var(--d-window); color: var(--d-text); }
+
+/* In the title bar's empty middle, between the project tabs and the language pill. */
+.picker { position: absolute; left: 50%; top: 9px; transform: translateX(-50%); z-index: 20; font-size: 11px; }
+/* Text colour, not muted: One Light's muted grey is under 4.5:1 on its title bar. */
+.button { display: inline-flex !important; align-items: center; gap: 5px; height: 20px; padding: 0 7px !important; border-radius: 5px; color: var(--d-text) !important; white-space: nowrap; }
+.button:hover, .button[aria-expanded="true"] { background: var(--d-elevated) !important; }
+.swatch { width: 12px; height: 12px; color: var(--d-accent); }
+.list { position: absolute; left: 50%; top: 24px; transform: translateX(-50%); width: 210px; margin: 0; padding: 4px; list-style: none; background: var(--d-elevated); border: 1PX solid var(--d-selection); border-radius: 8px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.35); outline: none; }
+.item { display: flex; align-items: center; justify-content: space-between; height: 24px; padding: 0 8px; border-radius: 5px; cursor: pointer; color: var(--d-text); }
+.on { background: var(--d-selection); }
+.base { color: var(--d-muted); font-size: 10px; }

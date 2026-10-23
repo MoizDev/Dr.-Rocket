@@ -1,0 +1,32 @@
+# Lint, type-check, unit-test, and build the website.
+name: Website
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - "website/**"
+      - "src/editor/keywords.rs"
+      - "tests/indent/**"
+      - ".github/workflows/website.yml"
+
+jobs:
+  website:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: website
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npx next typegen
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run test:node
+      - run: npx next build

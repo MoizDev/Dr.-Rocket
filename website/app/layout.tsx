@@ -1,12 +1,14 @@
 import type { Metadata, Viewport } from "next";
-import { Fira_Code, Geist_Mono, Google_Sans } from "next/font/google";
+import { Fira_Code, Geist_Mono, Google_Sans, Inter } from "next/font/google";
 import { VERSION } from "@/lib/release";
 import "./globals.css";
+import "@/lib/demos/theme.css";
 
 // Google Sans for headings and text alike.
 const sans = Google_Sans({ subsets: ["latin"], variable: "--font-sans" });
 const mono = Geist_Mono({ subsets: ["latin"], variable: "--font-mono" });
 const code = Fira_Code({ subsets: ["latin"], weight: ["400", "500"], variable: "--font-code" });
+const app = Inter({ subsets: ["latin"], variable: "--font-app" });
 
 const description =
   "A fast, native Racket IDE that replaces DrRacket. Every language level, a stepper that matches DrRacket step for step, check syntax, a debugger, and a Visualizer that draws your program as it runs. Free for macOS, Windows and Linux.";
@@ -43,7 +45,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
     <html
       lang="en"
       data-os="other"
-      className={`${sans.variable} ${mono.variable} ${code.variable}`}
+      className={`${sans.variable} ${mono.variable} ${code.variable} ${app.variable}`}
       suppressHydrationWarning
     >
       <head>
