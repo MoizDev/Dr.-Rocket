@@ -7,6 +7,7 @@ import KeysHelp from "./KeysHelp";
 import { FileIcon, fileIconFor } from "./file-icons";
 import { IdeIcon } from "./IdeIcons";
 import s from "./Ide.module.css";
+import sh from "./Shared.module.css";
 
 export { s as ideStyles };
 
@@ -218,16 +219,21 @@ export function EditorTabs(p: {
                 <FileIcon name={fileIconFor(t.name)} size={12} />
                 {t.name}
                 {t.modified && (
-                  <span className={s.dirty} title="Edited on this page">
+                  <span className={s.dirty} title="Edited">
                     ●<span className={s.sr}> (edited)</span>
                   </span>
                 )}
               </button>
-              {on && !t.modified && (
-                <span className={s.tabClose} aria-hidden="true">
-                  <IdeIcon name="close" size={12} />
-                </span>
-              )}
+              {on && !t.modified &&
+                (p.onClose ? (
+                  <button type="button" className={s.tabClose} aria-label={`Close ${t.name}`} title="Close" onClick={() => p.onClose!(t.path)}>
+                    <IdeIcon name="close" size={12} />
+                  </button>
+                ) : (
+                  <span className={s.tabClose} aria-hidden="true">
+                    <IdeIcon name="close" size={12} />
+                  </span>
+                ))}
             </div>
           );
         })}
@@ -239,7 +245,8 @@ export function EditorTabs(p: {
   );
 }
 
-export function InteractionsHeader() {
+/** `onClear` makes the broom a working "clear interactions" button. */
+export function InteractionsHeader({ onClear }: { onClear?: () => void } = {}) {
   return (
     <div className={s.rHead}>
       <span className={s.rTabOn}>
@@ -251,7 +258,13 @@ export function InteractionsHeader() {
       <IdeIcon name="flask" size={14} className={s.rTool} />
       <IdeIcon name="wand" size={14} className={s.rTool} />
       <span className={s.grow} />
-      <IdeIcon name="broom" size={14} className={s.rTool} />
+      {onClear ? (
+        <button type="button" className={`${s.rTool} ${sh.toolBtn}`} aria-label="Clear interactions" title="Clear (Ctrl+L)" onClick={onClear}>
+          <IdeIcon name="broom" size={14} />
+        </button>
+      ) : (
+        <IdeIcon name="broom" size={14} className={s.rTool} />
+      )}
       <IdeIcon name="add" size={15} className={s.rTool} />
     </div>
   );
