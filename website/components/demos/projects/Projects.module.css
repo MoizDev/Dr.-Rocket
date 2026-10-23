@@ -1,0 +1,9 @@
+.scrim { position: absolute; inset: 0; z-index: 30; background: rgb(0 0 0 / 0.25); }
+.palette { position: absolute; left: 50%; top: 60px; transform: translateX(-50%); width: 460px; background: var(--d-elevated); border: 1PX solid var(--d-selection); border-radius: 9px; box-shadow: 0 12px 40px rgb(0 0 0 / 0.45); overflow: hidden; }
+.field { display: flex; align-items: center; gap: 8px; padding: 0 12px; height: 38px; color: var(--d-muted); border-bottom: 1PX solid var(--d-selection); }
+.field input { flex: 1; background: none; border: 0; outline: none; color: var(--d-text); font: inherit; font-size: 13px; }
+.list { list-style: none; margin: 0; padding: 4px; max-height: 260px; overflow: auto; }
+.item { display: flex; align-items: center; gap: 7px; height: 26px; padding: 0 8px; border-radius: 5px; font-size: 12px; cursor: pointer; }
+.on { background: var(--d-selection); }
+.dir { color: var(--d-muted); font-size: 11px; }
+.empty { padding: 8px; color: var(--d-muted); font-size: 12px; }
