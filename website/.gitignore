@@ -45,3 +45,7 @@ next-env.d.ts
 
 # Supabase CLI cache
 /supabase/.temp/
+
+# Playwright
+/playwright-report/
+/test-results/
