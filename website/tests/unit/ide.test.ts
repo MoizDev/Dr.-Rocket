@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GRADES_TABLE, RUNS, letterOf, letterThresholds } from "@/lib/demos/data/hero-tables";
 import { GRADES } from "@/lib/demos/data/files";
-import { NOT_KNOWN, PREPARED, projectFiles, runCommand } from "@/lib/demos/data/terminal-commands";
+import { NOT_KNOWN, PREPARED, projectFiles, runCommand, type TermLine } from "@/lib/demos/data/terminal-commands";
 import { ORIGINALS } from "@/lib/demos/workspace";
 import { fuzzy } from "@/components/demos/projects/ProjectsDemo";
 import { checkLines } from "@/components/demos/hero-ide/GradesIde";
@@ -33,12 +33,12 @@ describe("terminal commands", () => {
   it("every prepared command names a real file", () => {
     for (const [p, cmds] of Object.entries(PREPARED)) for (const c of Object.values(cmds)) expect(ORIGINALS[c.file], `${p}: ${c.file}`).toBeDefined();
   });
-  it("prepared output, edited withdrawal, unknown", () => {
+  it("prepared output, edited replay, unknown", () => {
     const r = runCommand("cs135", "  raco   test a03/grades.rkt ", files);
     expect(r).toContainEqual({ kind: "out", text: "All 4 tests passed!" });
+    // After an edit the original's prepared output still plays, after a line saying so.
     const e = runCommand("cs135", "raco test a03/grades.rkt", () => ({ text: "", edited: true }));
-    expect(e).toHaveLength(1);
-    expect((e as { text: string }[])[0].text).toMatch(/doesn't run code/);
+    expect(e).toEqual([{ kind: "muted", text: "Edited · replaying the original grades.rkt" }, ...(r as TermLine[])]);
     expect(runCommand("cs135", "rm -rf /", files)).toEqual([{ kind: "muted", text: NOT_KNOWN }]);
     expect(runCommand("cs135", "clear", files)).toBe("clear");
   });
