@@ -2,7 +2,7 @@
 // The cs135 window from editor.png / light.png: grades.rkt open, its tests passing inline and the
 // Interactions pane after a run. Used by the hero (dark) and the theme cards (light, and a
 // read-only dark mirror). Run and the REPL replay prepared results; nothing is evaluated.
-import { useCallback, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import Code from "../Code";
 import Repl, { replKey, type ReplItem } from "../Repl";
 import Notice from "../Notice";
@@ -71,6 +71,7 @@ export default function GradesIde({
   const [cursor, setCursor] = useState({ ln: 1, col: 1 });
   const [items, setItemsState] = useState<ReplItem[]>(restItems);
   const timers = useRef<number[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
   const setItems = useCallback((f: (x: ReplItem[]) => ReplItem[]) => setItemsState(f), []);
 
   const grades = useFile(gradesId);
