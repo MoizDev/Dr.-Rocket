@@ -1,0 +1,63 @@
+/* The demo root. Sizes below are app points (px is converted to --u by postcss.config.mjs). */
+.demo {
+  position: relative;
+  aspect-ratio: var(--demo-w) / var(--demo-h);
+  container-type: inline-size;
+  overflow: hidden;
+  background: var(--d-window);
+}
+
+/* Fills the root; --u is defined here because container units resolve against an ancestor. */
+.stage {
+  position: absolute;
+  inset: 0;
+  /* one app point: the screenshots were @2x, so the box is W/2 points wide */
+  --u: calc(100cqw / var(--demo-pt));
+  font-family: var(--font-app), system-ui, sans-serif;
+  font-size: 14px;
+  line-height: 1.3;
+  color: var(--d-text);
+  text-align: left;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+.demo :focus-visible {
+  outline: 2PX solid var(--d-accent);
+  outline-offset: -2PX;
+}
+
+.demo button {
+  font: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.demo button[aria-disabled="true"] {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--d-c-hint);
+  white-space: nowrap;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1PX;
+  height: 1PX;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+.demo :global(.file-icon) svg { width: 100%; height: 100%; }
