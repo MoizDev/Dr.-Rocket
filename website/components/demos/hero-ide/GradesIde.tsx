@@ -90,11 +90,12 @@ export default function GradesIde({
   const run = useCallback(() => {
     timers.current.forEach(clearTimeout);
     timers.current = [];
-    if (edited) {
-      setItemsState([{ key: replKey(), out: <Notice onRestore={() => runFile.set(runFile.original)} /> }]);
-      return;
-    }
-    const all = runItems(runKind).map((it) => ({ ...it, key: replKey() }));
+    // After an edit, Run still plays the same prepared run of the original file, labelled as a
+    // demo, with the restore action. The edited text is never run.
+    const note: ReplItem[] = edited
+      ? [{ key: replKey(), out: <Notice compact onRestore={() => runFile.set(runFile.original)} text="Simulated preview: the prepared run of the original file. Your edits aren't run." /> }]
+      : [];
+    const all = [...note, ...runItems(runKind).map((it) => ({ ...it, key: replKey() }))];
     if (matchMedia("(prefers-reduced-motion: reduce)").matches) return setItemsState(all);
     setItemsState([]);
     all.forEach((it, i) => timers.current.push(window.setTimeout(() => setItemsState((xs) => [...xs, it]), 80 + i * 100)));

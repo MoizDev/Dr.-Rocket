@@ -1525,3 +1525,10 @@
     margin-left: 0;
   }
 }
+
+/* Interactive demos keep still on hover; only the screenshots drift. */
+.heroPanel:hover [data-demo],
+.vizStage:hover [data-demo],
+.featureCard:hover [data-demo] {
+  transform: none !important;
+}

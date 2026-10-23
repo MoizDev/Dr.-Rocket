@@ -126,3 +126,5 @@
 .crumbs { display: inline-flex; align-items: center; gap: 4px; color: var(--d-text); margin-left: 6px; }
 .crumbs > span { color: var(--d-muted); }
 .crumbs i { color: var(--d-accent); font-style: normal; }
+.runDemo { padding: 0 8px; margin-right: 4px; background: var(--d-accent) !important; color: #fff !important; font-weight: 600; }
+.runDemo:hover { filter: brightness(1.1); }

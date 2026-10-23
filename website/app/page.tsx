@@ -1,12 +1,11 @@
+import Image from "next/image";
 import Download, { HeaderDownload } from "@/components/Download";
 import NavScroll from "@/components/NavScroll";
 import Reveal from "@/components/Reveal";
 import HeroIdeDemo from "@/components/demos/hero-ide/HeroIdeDemo";
 import HeroTerminalDemo from "@/components/demos/hero-terminal/HeroTerminalDemo";
 import VisualizerDemo from "@/components/demos/visualizer/VisualizerDemo";
-import StepperDemo from "@/components/demos/stepper/StepperDemo";
 import DebuggerDemo from "@/components/demos/debugger/DebuggerDemo";
-import CheckSyntaxDemo from "@/components/demos/check-syntax/CheckSyntaxDemo";
 import RichSourceDemo from "@/components/demos/rich-source/RichSourceDemo";
 import ProjectsDemo from "@/components/demos/projects/ProjectsDemo";
 import ThemeDemo from "@/components/demos/themes/ThemeDemo";
@@ -15,6 +14,9 @@ import HeroTitle from "@/components/HeroTitle";
 import { ArrowRight, ArrowUpRight, GitHubIcon, Glyph, OsIcon, RocketMark } from "@/components/icons";
 import { DOWNLOADS, REPO, VERSION, VERSION_LABEL } from "@/lib/release";
 import s from "./page.module.css";
+
+import checksyntax from "./shots/checksyntax.png";
+import stepper from "./shots/stepper.png";
 
 
 const NAV = [
@@ -191,7 +193,7 @@ export default function Home() {
               }
             >
               <div className={s.cardInset}>
-                <StepperDemo className={`${s.shot} ${s.cardShot}`} />
+                <Image className={`${s.shot} ${s.cardShot}`} src={stepper} alt="The stepper showing a cond expression before and after one reduction, with the matching code highlighted in the editor." sizes="(max-width: 900px) 92vw, 680px" quality={85} />
               </div>
             </Feature>
 
@@ -207,7 +209,7 @@ export default function Home() {
             >
               <div className={s.cardStack}>
                 <DebuggerDemo className={`${s.shot} ${s.stackBack}`} />
-                <CheckSyntaxDemo className={`${s.shot} ${s.stackFront}`} />
+                <Image className={`${s.shot} ${s.stackFront}`} src={checksyntax} alt="Check syntax arrows from the parameter marks to its three uses, with a tooltip reading 3 bound occurrences." sizes="(max-width: 900px) 60vw, 400px" quality={85} />
               </div>
             </Feature>
 
