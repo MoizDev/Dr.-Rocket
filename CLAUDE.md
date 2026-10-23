@@ -15,7 +15,9 @@ vercel build --prod            # runs fetch-downloads.sh, then next build
 vercel deploy --prebuilt --prod
 ```
 
-Don't use a plain `vercel deploy` or git-triggered builds: they can't fetch the downloads.
+Don't use a plain `vercel deploy` or git-triggered builds for production: they can't fetch the
+downloads, so they fail. Git pushes still get Vercel previews, which skip the downloads (their
+download buttons don't work).
 
 Release notes live in `release-notes/<version>.md` (a little Markdown: headings, paragraphs,
 lists, bold, code, links). The app embeds them all and shows them in its What's New tab on the
