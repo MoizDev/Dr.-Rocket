@@ -111,11 +111,14 @@ export default function Stage({
   const pct = Math.round(sc * 100);
   const clampZoom = (z: number) => Math.max(0.5, Math.min(3, z));
 
-  // Recenter: back to the fitted view.
-  useEffect(() => {
+  // Recenter: back to the fitted view. Reset while rendering, as soon as the prop changes
+  // (https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes).
+  const [centred, setCentred] = useState(recenter);
+  if (centred !== recenter) {
+    setCentred(recenter);
     setZoom(1);
     setPan({ x: 0, y: 0 });
-  }, [recenter]);
+  }
 
   // The drawing's box in app points, so it fits and centres at any size (and when focused).
   useEffect(() => {
