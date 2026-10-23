@@ -1,0 +1,61 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`language levels (copied from src/racket/lang.rs) > names and descriptions 1`] = `
+[
+  [
+    "module",
+    "The Racket Language",
+    "Start your program with #lang to choose a dialect, for example #lang racket",
+  ],
+  [
+    "beginner",
+    "Beginning Student",
+    "define, cond, structs, constants, and primitives",
+  ],
+  [
+    "beginner-abbr",
+    "Beginning Student with List Abbreviations",
+    "Beginner, with list style printing in the REPL",
+  ],
+  [
+    "intermediate",
+    "Intermediate Student",
+    "Beginner plus lexical scope",
+  ],
+  [
+    "intermediate-lambda",
+    "Intermediate Student with lambda",
+    "Intermediate plus higher-order functions",
+  ],
+  [
+    "advanced",
+    "Advanced Student",
+    "Intermediate plus lambda and mutation",
+  ],
+  [
+    "sdp-beginner",
+    "Schreibe Dein Programm! - Anfänger",
+    "Definitions, conditionals, records, and signatures",
+  ],
+  [
+    "sdp",
+    "Schreibe Dein Programm!",
+    "Anfänger plus higher-order functions and lists",
+  ],
+  [
+    "sdp-advanced",
+    "Schreibe Dein Programm! - fortgeschritten",
+    "Plus quote, symbols, and mutation",
+  ],
+  [
+    "r5rs",
+    "R5RS",
+    "Scheme as described by the Revised5 Report",
+  ],
+  [
+    "pretty-big",
+    "Pretty Big",
+    "Racket plus the HtDP teachpacks (legacy)",
+  ],
+]
+`;
