@@ -5,6 +5,7 @@ import Reveal from "@/components/Reveal";
 import HeroIdeDemo from "@/components/demos/hero-ide/HeroIdeDemo";
 import HeroTerminalDemo from "@/components/demos/hero-terminal/HeroTerminalDemo";
 import VisualizerDemo from "@/components/demos/visualizer/VisualizerDemo";
+import StepperDemo from "@/components/demos/stepper/StepperDemo";
 import DebuggerDemo from "@/components/demos/debugger/DebuggerDemo";
 import RichSourceDemo from "@/components/demos/rich-source/RichSourceDemo";
 import ProjectsDemo from "@/components/demos/projects/ProjectsDemo";
@@ -16,7 +17,6 @@ import { DOWNLOADS, REPO, VERSION, VERSION_LABEL } from "@/lib/release";
 import s from "./page.module.css";
 
 import checksyntax from "./shots/checksyntax.png";
-import stepper from "./shots/stepper.png";
 
 
 const NAV = [
@@ -193,7 +193,7 @@ export default function Home() {
               }
             >
               <div className={s.cardInset}>
-                <Image className={`${s.shot} ${s.cardShot}`} src={stepper} alt="The stepper showing a cond expression before and after one reduction, with the matching code highlighted in the editor." sizes="(max-width: 900px) 92vw, 680px" quality={85} />
+                <StepperDemo className={`${s.shot} ${s.cardShot} ${s.stepperShot}`} />
               </div>
             </Feature>
 

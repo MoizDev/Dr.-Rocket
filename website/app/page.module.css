@@ -1532,3 +1532,26 @@
 .featureCard:hover [data-demo] {
   transform: none !important;
 }
+
+/* The visualizer demo sits about 20% smaller than the full container, centred. */
+.vizStage {
+  max-width: 80%;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* The stepper demo stays inside its card: no bleed off the page edge, so its panel shows. */
+.featureCard .stepperShot,
+.feature:nth-of-type(even) .featureCard .stepperShot {
+  width: 100%;
+  max-width: 100%;
+  margin-left: 0;
+  margin-right: 0;
+  border-radius: 12px 12px 0 0;
+}
+
+@media (max-width: 900px) {
+  .vizStage {
+    max-width: 100%;
+  }
+}
