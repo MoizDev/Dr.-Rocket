@@ -32,7 +32,8 @@
 .markerLine::before { content: "▶"; position: absolute; left: -12px; font-size: 9px; color: var(--d-accent); }
 
 .ptabs { height: 26px; flex: none; display: flex; align-items: center; gap: 2px; padding: 0 6px; border-bottom: 1px solid var(--d-border); }
-.ptab { display: inline-flex !important; align-items: center; gap: 5px; height: 21px; padding: 0 7px !important; border-radius: 6px; color: var(--d-muted) !important; font-size: 11px !important; white-space: nowrap; }
+/* Sized like the app's own tab row, so all five tabs and the + fit the panel. */
+.ptab { display: inline-flex !important; align-items: center; gap: 4px; height: 21px; padding: 0 6px !important; border-radius: 6px; color: var(--d-muted) !important; font-size: 10px !important; white-space: nowrap; }
 .ptab[aria-selected="true"] { background: var(--d-elevated) !important; color: var(--d-text) !important; font-weight: 500; }
 .ptab[aria-selected="true"] svg { color: var(--d-accent); }
 .ptabPlus { margin-left: auto; display: flex; color: var(--d-muted); }
