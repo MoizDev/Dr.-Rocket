@@ -138,6 +138,8 @@ export default function Code(p: CodeProps) {
     return () => {
       cancelled = true;
       io.disconnect();
+      el.removeEventListener("pointerdown", go);
+      el.removeEventListener("focusin", go);
       handle.current?.destroy();
       handle.current = null;
     };
