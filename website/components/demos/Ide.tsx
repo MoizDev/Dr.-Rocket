@@ -197,22 +197,30 @@ export function EditorTabs(p: {
       <div role="tablist" aria-label="Open files" className={s.tabs}>
         {p.tabs.map((t, i) => {
           const on = t.path === p.active;
+          const close = on && !t.modified ? p.onClose : undefined;
           return (
             <div key={t.path} className={`${s.tab} ${on ? s.tabOn : ""}`}>
               <button
                 type="button"
                 role="tab"
                 aria-selected={on}
+                aria-keyshortcuts={close ? "Delete" : undefined}
                 tabIndex={i === ai ? 0 : -1}
                 className={s.tabBtn}
                 onClick={() => p.onSelect(t.path)}
                 onKeyDown={(e) => {
+                  const list = e.currentTarget.closest("[role=tablist]")!;
+                  if (e.key === "Delete" && close) {
+                    e.preventDefault();
+                    close(t.path);
+                    requestAnimationFrame(() => list.querySelector<HTMLElement>('[role=tab][aria-selected="true"]')?.focus());
+                    return;
+                  }
                   const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
                   if (!d) return;
                   e.preventDefault();
                   const n = (i + d + p.tabs.length) % p.tabs.length;
                   p.onSelect(p.tabs[n].path);
-                  const list = e.currentTarget.closest("[role=tablist]")!;
                   requestAnimationFrame(() => (list.querySelectorAll("[role=tab]")[n] as HTMLElement | undefined)?.focus());
                 }}
               >
@@ -224,16 +232,17 @@ export function EditorTabs(p: {
                   </span>
                 )}
               </button>
-              {on && !t.modified &&
-                (p.onClose ? (
-                  <button type="button" className={s.tabClose} aria-label={`Close ${t.name}`} title="Close" onClick={() => p.onClose!(t.path)}>
-                    <IdeIcon name="close" size={12} />
-                  </button>
-                ) : (
-                  <span className={s.tabClose} aria-hidden="true">
-                    <IdeIcon name="close" size={12} />
-                  </span>
-                ))}
+              {/* A tablist may only hold tabs, so the ✕ is for the pointer and Delete closes from the keyboard. */}
+              {on && !t.modified && (
+                <span
+                  className={`${s.tabClose} ${close ? s.tabCloser : ""}`}
+                  aria-hidden="true"
+                  title={close ? "Close" : undefined}
+                  onClick={close && (() => close(t.path))}
+                >
+                  <IdeIcon name="close" size={12} />
+                </span>
+              )}
             </div>
           );
         })}

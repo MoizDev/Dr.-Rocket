@@ -44,6 +44,7 @@
 .tabOn { background: var(--d-elevated); color: var(--d-text); }
 .tabBtn { display: inline-flex !important; align-items: center; gap: 5px; height: 100%; white-space: nowrap; }
 .tabClose { display: inline-flex; color: var(--d-muted); margin-left: 8px; }
+.tabCloser { cursor: pointer; }
 .dirty { color: var(--d-r1); font-size: 10px; margin-left: 2px; }
 .tabTool { margin-left: 10px; }
 .codeArea { position: relative; flex: 1; min-height: 0; }
