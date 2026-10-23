@@ -21,6 +21,10 @@ export function headType(h: string): HeadType | null {
 }
 
 const trivia = (t: Token) => t.kind === "lineComment" || t.kind === "blockComment";
+const skipTrivia = (toks: Token[], i: number) => {
+  while (i < toks.length && trivia(toks[i])) i++;
+  return i;
+};
 const lineOf = (text: string, pos: number) => text.slice(0, pos).split("\n").length;
 const col = (text: string, pos: number) => pos - (text.lastIndexOf("\n", pos - 1) + 1);
 
@@ -72,8 +76,20 @@ export function indentFor(text: string, lineStart: number): number | null {
   if (ht === "define" || ht === "lambda" || ht === "forFold") return c + 1;
   const last = kids[kids.length - 1];
   if (lineOf(text, head.start) === lineOf(text, toks[last].start)) {
-    if (head.kind === "hashKeyword") return c;
-    return col(text, toks[kids[1]].start);
+    // Align with the first argument, except after a keyword or `---` head, a lone `...`, or
+    // before a `---` line.
+    const hyphens = (t?: Token) => !!t && t.kind === "symbol" && t.end - t.start >= 3 && /^-+$/.test(text.slice(t.start, t.end));
+    if (head.kind === "hashKeyword" || hyphens(head)) return c;
+    const second = toks[kids[1]];
+    if (datumEnd(toks, kids[1]) === kids[1] + 1 && text.slice(second.start, second.end) === "...") {
+      const thirdEnd = kids[1] + 1 < toks.length ? datumEnd(toks, skipTrivia(toks, kids[1] + 1)) : null;
+      const e = thirdEnd !== null && thirdEnd <= toks.length && thirdEnd > kids[1] + 1 ? toks[thirdEnd - 1].end : null;
+      if (e === null || lineOf(text, e) !== lineOf(text, second.start)) return c;
+    }
+    let here = 0;
+    while (here < toks.length && toks[here].end <= lineStart) here++;
+    if (hyphens(toks[skipTrivia(toks, here)])) return c;
+    return col(text, second.start);
   }
   const lastLine = lineOf(text, toks[last].start);
   let row = last;
