@@ -1,7 +1,9 @@
 "use client";
 // A Beginning Student file with a pasted image (poster.rkt), and the Interactions pane with the
 // images it produced. The image outputs are prepared pictures, drawn as SVG; nothing is run.
-import { useCallback, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+// Run always replays the prepared output of the original poster.rkt (after one compact line when
+// it was edited); edits stay in the editor. Any image, in the file or the REPL, opens a preview.
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import DemoRoot, { DisclosureChip } from "../DemoRoot";
 import Code from "../Code";
 import Repl, { replKey, type ReplItem } from "../Repl";
@@ -12,9 +14,10 @@ import { FileIcon, fileIconFor } from "../file-icons";
 import RImage from "./RImage";
 import { useFile } from "@/lib/demos/useFile";
 import { useEntryHint } from "@/lib/demos/hint";
-import { answer, MISS, RUN_OUTPUT, WELCOME, type Img } from "@/lib/demos/data/richsource-repl";
+import { answer, describe, MISS, ROCKET, RUN_OUTPUT, size, WELCOME, type Img } from "@/lib/demos/data/richsource-repl";
 import type { CodeDecor } from "@/lib/demos/editor/types";
 import s from "./RichSource.module.css";
+import sh from "../Shared.module.css";
 
 export const LABEL = "A Beginning Student file saved by DrRacket with a pasted rocket image, and the REPL showing the images it produced.";
 
@@ -38,11 +41,11 @@ const TREE: TreeNode[] = [
     dir: true,
     children: [
       { id: "a05/bst", name: "bst.rkt", file: "cs135/a05/bst.rkt" },
-      { id: "a05/readme", name: "README.md" },
+      { id: "a05/readme", name: "README.md", file: "cs135/a05/README.md" },
     ],
   },
   { id: "notes", name: "notes", dir: true, children: [{ id: "notes/scratch", name: "scratch.rkt", file: "cs135/notes/scratch.rkt" }] },
-  { id: "readme", name: "README.md" },
+  { id: "readme", name: "README.md", file: "cs135/README.md" },
 ];
 
 const KEYS: [string, string][] = [["⌘R", "Run poster.rkt (Ctrl+R elsewhere)"], ["↑ / ↓", "REPL history, or move in the file tree"], ["← / →", "Collapse / expand a folder"], ...EDITOR_KEYS];
@@ -56,7 +59,15 @@ const NO_DECOR: CodeDecor = {};
 function welcome(): ReplItem[] {
   return [{ key: "w", out: <div className={s.welcome}><div>{WELCOME[0]}</div><div className={s.welcomeLang}>{WELCOME[1]}</div></div> }];
 }
-const imgItem = (img: Img, uid: string): ReplItem => ({ key: `i-${uid}`, out: <RImage img={img} uid={uid} className={s.img} /> });
+/** An image value in the REPL: a button that opens the preview. */
+function ImgOut({ img, uid }: { img: Img; uid: string }) {
+  return (
+    <button type="button" className={s.imgBtn} data-img={uid} aria-label={`Preview ${describe(img)}`} title="Preview image">
+      <RImage img={img} uid={uid} className={s.img} />
+    </button>
+  );
+}
+const imgItem = (img: Img, uid: string): ReplItem => ({ key: `i-${uid}`, out: <ImgOut img={img} uid={uid} /> });
 const noTests = (): ReplItem => ({
   key: "t",
   out: (
@@ -66,7 +77,9 @@ const noTests = (): ReplItem => ({
     </div>
   ),
 });
-const runItems = () => [...welcome(), ...RUN_OUTPUT.map((img, i) => imgItem(img, `run${i}`)), noTests()];
+const runItems = (n = "") => [...welcome(), ...RUN_OUTPUT.map((img, i) => imgItem(img, `run${n}${i}`)), noTests()];
+/** Images by REPL uid, so a click on any image button can find its value. */
+const IMAGES = new Map<string, Img>(RUN_OUTPUT.map((img, i) => [`run${i}`, img]));
 
 export default function RichSourceDemo({ className }: { className: string }) {
   const root = useRef<HTMLDivElement>(null);
@@ -79,9 +92,13 @@ export default function RichSourceDemo({ className }: { className: string }) {
   const [cursor, setCursor] = useState({ line: 1, col: 1 });
   const [live, setLive] = useState(false);
   const [phase, setPhase] = useState<"rest" | "pre" | "in">("rest");
+  const [preview, setPreview] = useState<Img | null>(null);
   const uid = useRef(0);
+  const runs = useRef(0);
 
   const edited = poster.status === "edited";
+  const { set: setPoster, original: posterOriginal } = poster;
+  const restore = useCallback(() => setPoster(posterOriginal), [setPoster, posterOriginal]);
 
   useEntryHint(
     root,
@@ -93,13 +110,32 @@ export default function RichSourceDemo({ className }: { className: string }) {
   );
 
   const run = useCallback(() => {
-    if (active !== POSTER) {
-      setItems((xs) => [...xs, { key: replKey(), out: `This demo only has a prepared run for poster.rkt. Open it to run it.`, muted: true }]);
-      return;
-    }
-    if (edited) return; // the notice is already showing
-    setItems(runItems());
-  }, [active, edited]);
+    // Run is poster.rkt's, whichever tab is showing (its button and ⌘R say so): the prepared run
+    // of the original file. After an edit it plays all the same, after one compact line saying
+    // so; the edited text stays in the editor and is never run.
+    const n = `r${++runs.current}-`;
+    RUN_OUTPUT.forEach((img, i) => IMAGES.set(`run${n}${i}`, img));
+    const next = runItems(n);
+    if (edited) next.splice(1, 0, { key: replKey(), out: <Notice compact onRestore={restore} text="Edited · replaying the original poster.rkt" /> });
+    setItems(next);
+  }, [edited, restore]);
+
+  // Esc closes the image preview.
+  useEffect(() => {
+    if (!preview) return;
+    const onKey = (e: globalThis.KeyboardEvent) => e.key === "Escape" && setPreview(null);
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [preview]);
+
+  /** A click on a pasted image in the file, or on an image value in the REPL, opens the preview. */
+  const onImageClick = (e: MouseEvent) => {
+    const el = e.target as HTMLElement;
+    if (el.closest('[aria-label="pasted image: rocket"]')) return setPreview(ROCKET);
+    const id = el.closest<HTMLElement>("[data-img]")?.dataset.img;
+    const img = id ? IMAGES.get(id) : undefined;
+    if (img) setPreview(img);
+  };
 
   const openFile = (file: string) => {
     setTabs((t) => (t.includes(file) ? t : [...t, file]));
@@ -164,12 +200,15 @@ export default function RichSourceDemo({ className }: { className: string }) {
     }
   };
 
-  const restore = () => poster.set(poster.original);
-  const shown: ReplItem[] = edited ? [...welcome(), { key: "notice", out: <Notice onRestore={restore} /> }] : items;
   const answerFor = (input: string): ReactNode | null => {
     const img = answer(input);
-    return img ? <RImage img={img} uid={`q${++uid.current}`} className={s.img} /> : null;
+    if (!img) return null;
+    const id = `q${++uid.current}`;
+    IMAGES.set(id, img);
+    return <ImgOut img={img} uid={id} />;
   };
+  const cur = useFile(active);
+  const curModified = cur.text !== cur.original;
 
   const activeFile = active;
   const crumbs = ["cs135", ...activeFile.split("/").slice(1)];
@@ -260,7 +299,13 @@ export default function RichSourceDemo({ className }: { className: string }) {
             <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor" /></svg>
           </span>
         </div>
-        <div className={s.codeArea} role="tabpanel" aria-label={fileName(active)}>
+        <div className={s.codeArea} role="tabpanel" aria-label={fileName(active)} onClick={onImageClick}>
+          {curModified && (
+            <button type="button" className={sh.editRestore} onClick={() => cur.set(cur.original)} title={`Restore the original ${fileName(active)}`} data-restore>
+              <Icon name="restart" size={10} />
+              Restore
+            </button>
+          )}
           <FileEditor
             key={active}
             file={active}
@@ -273,7 +318,7 @@ export default function RichSourceDemo({ className }: { className: string }) {
       </div>
 
       {/* Interactions */}
-      <div className={s.right}>
+      <div className={s.right} onClick={onImageClick}>
         <div className={s.rightTabs}>
           <span className={s.rightTabOn}>
             <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v14H3zm2 4v8h14V9z" fill="currentColor" /></svg>
@@ -292,11 +337,10 @@ export default function RichSourceDemo({ className }: { className: string }) {
         </div>
         <Repl
           className={s.repl}
-          items={shown}
+          items={items}
           setItems={setItems}
           answer={answerFor}
           miss={MISS}
-          disabledReply={edited ? "This page doesn't run code. poster.rkt was edited here, so its prepared answers are hidden. Restore it above." : null}
           langChip="BSL"
           label="Interactions"
         />
@@ -327,7 +371,37 @@ export default function RichSourceDemo({ className }: { className: string }) {
           <span>Racket 9.3</span>
         </span>
       </div>
+
+      {preview && <ImagePreview img={preview} onClose={() => setPreview(null)} />}
     </DemoRoot>
+  );
+}
+
+/** The image viewer: the value scaled up to fit, with its pixel size. */
+function ImagePreview({ img, onClose }: { img: Img; onClose: () => void }) {
+  const { w, h } = size(img);
+  const back = useRef<HTMLElement | null>(typeof document !== "undefined" ? (document.activeElement as HTMLElement | null) : null);
+  const close = () => {
+    onClose();
+    requestAnimationFrame(() => back.current?.focus());
+  };
+  return (
+    <div className={s.scrim} onMouseDown={(e) => e.target === e.currentTarget && close()}>
+      <div className={s.preview} role="dialog" aria-label="Image preview">
+        <div className={s.previewHead}>
+          <span>Image · {w} × {h} px</span>
+          <button type="button" className={s.previewClose} onClick={close} aria-label="Close preview" autoFocus>
+            <Icon name="close" size={11} />
+          </button>
+        </div>
+        <div className={s.previewBody}>
+          <div className={s.previewZoom}>
+            <RImage img={img} uid="preview" />
+          </div>
+        </div>
+        <div className={s.previewCaption}>{describe(img)}</div>
+      </div>
+    </div>
   );
 }
 
@@ -337,7 +411,7 @@ function EditorTab({ file, active, onSelect, onClose }: { file: string; active: 
   return (
     <span className={`${s.tab} ${active ? s.tabOn : ""}`}>
       <button type="button" role="tab" aria-selected={active} tabIndex={active ? 0 : -1} className={s.tabBtn} onClick={onSelect}>
-        <FileIcon name="racket" size={13} />
+        <FileIcon name={fileIconFor(fileName(file))} size={13} />
         {fileName(file)}
         {modified && <span className={s.dirty} aria-label="modified">●</span>}
       </button>

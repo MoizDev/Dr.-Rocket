@@ -1,9 +1,11 @@
 "use client";
 // The Choose Language dialog, in place (a group, not a modal). Settings follow the app's
-// per-level rules (lib/demos/data/languages.ts). Nothing is run; OK only updates this dialog.
+// per-level rules (lib/demos/data/languages.ts). Nothing is run. Picking a language updates the
+// settings, the language pill and the Interactions banner at once; Cancel goes back to the last OK.
 import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import DemoRoot, { DisclosureChip } from "../DemoRoot";
 import KeysHelp from "../KeysHelp";
+import { IdeIcon } from "../IdeIcons";
 import { useEntryHint } from "@/lib/demos/hint";
 import {
   DIALOG_SUBTITLE,
@@ -228,8 +230,20 @@ export default function LanguagesDemo({ className }: { className: string }) {
             </button>
           )}
           <span className={s.spacer} />
-          <span className={s.current} data-decorative-contrast aria-live="polite" data-confirmed>
-            Language: {level(confirmed.id).name}
+          <button
+            type="button"
+            className={s.pill}
+            title="Choose a language"
+            aria-label={`Language: ${lv.short}`}
+            onClick={() => list.current?.querySelector<HTMLElement>(`[data-lang="${st.id}"]`)?.focus()}
+          >
+            <IdeIcon name={isTeaching(st.id) ? "cap" : "code"} size={13} className={s.pillIcon} />
+            {lv.short}
+            <IdeIcon name="chevronDown" size={12} />
+          </button>
+          <span className={s.banner} data-confirmed={confirmed.id}>
+            <span>Welcome to Racket 9.3</span>
+            <span className={s.bannerLang} data-decorative-contrast>Language: {lv.name}</span>
           </span>
           <button type="button" className={s.plain} onClick={cancel}>
             Cancel

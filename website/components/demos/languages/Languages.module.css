@@ -184,7 +184,12 @@
 .spacer { flex: 1; }
 .plain { padding: 4px 10px !important; border-radius: 6px; color: var(--d-text); }
 .plain:hover { background: color-mix(in srgb, var(--d-text) 6%, transparent) !important; }
-.current { font-size: 11px; font-style: italic; color: var(--placeholder); margin-right: 8px; white-space: nowrap; }
+/* The title bar's language pill and the Interactions banner, following the selection. */
+.pill { display: inline-flex !important; align-items: center; gap: 4px; height: 22px; padding: 0 7px !important; border-radius: 6px; border: 1PX solid var(--line) !important; font-size: 11px; font-weight: 600; color: var(--d-text) !important; white-space: nowrap; }
+.pill:hover { background: color-mix(in srgb, var(--d-text) 6%, transparent) !important; }
+.pillIcon { color: var(--d-accent); }
+.banner { display: flex; flex-direction: column; margin: 0 14px 0 8px; font-size: 11px; line-height: 14px; color: var(--d-muted); white-space: nowrap; max-width: 300px; overflow: hidden; }
+.bannerLang { color: var(--placeholder); overflow: hidden; text-overflow: ellipsis; }
 .primary {
   margin-left: 6px;
   height: 26px;

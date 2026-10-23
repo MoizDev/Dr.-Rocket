@@ -1,5 +1,6 @@
 // The demo terminals' prepared commands. A command is matched exactly (after trimming) against
-// this table; `ls`, `cat` and `pwd` read the in-memory workspace. Nothing is executed.
+// this table and always prints what was prepared for the original file; `ls`, `cat` and `pwd`
+// read the in-memory workspace. Nothing is executed.
 import { ORIGINALS } from "../workspace";
 
 export type FileState = (id: string) => { text: string; edited: boolean };
@@ -63,16 +64,26 @@ export function runCommand(project: string, line: string, files: FileState): Ter
   const muted = (text: string): TermLine => ({ kind: "muted", text });
   const prepared = PREPARED[project]?.[cmd];
   if (prepared) {
+    // Always the output prepared for the original file. After an edit it plays all the same,
+    // after one line saying so; the edited text is never run.
     const { edited } = files(prepared.file);
     const name = prepared.file.split("/").pop();
-    if (edited) return [muted(`This page doesn't run code: ${name} was edited here, so there's no prepared result. Restore it in the editor above.`)];
-    return prepared.output.map(out);
+    return [...(edited ? [muted(`Edited · replaying the original ${name}`)] : []), ...prepared.output.map(out)];
+  }
+  if (cmd === "raco test" || cmd === "raco test .") {
+    // Every prepared raco test in the project, in order, each replayed as above.
+    const tests = Object.entries(PREPARED[project] ?? {}).filter(([c]) => c.startsWith("raco test "));
+    if (tests.length)
+      return tests.flatMap(([, t]) => {
+        const name = t.file.split("/").pop();
+        return [...(files(t.file).edited ? [muted(`Edited · replaying the original ${name}`)] : []), ...t.output.map(out)];
+      });
   }
   if (cmd === "help")
     return [
       out("Prepared commands in this demo terminal:"),
       ...Object.keys(PREPARED[project] ?? {}).map((c) => out(`  ${c}`)),
-      out("  ls [folder], pwd, cat <file>, clear, help"),
+      out("  raco test ., ls [folder], pwd, cat <file>, clear, help"),
     ];
   if (cmd === "pwd") return [out(`/Users/student/${project}`)];
   if (cmd === "ls" || cmd.startsWith("ls ")) {

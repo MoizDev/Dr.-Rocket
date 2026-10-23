@@ -1,6 +1,8 @@
 "use client";
 // terminal.png: three project tabs, a #lang racket file, Interactions and the integrated
 // terminal. Switching projects swaps the tree, open file, REPL and terminal. ⌘P opens quick open.
+// Run, the REPL and the terminal's prepared commands always replay the results prepared for the
+// original files; edits stay in the editor and are never run.
 import { useCallback, useMemo, useRef, useState } from "react";
 import DemoRoot from "../DemoRoot";
 import Code from "../Code";
@@ -16,9 +18,11 @@ import { files as wsFiles, REST_LINES } from "../hero-terminal/HeroTerminalDemo"
 import { useFile } from "@/lib/demos/useFile";
 import { lookup, missReply } from "@/lib/demos/fixtures";
 import { useEntryHint, type HintStep } from "@/lib/demos/hint";
+import { getText, original } from "@/lib/demos/workspace";
 import { PROJECTS } from "@/lib/demos/data/projects-tables";
-import { projectFiles, type TermLine } from "@/lib/demos/data/terminal-commands";
+import { PREPARED, projectFiles, type TermLine } from "@/lib/demos/data/terminal-commands";
 import p from "./Projects.module.css";
+import sh from "../Shared.module.css";
 
 export const LABEL = "Three project tabs, cs136, math239 and cs135, with a #lang racket file open and an integrated terminal showing raco test results.";
 
@@ -35,6 +39,14 @@ function runOutput(name: string, path: string): ReplItem[] {
   return items;
 }
 
+/** Each project's terminal at rest: cs135 as in the screenshot, the others after a raco test. */
+function restTerm(name: string): TermLine[] {
+  if (name === "cs135") return REST_LINES;
+  const cmd = Object.keys(PREPARED[name] ?? {}).find((c) => c.startsWith("raco test "));
+  if (!cmd) return [];
+  return [{ kind: "prompt", cwd: name, cmd }, ...PREPARED[name][cmd].output.map((text): TermLine => ({ kind: "out", text }))];
+}
+
 function initial(): Record<string, ProjState> {
   const r: Record<string, ProjState> = {};
   for (const x of PROJECTS)
@@ -43,7 +55,7 @@ function initial(): Record<string, ProjState> {
       tabs: [...x.open],
       expanded: new Set(x.expanded),
       repl: runOutput(x.name, x.open[0]).map((it, i) => ({ ...it, key: `${x.name}-r${i}` })),
-      term: x.name === "cs135" ? REST_LINES : [],
+      term: restTerm(x.name),
     };
   return r;
 }
@@ -81,14 +93,27 @@ export default function ProjectsDemo({ className }: { className: string }) {
   const files = useMemo(() => projectFiles(proj), [proj]);
   const id = `${proj}/${st.active}`;
   const file = useFile(id);
-  const main = useFile(`${proj}/${fixture.open[0]}`);
-  const edited = main.status === "edited";
-  const fileEdited = file.status === "edited";
+  const modified = file.text !== file.original;
+  const edited = file.status === "edited";
 
   const open = (path: string) => update((s) => ({ ...s, active: path, tabs: s.tabs.includes(path) ? s.tabs : [...s.tabs, path] }));
+  /** Closes a tab (the last one stays) and shows its left neighbour, as the app does. */
+  const close = (path: string) =>
+    update((s) => {
+      if (s.tabs.length === 1) return s;
+      const i = s.tabs.indexOf(path);
+      const tabs = s.tabs.filter((t) => t !== path);
+      return { ...s, tabs, active: s.active === path ? tabs[Math.max(0, i - 1)] : s.active };
+    });
+  // Always the prepared run of the original file. After an edit it plays all the same, after one
+  // compact line saying so; the edited text stays in the editor and is never run.
   const run = () => {
-    if (fileEdited) update((s) => ({ ...s, repl: [{ key: replKey(), out: <Notice onRestore={() => file.set(file.original)} /> }] }));
-    else update((s) => ({ ...s, repl: runOutput(proj, s.active) }));
+    const f = file;
+    const fname = st.active.split("/").pop()!;
+    const note: ReplItem[] = edited
+      ? [{ key: replKey(), out: <Notice compact onRestore={() => f.set(f.original)} text={`Edited · replaying the original ${fname}`} /> }]
+      : [];
+    update((s) => ({ ...s, repl: [...note, ...runOutput(proj, s.active)] }));
   };
 
   const steps = useCallback((): HintStep[] => [
@@ -139,12 +164,19 @@ export default function ProjectsDemo({ className }: { className: string }) {
           editor={
             <>
               <EditorTabs
-                tabs={st.tabs.map((t) => ({ path: t, name: t.split("/").pop()!, modified: t === st.active && file.status !== "pristine" }))}
+                tabs={st.tabs.map((t) => ({ path: t, name: t.split("/").pop()!, modified: t === st.active ? modified : getText(`${proj}/${t}`) !== original(`${proj}/${t}`) }))}
                 active={st.active}
                 onSelect={(t) => update((s) => ({ ...s, active: t }))}
+                onClose={st.tabs.length > 1 ? close : undefined}
               />
               <div className={s.codeArea}>
                 <Code key={id} text={file.text} onChange={file.set} label={`${name}${readOnly ? "" : ", editable"}`} readOnly={readOnly} onCursor={(_, ln, col) => setCursor({ ln, col })} />
+                {modified && !readOnly && (
+                  <button type="button" className={sh.editRestore} onClick={() => file.set(file.original)} title={`Restore the original ${name}`} data-restore>
+                    <IdeIcon name="refresh" size={10} />
+                    Restore
+                  </button>
+                )}
               </div>
             </>
           }
@@ -155,13 +187,13 @@ export default function ProjectsDemo({ className }: { className: string }) {
               lines={st.term}
               setLines={(f) => update((s) => ({ ...s, term: f(s.term) }))}
               files={wsFiles}
-              problems={fileEdited ? [`Results hidden: ${name} was edited on this page`] : []}
+              problems={[]}
               variant="embedded"
             />
           }
           right={
             <>
-              <InteractionsHeader />
+              <InteractionsHeader onClear={() => update((s) => ({ ...s, repl: [] }))} />
               <Repl
                 key={proj}
                 className={s.repl}
@@ -172,7 +204,6 @@ export default function ProjectsDemo({ className }: { className: string }) {
                   return e ? <Val text={e.output.join("\n")} /> : null;
                 }}
                 miss={missReply(fixture.table)}
-                disabledReply={edited ? `This page doesn't run code. ${fixture.open[0].split("/").pop()} was edited, so its prepared answers are hidden. Restore it to try them again.` : null}
               />
               <span className={s.replChip} aria-hidden="true">
                 <IdeIcon name="code" size={11} />
