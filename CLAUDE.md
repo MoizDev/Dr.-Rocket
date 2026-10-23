@@ -11,11 +11,12 @@ version instead, checked against the SHA-256 in its `version.json`; so until the
 a new release goes out with a deploy from this Mac. A build fails rather than go out without the
 macOS or Windows files.
 
-To deploy from this Mac instead (it uses the `gh` login when there is one):
+To deploy from this Mac instead (it uses the `gh` login when there is one), run these from the
+repo root, not `website/`: the Vercel project's Root Directory is `website`, so the CLI adds it
+itself. Link the root once with `vercel link --project dr-rocket --scope moizs-projects-49365057`.
 
 ```sh
-cd website
-vercel build --prod            # runs fetch-downloads.sh, then next build
+vercel build --prod            # runs fetch-downloads.sh, then next build, in website/
 vercel deploy --prebuilt --prod
 ```
 
@@ -33,7 +34,7 @@ attached. It writes that into `website/release.json` (commit the change), and th
 downloads and share image all follow it.
 
 The download files keep the same URLs across releases, so after replacing one run
-`vercel cache purge --type cdn --yes` (in `website/`), or the CDN keeps serving the old file.
+`vercel cache purge --type cdn --yes`, or the CDN keeps serving the old file.
 
 After deploying, check that https://doctorocket.com loads and that each
 `/downloads/DrRocket-{mac.dmg,windows-x64.zip,linux-x64.tar.gz}` returns 200 with the
