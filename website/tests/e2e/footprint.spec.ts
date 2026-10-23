@@ -1,5 +1,6 @@
-// Every demo must take exactly the box its image or video had (±1px), at four widths, and the
-// page around it must not move.
+// Every demo keeps its box (±1px) at four widths, and the page around it must not move. The
+// baseline started as the boxes of master's images and videos; it was re-captured when the
+// Visualizer (80% width) and the stepper (inside its card) were resized on purpose.
 import { expect, test } from "@playwright/test";
 import baseline from "./footprint-baseline.json" with { type: "json" };
 import { VIEWPORTS, measure, MEDIA, type Box } from "./measure";

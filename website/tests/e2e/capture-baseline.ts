@@ -1,6 +1,6 @@
-// Records the untouched page's media boxes at four viewports into footprint-baseline.json.
-// Run once, against a production build of the page before the demos replaced the media:
-//   npx next start -p 3100 & node tests/e2e/capture-baseline.ts http://localhost:3100
+// Records the page's media boxes at four viewports into footprint-baseline.json. Run it against
+// a production build only when a demo's size changes on purpose, and say what changed:
+//   npx next start -p 3100 & node tests/e2e/capture-baseline.ts http://localhost:3100 "<change>"
 import { writeFileSync } from "node:fs";
 import { chromium } from "@playwright/test";
 import { VIEWPORTS, measure, downloadAnchors } from "./measure.ts";
