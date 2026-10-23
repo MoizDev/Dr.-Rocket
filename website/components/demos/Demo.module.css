@@ -67,3 +67,20 @@
 }
 
 .demo :global(.file-icon) svg { width: 100%; height: 100%; }
+
+/* The editor's theme toggle (ThemeToggle in DemoRoot.tsx), sized like the tab bar's icons. */
+.demo .themeToggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  border-radius: 5px;
+  color: var(--d-muted);
+}
+
+.demo .themeToggle:hover {
+  color: var(--d-text);
+  background: var(--d-elevated);
+}

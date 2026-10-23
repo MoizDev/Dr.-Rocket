@@ -38,7 +38,7 @@
 .tabBtn { display: inline-flex !important; align-items: center; gap: 5px; height: 22px; padding: 0 8px !important; color: inherit !important; font-size: 12px; }
 .dirty { color: var(--d-muted); font-size: 9px; }
 .close { display: inline-flex; color: var(--d-muted); cursor: pointer; }
-.tabTools { display: inline-flex; gap: 6px; color: var(--d-muted); padding-right: 8px; }
+.tabTools { display: inline-flex; align-items: center; gap: 6px; color: var(--d-muted); padding-right: 8px; }
 .tabTools svg { width: 14px; height: 14px; }
 .codeArea { position: relative; flex: 1; min-height: 0; margin-top: 4px; }
 .code { height: 100%; }

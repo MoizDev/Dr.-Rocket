@@ -4,7 +4,7 @@
 // and breakpoint changes never block the controls: they always replay the prepared pauses of the
 // original file (Continue stops at the prepared line-20 entries while that breakpoint is set).
 import { useCallback, useMemo, useRef, useState } from "react";
-import DemoRoot, { DisclosureChip } from "../DemoRoot";
+import DemoRoot, { DisclosureChip, ThemeToggle } from "../DemoRoot";
 import Code, { StaticLines } from "../Code";
 import Notice from "../Notice";
 import KeysHelp, { EDITOR_KEYS } from "../KeysHelp";
@@ -216,7 +216,8 @@ export default function DebuggerDemo({ className }: { className: string }) {
               bst.rkt
               {file.text !== file.original ? <span className={s.dirty}>●</span> : <Icon name="close" size={10} />}
             </span>
-            <span className={s.tabTools} aria-hidden="true">
+            <span className={s.tabTools}>
+              <ThemeToggle />
               <Icon name="chevronDown" size={13} />
               <Glyph name="dots" size={13} />
             </span>

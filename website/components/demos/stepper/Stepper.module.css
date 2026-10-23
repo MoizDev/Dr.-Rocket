@@ -17,6 +17,7 @@
 .editor { left: 5px; width: 556px; }
 .tabs { height: 27px; display: flex; align-items: center; padding: 0 4px; }
 .tab { display: flex; align-items: center; gap: 6px; height: 21px; padding: 0 8px; background: var(--d-elevated); border-radius: 6px; font-size: 11px; color: var(--d-text); }
+.tabEnd { margin-left: auto; }
 .dirty { color: var(--d-text); font-size: 9px; }
 .codeBox { position: absolute; top: 30px; left: 0; right: 0; bottom: 0; }
 .srcLine { background: rgb(82 173 242 / 0.08); }

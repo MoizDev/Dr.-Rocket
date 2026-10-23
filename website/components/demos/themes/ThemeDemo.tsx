@@ -97,6 +97,8 @@ export default function ThemeDemo({ className, theme }: { className: string; the
       h={1506}
       label={LABEL}
       theme={theme}
+      // The theme picker sets this card's theme, so there's no editor toggle.
+      themeToggle={false}
       decorative={dark}
       rootProps={dark ? undefined : { ref: root, tabIndex: -1 }}
     >

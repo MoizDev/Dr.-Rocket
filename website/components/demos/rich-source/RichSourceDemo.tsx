@@ -4,7 +4,7 @@
 // Run always replays the prepared output of the original poster.rkt (after one compact line when
 // it was edited); edits stay in the editor. Any image, in the file or the REPL, opens a preview.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
-import DemoRoot, { DisclosureChip } from "../DemoRoot";
+import DemoRoot, { DisclosureChip, ThemeToggle } from "../DemoRoot";
 import Code from "../Code";
 import Repl, { replKey, type ReplItem } from "../Repl";
 import Notice from "../Notice";
@@ -294,9 +294,10 @@ export default function RichSourceDemo({ className }: { className: string }) {
               <EditorTab key={f} file={f} active={f === active} onSelect={() => setActive(f)} onClose={() => closeTab(f)} />
             ))}
           </div>
-          <span className={s.tabTools} aria-hidden="true">
+          <span className={s.tabTools}>
+            <ThemeToggle />
             <Icon name="chevronDown" size={14} />
-            <svg viewBox="0 0 24 24"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor" /></svg>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8a2 2 0 1 0 0-4 2 2 0 0 0 0 4zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4zm0 6a2 2 0 1 0 0 4 2 2 0 0 0 0-4z" fill="currentColor" /></svg>
           </span>
         </div>
         <div className={s.codeArea} role="tabpanel" aria-label={fileName(active)} onClick={onImageClick}>

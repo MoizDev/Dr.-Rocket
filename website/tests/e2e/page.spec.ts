@@ -39,6 +39,20 @@ test("renders complete without JavaScript", async ({ browser }) => {
   await ctx.close();
 });
 
+test("each editor has a sun/moon toggle that flips only its own demo", async ({ page }) => {
+  await page.goto("/");
+  const owners = await page.locator("[data-theme-toggle]").evaluateAll((els) => els.map((e) => e.closest("[data-demo]")!.getAttribute("data-demo")));
+  expect(owners).toEqual(["hero-ide", "visualizer", "stepper", "debugger", "rich-source", "projects"]);
+  const viz = page.locator('[data-demo="visualizer"]');
+  await viz.scrollIntoViewIfNeeded();
+  await expect(viz.locator(".cm-content")).toBeAttached(); // hydrated
+  await viz.getByRole("button", { name: "Switch to the light theme" }).click();
+  await expect(viz).toHaveAttribute("data-theme", "light");
+  await expect(page.locator('[data-demo="hero-ide"]')).toHaveAttribute("data-theme", "dark");
+  await viz.getByRole("button", { name: "Switch to the dark theme" }).click();
+  await expect(viz).toHaveAttribute("data-theme", "dark");
+});
+
 test("download links are unchanged", async ({ page }) => {
   await page.goto("/");
   expect(await downloadAnchors(page)).toEqual(baseline.downloads);

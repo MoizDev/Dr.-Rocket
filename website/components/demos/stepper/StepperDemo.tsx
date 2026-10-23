@@ -3,7 +3,7 @@
 // original file: they are shown, never computed. Edits stay in the editor and never stop the
 // stepper; only the source highlights drop when they no longer map onto the edited text.
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
-import DemoRoot, { DisclosureChip } from "../DemoRoot";
+import DemoRoot, { DisclosureChip, ThemeToggle } from "../DemoRoot";
 import Code from "../Code";
 import KeysHelp, { EDITOR_KEYS } from "../KeysHelp";
 import { Icon, type IconName } from "../icons";
@@ -206,12 +206,13 @@ export default function StepperDemo({ className }: { className: string }) {
         </div>
 
         <section className={s.editor}>
-          <div className={s.tabs} aria-hidden="true">
-            <span className={s.tab}>
+          <div className={s.tabs}>
+            <span className={s.tab} aria-hidden="true">
               <FileIcon name="racket" size={12} />
               squares.rkt
               {changed ? <span className={s.dirty}>●</span> : <Icon name="close" size={11} />}
             </span>
+            <ThemeToggle className={s.tabEnd} />
           </div>
           <div className={s.codeBox}>
             <Code

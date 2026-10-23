@@ -2,7 +2,7 @@
 // Dr. Rocket's window chrome, shared by the hero, projects and theme demos: title bar with
 // project tabs, the file tree, editor tabs, the Interactions header and the status bar.
 import { useState, type ReactNode } from "react";
-import { DisclosureChip } from "./DemoRoot";
+import { DisclosureChip, ThemeToggle } from "./DemoRoot";
 import KeysHelp from "./KeysHelp";
 import { FileIcon, fileIconFor } from "./file-icons";
 import { IdeIcon } from "./IdeIcons";
@@ -248,6 +248,7 @@ export function EditorTabs(p: {
         })}
       </div>
       <span className={s.grow} />
+      <ThemeToggle />
       <IdeIcon name="chevronDown" size={15} className={s.tabTool} />
       <IdeIcon name="more" size={15} className={s.tabTool} />
     </div>

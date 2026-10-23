@@ -9,7 +9,7 @@
 .tab { display: inline-flex; align-items: center; gap: 6px; height: 21px; padding: 0 8px; border-radius: 6px; background: var(--d-elevated); color: var(--d-text); font-size: 11.5px; font-weight: 500; }
 .tab svg:last-child { color: var(--d-muted); }
 .dirty { font-size: 9px; }
-.tabTools { margin-left: auto; display: flex; gap: 14px; color: var(--d-muted); }
+.tabTools { margin-left: auto; display: flex; align-items: center; gap: 14px; color: var(--d-muted); }
 .codeBox { position: absolute; top: 25px; left: 0; right: 0; bottom: 0; }
 .sticky { position: absolute !important; top: 4px; left: 0; right: 0; height: 23.5px !important; box-shadow: 0 6px 6px -6px rgb(0 0 0 / 0.6); pointer-events: none; }
 .sticky > div { padding-top: 0 !important; }

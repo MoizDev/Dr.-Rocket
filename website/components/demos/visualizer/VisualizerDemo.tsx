@@ -2,7 +2,7 @@
 // The Visualizer: bst.rkt on the left, the prepared trace of its run on the right. Every step
 // comes from lib/demos/data/visualizer-trace.json (generated at development time); nothing runs.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import DemoRoot, { DisclosureChip } from "../DemoRoot";
+import DemoRoot, { DisclosureChip, ThemeToggle } from "../DemoRoot";
 import Code from "../Code";
 import Notice from "../Notice";
 import KeysHelp, { EDITOR_KEYS } from "../KeysHelp";
@@ -231,7 +231,8 @@ export default function VisualizerDemo({ className }: { className: string }) {
               {file.status !== "pristine" && <span className={s.dirty} aria-label="modified">●</span>}
               <Icon name="close" size={11} />
             </span>
-            <span className={s.tabTools} aria-hidden="true">
+            <span className={s.tabTools}>
+              <ThemeToggle />
               <Icon name="chevronDown" size={14} />
               <Glyph name="dots" />
             </span>
