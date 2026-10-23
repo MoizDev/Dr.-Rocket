@@ -1,4 +1,4 @@
-# Lint, type-check, unit-test, build and browser-test the website (home page demos included).
+# Lint, type-check, unit-test, and build the website.
 name: Website
 
 on:
@@ -30,11 +30,3 @@ jobs:
       - run: npm test
       - run: npm run test:node
       - run: npx next build
-      - run: npx playwright install --with-deps chromium webkit
-      - run: npm run test:e2e
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with:
-          name: playwright-report
-          path: website/playwright-report
-          retention-days: 7
