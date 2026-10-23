@@ -2,7 +2,7 @@
 // node tests/e2e/evidence-shots.ts <base-url> <out-dir>
 import { chromium } from "@playwright/test";
 const [base, dir] = process.argv.slice(2);
-const sel = [["hero","heroPanel"],["visualizer","vizStage"],["stepper","cardInset",0],["bindings","cardStack",0],["rich-source","cardInset",1],["projects","cardInset",2],["themes","cardStack",1],["languages","langVisual"]];
+const sel: [string, string, number?][] = [["hero","heroPanel"],["visualizer","vizStage"],["stepper","cardInset",0],["bindings","cardStack",0],["rich-source","cardInset",1],["projects","cardInset",2],["themes","cardStack",1],["languages","langVisual"]];
 const b = await chromium.launch();
 for (const w of [1440, 375]) {
   const p = await (await b.newContext({ viewport: { width: w, height: 900 }, reducedMotion: "reduce", deviceScaleFactor: 2 })).newPage();
