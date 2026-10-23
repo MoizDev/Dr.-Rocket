@@ -64,9 +64,10 @@ export function lookup(table: Table, input: string): Entry | null {
 
 export function missReply(table: Table): string {
   const ex = table.examples.slice(0, 2);
-  return `This demo only has prepared answers for a few expressions. Try ${ex.join(" or ")}.`;
+  return `No prepared answer for that. Try ${ex.join(" or ")}.`;
 }
 
+/** The label every demo carries: its results are prepared, not computed. */
 export const DISCLOSURE = "Simulated preview";
-export const EDITED_NOTICE =
-  "This page doesn't run code. These results were prepared for the original file, so they're hidden while it's changed.";
+/** The edited notice's default line (after its "Edited" lead-in). */
+export const EDITED_NOTICE = "The prepared results are for the original file.";
