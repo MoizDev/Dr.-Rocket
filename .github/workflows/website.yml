@@ -25,6 +25,7 @@ jobs:
           cache-dependency-path: website/package-lock.json
       - run: npm ci
       - run: npm run lint
+      - run: npx next typegen
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:node
