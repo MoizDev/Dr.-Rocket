@@ -687,7 +687,8 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
                 app.layout.show(PanelItem::Debugger, Dock::Right);
                 app.layout.show(PanelItem::Interactions, Dock::Bottom);
             }
-            app.tabs[i].rk.input.request_focus();
+            // Keep typing in the code, even when Run was clicked; ⌘2 goes to Interactions.
+            app.tabs[i].editor.request_focus();
         }
         Err(e) => app.toast(format!("Could not run: {e}"), ToastKind::Error),
     }
@@ -1409,6 +1410,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
             tab.rk.input.set_text(&text);
             submit(app, i);
         }
+        EditorAction::Reformat => app.run_command(Command::ReindentWithStyleGuide),
         EditorAction::Submit | EditorAction::HistoryPrev | EditorAction::HistoryNext => {}
     }
 }

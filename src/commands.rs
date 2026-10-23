@@ -77,6 +77,7 @@ pub enum Command {
     CommentOutWithBox,
     CommentOutWithDatum,
     ReindentAll,
+    ReindentWithStyleGuide,
     // App
     Settings,
     KeyboardShortcuts,
@@ -128,6 +129,7 @@ pub const COMMANDS: &[CommandInfo] = &[
     CommandInfo { cmd: Command::CommentOutWithBox, label: "Comment Out with a Box", group: "Racket", icon: ic::COMMENT, shortcut: sc(cmd_alt(), Key::Slash) },
     CommandInfo { cmd: Command::CommentOutWithDatum, label: "Comment Out with #;", group: "Racket", icon: ic::COMMENT, shortcut: sc(cmd_alt(), Key::Semicolon) },
     CommandInfo { cmd: Command::ReindentAll, label: "Reindent All", group: "Racket", icon: ic::FORMAT_ALIGN_LEFT, shortcut: sc(CMD, Key::I) },
+    CommandInfo { cmd: Command::ReindentWithStyleGuide, label: "Reindent with Style Guide", group: "Racket", icon: ic::AUTO_FIX_HIGH, shortcut: sc(cmd_shift(), Key::I) },
     CommandInfo { cmd: Command::ModuleBrowser, label: "Module Browser", group: "Racket", icon: ic::ACCOUNT_TREE, shortcut: None },
     CommandInfo { cmd: Command::CreateExecutable, label: "Create Executable…", group: "Racket", icon: ic::ROCKET_LAUNCH, shortcut: None },
     CommandInfo { cmd: Command::InstallPackage, label: "Install Package…", group: "Racket", icon: ic::PACKAGE_2, shortcut: None },
@@ -269,6 +271,7 @@ pub fn menu_specs() -> Vec<crate::platform::MenuSpec> {
                 entry(Command::ChooseLanguage),
                 entry(Command::ClearInteractions),
                 entry(Command::ReindentAll),
+                entry(Command::ReindentWithStyleGuide),
                 entry(Command::InsertLambda),
                 entry(Command::InsertImage),
                 entry(Command::CommentOutWithBox),

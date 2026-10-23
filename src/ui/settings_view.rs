@@ -392,6 +392,9 @@ impl App {
         }
         if !close {
             self.modal = Modal::Settings(sv);
+        } else if let Some(t) = self.active_tab_mut() {
+            // Clicking a control took focus from the editor; give it back so typing works.
+            t.editor.request_focus();
         }
     }
 
@@ -613,8 +616,11 @@ impl App {
                 }
             });
         });
-        row(ui, &theme, "Auto-close brackets and quotes", "Typing ) always inserts the matching closer, like DrRacket", |ui| {
+        row(ui, &theme, "Auto-close brackets and quotes", "Typing ( also types ), and brackets wrap a selection", |ui| {
             toggle(ui, &theme, &mut s.auto_close_brackets);
+        });
+        row(ui, &theme, "Match closing brackets", "Typing ) inside [ ] types ] instead, like DrRacket", |ui| {
+            toggle(ui, &theme, &mut s.match_closing_brackets);
         });
         row(ui, &theme, "Autocomplete while typing", "Show suggestions as you type. Ctrl-Space shows them on demand either way", |ui| {
             toggle(ui, &theme, &mut s.auto_complete);
@@ -623,10 +629,11 @@ impl App {
             toggle(ui, &theme, &mut s.restore_session);
         });
         row(ui, &theme, "Autosave", "Save files shortly after you stop typing", |ui| {
+            // Right to left: the toggle lines up with the others, the delay sits beside it.
+            toggle(ui, &theme, &mut s.autosave);
             if s.autosave {
                 ui.add(egui::DragValue::new(&mut s.autosave_delay_ms).range(100..=10_000).speed(10.0).suffix(" ms"));
             }
-            toggle(ui, &theme, &mut s.autosave);
         });
     }
 

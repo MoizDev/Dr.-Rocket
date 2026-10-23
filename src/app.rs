@@ -6,7 +6,7 @@ use crate::editor::view::{EditorMode, EditorStyle, EditorView};
 use crate::theme::{Theme, ThemeRegistry};
 use crate::ui::{self, GAP, ISLAND_RADIUS, STATUS_BAR_H, TAB_BAR_H, Tokens};
 use crate::workspace::Workspace;
-use egui::{Color32, CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
+use egui::{CornerRadius, Id, Rect, Sense, Stroke, StrokeKind, Ui, UiBuilder, pos2, vec2};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -246,6 +246,10 @@ pub struct Tab {
     pub zoom: f32,
     /// (buffer version, time it was first seen) for autosave debouncing.
     edit_seen: (u64, f64),
+    /// Follows the file when it's moved or renamed outside the app.
+    pub file_ref: crate::file_track::FileRef,
+    /// The buffer version a save last failed at: autosave waits for the next edit to retry.
+    save_failed: Option<u64>,
 }
 
 impl Tab {
@@ -345,6 +349,8 @@ pub struct App {
     /// The session.json contents last written, and when it was last compared.
     saved_session: String,
     session_checked: f64,
+    /// When open files were last checked for having moved (see `follow_moved_files`).
+    files_checked: f64,
 }
 
 /// Frame timing for `DRROCKET_FRAME_STATS`: our UI time, eframe's whole-frame CPU time
@@ -498,6 +504,7 @@ impl App {
             frame_stats: std::env::var("DRROCKET_FRAME_STATS").ok().map(|_| FrameStats::default()),
             saved_session: String::new(),
             session_checked: 0.0,
+            files_checked: 0.0,
         };
         app.apply_theme_overrides();
         if !crate::crash::unseen().is_empty() && app.automation.is_none() {
@@ -599,7 +606,10 @@ impl App {
 
     pub fn toast(&mut self, text: impl Into<String>, kind: ToastKind) {
         let now = self.ctx.input(|i| i.time);
-        self.toasts.push(Toast { text: text.into(), kind, until: now + 3.5 });
+        let text = text.into();
+        // The same message again (a repeated failure, say) restarts its timer instead of stacking.
+        self.toasts.retain(|t| t.text != text);
+        self.toasts.push(Toast { text, kind, until: now + 3.5 });
         self.ctx.request_repaint();
     }
 
@@ -648,7 +658,8 @@ impl App {
             rk.input.completion_words = words.clone();
         }
         let zoom = path.as_ref().and_then(|p| self.file_zooms.get(p)).copied().unwrap_or(1.0);
-        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
+        let file_ref = crate::file_track::FileRef::new(path.as_deref());
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0), file_ref, save_failed: None });
         self.tabs.len() - 1
     }
 
@@ -736,14 +747,22 @@ impl App {
     }
 
     pub fn save_tab(&mut self, idx: usize, save_as: bool) -> bool {
+        self.follow_moved_file(idx);
         let Some(tab) = self.tabs.get(idx) else { return false };
         if let Err(message) = tab.check_writable() {
             self.toast(message, ToastKind::Error);
             return false;
         }
         let path = match (&tab.path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => {
+            (Some(p), false) if folder_exists(p) => p.clone(),
+            (old, _) => {
+                let lost = old.is_some() && !save_as;
+                if lost {
+                    // Its folder was moved or deleted and the file couldn't be followed.
+                    let msg = format!("{} was moved or deleted. Choose where to save it.", tab.title());
+                    self.toast(msg, ToastKind::Info);
+                }
+                let tab = &self.tabs[idx];
                 let mut dlg = rfd::FileDialog::new().add_filter("Racket", &["rkt", "rktl", "rktd", "scrbl", "ss", "scm"]).set_file_name(format!("{}.rkt", tab.title().trim_end_matches(".rkt")));
                 if let Some(ws) = &self.workspace {
                     dlg = dlg.set_directory(&ws.root);
@@ -758,13 +777,15 @@ impl App {
         // Text with pasted images is saved in DrRacket's editor format; everything else as text.
         let images = self.tabs[idx].editor.doc.images.for_text(&text);
         let written = if images.is_empty() {
-            crate::config::atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())
+            crate::config::atomic_write(&path, text.as_bytes()).map_err(|e| describe_write_error(&e))
         } else {
             crate::racket_ui::write_wxme(self, &path, &text, images)
         };
         match written {
             Ok(()) => {
                 self.tabs[idx].path = Some(path.clone());
+                self.tabs[idx].file_ref = crate::file_track::FileRef::new(Some(&path));
+                self.tabs[idx].save_failed = None;
                 let language = self.tabs[idx].language;
                 crate::racket_ui::remember_language(self, &path, language);
                 let tab = &mut self.tabs[idx];
@@ -775,7 +796,10 @@ impl App {
                 true
             }
             Err(e) => {
-                self.toast(format!("Save failed: {e}"), ToastKind::Error);
+                let tab = &mut self.tabs[idx];
+                tab.save_failed = Some(tab.editor.doc.version());
+                let msg = format!("Couldn't save {}: {e}", tab.title());
+                self.toast(msg, ToastKind::Error);
                 false
             }
         }
@@ -856,7 +880,7 @@ impl App {
             if t.edit_seen.0 != v {
                 t.edit_seen = (v, now);
             }
-            if t.path.is_some() && t.dirty() {
+            if t.path.is_some() && t.dirty() && t.save_failed != Some(v) {
                 if now - t.edit_seen.1 >= delay {
                     due.push(i);
                 } else {
@@ -865,7 +889,39 @@ impl App {
             }
         }
         for i in due {
+            self.follow_moved_file(i);
+            let t = &mut self.tabs[i];
+            if t.path.as_deref().is_some_and(|p| !folder_exists(p)) {
+                // Don't pop up a save dialog unasked; say what happened once.
+                t.save_failed = Some(t.editor.doc.version());
+                let msg = format!("Couldn't autosave {}: it was moved or deleted. Save it (⌘S) to choose a new place.", t.title());
+                self.toast(msg, ToastKind::Error);
+                continue;
+            }
             self.save_tab(i, false);
+        }
+    }
+
+    /// Every couple of seconds, catch open files that were moved or renamed outside the app.
+    fn follow_moved_files(&mut self, now: f64) {
+        if now - self.files_checked < 2.0 {
+            return;
+        }
+        self.files_checked = now;
+        for i in 0..self.tabs.len() {
+            self.follow_moved_file(i);
+        }
+    }
+
+    /// If tab `idx`'s file was moved or renamed outside the app, follow it there.
+    fn follow_moved_file(&mut self, idx: usize) {
+        let Some(tab) = self.tabs.get_mut(idx) else { return };
+        let Some(old) = tab.path.clone() else { return };
+        if let Some(new) = tab.file_ref.moved(&old) {
+            let language = tab.language;
+            self.path_moved(&old, &new);
+            crate::racket_ui::remember_language(self, &new, language);
+            self.recents.add_file(&new);
         }
     }
 
@@ -1045,7 +1101,12 @@ impl App {
                     t.editor.request_focus();
                 }
             }
-            Command::FocusInteractions => self.layout.show(PanelItem::Interactions, Dock::Right),
+            Command::FocusInteractions => {
+                self.layout.show(PanelItem::Interactions, Dock::Right);
+                if let Some(t) = self.active_tab_mut() {
+                    t.rk.input.request_focus();
+                }
+            }
             Command::MoveInteractions => self.layout.interactions_below = !self.layout.interactions_below,
             Command::ZoomIn => self.zoom_active(Some(0.1)),
             Command::ZoomOut => self.zoom_active(Some(-0.1)),
@@ -1065,7 +1126,7 @@ impl App {
             }
             Command::InsertLambda => {
                 if let Some(t) = self.active_tab_mut() {
-                    t.editor.doc.type_text("λ", false);
+                    t.editor.doc.type_text("λ", crate::editor::document::Typing::LITERAL);
                 }
             }
             Command::ReportProblem => {
@@ -1135,6 +1196,15 @@ impl App {
             Command::ReindentAll => {
                 if let Some(t) = self.active_tab_mut() {
                     t.editor.doc.reindent_all();
+                }
+            }
+            Command::ReindentWithStyleGuide => {
+                // Lines fit inside the wrap guide (Racket's style guide uses 102 columns).
+                let width = self.settings.wrap_guide_column.unwrap_or(102);
+                let skipped = self.active_tab_mut().map_or(0, |t| t.editor.doc.reformat(width));
+                if skipped > 0 {
+                    let forms = if skipped == 1 { "1 form" } else { &format!("{skipped} forms") };
+                    self.toast(format!("Left {forms} as they were: fix the unmatched brackets first."), ToastKind::Info);
                 }
             }
             Command::Settings => self.modal = Modal::Settings(crate::ui::settings_view::SettingsView::default()),
@@ -1395,56 +1465,9 @@ impl App {
             child.set_clip_rect(ed_rect);
             tab.editor.show(&mut child, ed_rect, &style);
         }
-        self.diagnostics_counter(ui, ed_rect);
+        self.problems_counter(ui, ed_rect);
         crate::racket_ui::call_box(self, ui, ed_rect);
         crate::racket_ui::after_editor(self);
-    }
-
-    /// Error / warning / test counters in the editor's top-right corner (as in the mockup).
-    fn diagnostics_counter(&mut self, ui: &mut Ui, ed_rect: Rect) {
-        let Some(tab) = self.active_tab() else { return };
-        let errors = tab.editor.deco.shown_diagnostics().filter(|d| d.severity == crate::editor::view::Severity::Error).count();
-        let warnings = tab.editor.deco.shown_diagnostics().filter(|d| d.severity == crate::editor::view::Severity::Warning).count();
-        let passed = tab.editor.deco.inlays.iter().filter(|i| i.kind == crate::editor::view::InlayKind::Pass).count();
-        let failed = tab.editor.deco.inlays.iter().filter(|i| i.kind == crate::editor::view::InlayKind::Fail).count();
-        if errors + warnings + passed + failed == 0 || tab.editor.find.open {
-            return;
-        }
-        let t = &self.theme;
-        let mut items: Vec<(&str, Color32, usize)> = Vec::new();
-        if errors > 0 {
-            items.push((ui::ic::ERROR, t.error, errors));
-        }
-        if warnings > 0 {
-            items.push((ui::ic::WARNING, t.warning, warnings));
-        }
-        if failed > 0 {
-            items.push((ui::ic::CANCEL, t.error, failed));
-        }
-        if passed > 0 {
-            items.push((ui::ic::DONE_ALL, t.success, passed));
-        }
-        let font = ui::medium(13.0);
-        let mut w = 10.0;
-        let galleys: Vec<_> = items.iter().map(|(_, c, n)| ui.painter().layout_no_wrap(n.to_string(), font.clone(), *c)).collect();
-        for g in &galleys {
-            w += 18.0 + g.size().x + 10.0;
-        }
-        let r = Rect::from_min_size(pos2(ed_rect.right() - w - 22.0, ed_rect.top() + 8.0), vec2(w, 26.0));
-        let tk = self.tokens();
-        ui.painter().rect(r, CornerRadius::same(7), crate::theme::with_alpha(tk.popup, 235), Stroke::new(1.0, tk.island_border), StrokeKind::Inside);
-        let mut x = r.left() + 8.0;
-        for ((glyph, c, _), g) in items.iter().zip(galleys) {
-            ui.painter().text(pos2(x + 8.0, r.center().y), egui::Align2::CENTER_CENTER, *glyph, ui::icon_font_filled(16.0), *c);
-            x += 18.0;
-            ui.painter().galley(pos2(x, r.center().y - g.size().y / 2.0), g.clone(), *c);
-            x += g.size().x + 10.0;
-        }
-        let resp = ui.interact(r, Id::unique("diag-counter"), Sense::click());
-        if resp.clicked() {
-            self.run_command(Command::NextProblem);
-        }
-        resp.on_hover_text("Next problem (F8)");
     }
 
     /// Quit, asking first about unsaved changes.
@@ -1559,6 +1582,7 @@ impl eframe::App for App {
         }
         self.reload_changed_files();
         let now = ctx.input(|i| i.time);
+        self.follow_moved_files(now);
         self.autosave(now);
         self.save_session_if_changed(now);
         crate::racket_ui::poll(self, ctx);
@@ -1642,6 +1666,23 @@ impl eframe::App for App {
     }
 }
 
+/// Can a file be saved at `path` without creating folders? (Not when its folder was moved.)
+fn folder_exists(path: &Path) -> bool {
+    path.parent().is_none_or(|d| d.as_os_str().is_empty() || d.is_dir())
+}
+
+/// Why a save failed, in words rather than an OS error code.
+fn describe_write_error(e: &std::io::Error) -> String {
+    use std::io::ErrorKind;
+    match e.kind() {
+        ErrorKind::NotFound => "its folder no longer exists".into(),
+        ErrorKind::PermissionDenied => "you don't have permission to write there".into(),
+        ErrorKind::ReadOnlyFilesystem => "that disk is read-only".into(),
+        ErrorKind::StorageFull | ErrorKind::QuotaExceeded => "the disk is full".into(),
+        _ => e.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod save_tests {
     use super::*;
@@ -1654,7 +1695,7 @@ mod save_tests {
             editor: EditorView::new("partial WXME text", Id::unique("save-test")),
             language, lang_settings: language.default_settings(), lang_changed: false,
             disk_mtime: None, rk: crate::racket_ui::RacketTab::new(1), zoom: 1.0,
-            edit_seen: (0, 0.0),
+            edit_seen: (0, 0.0), file_ref: Default::default(), save_failed: None,
         };
         assert!(tab.check_writable().is_ok());
         tab.editor.read_only = true;

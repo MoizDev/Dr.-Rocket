@@ -218,7 +218,7 @@ pub fn expand_selection(toks: &[Token], start: usize, end: usize) -> Option<(usi
 
 /// How DrRacket indents the body of a form, by the form's head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HeadType {
+pub(crate) enum HeadType {
     /// `begin`, `cond`, `require`...: a first argument on its own line indents 2, later
     /// lines align with the line above.
     Begin,
@@ -231,7 +231,7 @@ enum HeadType {
 }
 
 /// DrRacket's default table, then its regexps: `^begin`, `^def`, `^(for\*?(/|$)|with-)`.
-fn head_type(head: &str) -> Option<HeadType> {
+pub(crate) fn head_type(head: &str) -> Option<HeadType> {
     use HeadType::*;
     let t = match head {
         "for/fold" | "for/fold:" | "for*/fold" | "for*/fold:" | "for/lists" | "for/lists:" | "for*/lists"

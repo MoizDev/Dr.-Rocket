@@ -86,6 +86,9 @@ pub struct Settings {
     pub autosave_delay_ms: u64,
     pub show_tab_bar: bool,
     pub auto_close_brackets: bool,
+    /// A typed closing bracket becomes the one that matches its opener (`)` after `[` types `]`),
+    /// as DrRacket's "Automatically adjust closing parens" does.
+    pub match_closing_brackets: bool,
     pub online_check_syntax: bool,
     pub show_binding_arrows: bool,
     /// Pop up completions while typing (Ctrl-Space always opens them).
@@ -116,6 +119,13 @@ pub struct Settings {
     pub default_language_settings: Option<crate::racket::lang::TeachingSettings>,
 }
 
+impl Settings {
+    /// How the editor treats brackets and quotes as you type.
+    pub fn typing(&self) -> crate::editor::document::Typing {
+        crate::editor::document::Typing { auto_close: self.auto_close_brackets, match_closers: self.match_closing_brackets }
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Self {
@@ -144,6 +154,7 @@ impl Default for Settings {
             autosave_delay_ms: 1000,
             show_tab_bar: true,
             auto_close_brackets: true,
+            match_closing_brackets: true,
             online_check_syntax: true,
             show_binding_arrows: false,
             auto_complete: false,

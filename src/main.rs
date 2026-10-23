@@ -11,6 +11,7 @@ mod config;
 mod crash;
 mod dev;
 mod editor;
+mod file_track;
 mod fuzzy;
 mod platform;
 mod print;

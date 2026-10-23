@@ -7,7 +7,7 @@
 //! find/replace bar.
 
 use super::buffer::{Selection, Selections};
-use super::document::{Document, Motion};
+use super::document::{Document, Motion, Typing};
 use super::lexer::{self, Class, Kind, Token};
 use super::sexp;
 use crate::config::{CursorShape, Settings};
@@ -166,8 +166,10 @@ impl Decorations {
     }
 
     /// The diagnostics shown now.
+    /// A run and the background check often report the same error; it's shown once.
     pub fn shown_diagnostics(&self) -> impl Iterator<Item = &Diagnostic> {
-        self.diagnostics.iter().filter(|d| self.shown(d))
+        let same = |a: &Diagnostic, b: &Diagnostic| a.range == b.range && a.severity == b.severity && a.message.lines().next() == b.message.lines().next();
+        self.diagnostics.iter().enumerate().filter(move |&(k, d)| self.shown(d) && !self.diagnostics[..k].iter().any(|e| self.shown(e) && same(e, d))).map(|(_, d)| d)
     }
 
     /// Shift all ranges through an edit (range in pre-edit coordinates, inserted length).
@@ -226,6 +228,8 @@ pub enum EditorAction {
     HistoryPrev,
     HistoryNext,
     RunSelection,
+    /// Context menu: Reindent with Style Guide.
+    Reformat,
     /// Something Vim mode asks of the app (save, close, an app command).
     Vim(crate::editor::vim::Effect),
 }
@@ -330,6 +334,8 @@ pub struct EditorView {
     max_line_chars: usize,
     goal_col: Option<usize>,
     last_activity: f64,
+    /// Focus last frame, so gaining it restarts the caret blink (the caret shows at once).
+    was_focused: bool,
     caret_anim: Option<Pos2>,
     /// The current mouse press already placed the caret (so its click on release doesn't).
     press_placed: bool,
@@ -406,6 +412,7 @@ impl EditorView {
             max_line_chars: 0,
             goal_col: None,
             last_activity: 0.0,
+            was_focused: false,
             caret_anim: None,
             press_placed: false,
             geom: Geometry::default(),
@@ -725,6 +732,10 @@ impl EditorView {
             ui.memory_mut(|m| m.set_focus_lock_filter(self.id, egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: self.find.open || self.completion.is_some() || self.vim.is_some() }));
         }
         let now = ctx.input(|i| i.time);
+        if focused && !self.was_focused {
+            self.last_activity = now;
+        }
+        self.was_focused = focused;
         let version_before = self.doc.version();
         let sel_before = self.doc.buffer.selections.clone();
 
@@ -1073,10 +1084,8 @@ impl EditorView {
             }
         }
 
-        // Cursors.
-        if focused || style.mode == EditorMode::Repl {
-            self.paint_cursors(&tp, &ctx, style, now, focused);
-        }
+        // Cursors. An editor without focus still shows where its caret is, dimmed and steady.
+        self.paint_cursors(&tp, &ctx, style, now, focused);
 
         // Gutter.
         if code {
@@ -1312,7 +1321,7 @@ impl EditorView {
                 continue;
             }
             let shape = if style.mode == EditorMode::Repl && !focused { CursorShape::Bar } else { vim_shape.unwrap_or(style.settings.cursor_shape) };
-            let color = if focused { theme.cursor } else { with_alpha(theme.cursor, 110) };
+            let color = if focused { theme.cursor } else { with_alpha(theme.cursor, 150) };
             match shape {
                 CursorShape::Bar => {
                     let w = style.settings.cursor_width.clamp(1.0, 8.0);
@@ -1327,7 +1336,7 @@ impl EditorView {
                             p.text(r.center(), Align2::CENTER_CENTER, c.to_string(), ui::mono(style.font_size), theme.editor_bg);
                         }
                     } else {
-                        p.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.0, color), StrokeKind::Inside);
+                        p.rect_stroke(r, CornerRadius::same(2), Stroke::new(1.5, color), StrokeKind::Inside);
                     }
                 }
                 CursorShape::Underline => {
@@ -1857,6 +1866,10 @@ impl EditorView {
                 self.doc.indent_selection_lines();
                 ui.close();
             }
+            if !ro && style.mode == EditorMode::Code && ui.button("Reindent with Style Guide").clicked() {
+                self.actions.push(EditorAction::Reformat);
+                ui.close();
+            }
         });
     }
 
@@ -1873,7 +1886,7 @@ impl EditorView {
 
     fn handle_keys(&mut self, ui: &Ui, style: &EditorStyle) {
         let events = ui.input(|i| i.events.clone());
-        let auto_close = style.settings.auto_close_brackets;
+        let typing = style.settings.typing();
         let repl = style.mode == EditorMode::Repl;
         for e in events {
             if self.vim.is_some() && self.vim_event(ui, style, &e) {
@@ -1884,12 +1897,12 @@ impl EditorView {
                     if t.chars().all(|c| c.is_control()) {
                         continue;
                     }
-                    self.doc.type_text(&t, auto_close);
+                    self.doc.type_text(&t, typing);
                     self.goal_col = None;
                     self.update_completion_after_typing(&t, style.settings.auto_complete);
                 }
                 Event::Ime(egui::ImeEvent::Commit(t)) => {
-                    self.doc.type_text(&t, auto_close);
+                    self.doc.type_text(&t, typing);
                 }
                 Event::Paste(t) => {
                     let t = self.doc.images.adopt_from_clipboard(&t);
@@ -2053,7 +2066,7 @@ impl EditorView {
                     if replace && let Some(v) = self.vim.as_ref() {
                         v.overwrite_next(&mut self.doc);
                     }
-                    self.doc.type_text(&c.to_string(), style.settings.auto_close_brackets);
+                    self.doc.type_text(&c.to_string(), style.settings.typing());
                     if let Some(v) = self.vim.as_mut() {
                         v.note_insert(c);
                     }
@@ -2143,7 +2156,7 @@ impl EditorView {
         let rows = ((self.geom.rect.height() / line_h) as usize).max(2);
         let last = (first + rows - 2).min(self.doc.buffer.line_count().saturating_sub(1));
         let clipboard = || arboard::Clipboard::new().ok().and_then(|mut c| c.get_text().ok());
-        let view = View { first_line: first, last_line: last, auto_close: style.settings.auto_close_brackets, clipboard: &clipboard };
+        let view = View { first_line: first, last_line: last, typing: style.settings.typing(), clipboard: &clipboard };
         let Some(vim) = self.vim.as_mut() else { return };
         let effects = vim.feed(&mut self.doc, &view, k);
         self.goal_col = None;
@@ -2316,7 +2329,7 @@ impl EditorView {
             Key::Slash if cmd => self.doc.toggle_comment(),
             Key::Semicolon if cmd && alt => self.doc.toggle_datum_comment(),
             Key::I if cmd && !shift => self.doc.reindent_all(),
-            Key::Backslash if cmd || ctrl => self.doc.type_text("λ", false),
+            Key::Backslash if cmd || ctrl => self.doc.type_text("λ", Typing::LITERAL),
             Key::Space if ctrl => self.open_completion(true),
             Key::F if cmd && alt => {
                 self.open_find(true);
