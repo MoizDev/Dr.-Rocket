@@ -425,6 +425,8 @@
   margin-top: 56px;
   padding: clamp(24px, 4.5vw, 64px) clamp(20px, 5vw, 72px) 0;
   overflow: hidden;
+  overflow: clip;
+  display: flow-root;
   border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   background:
     radial-gradient(120% 90% at 85% 0%, rgb(255 255 255 / 0.35), transparent 60%),
