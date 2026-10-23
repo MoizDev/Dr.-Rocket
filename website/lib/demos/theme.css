@@ -13,6 +13,7 @@
   --d-border: #1d1f23;
   --d-accent: #61afef;
   --d-selection: #2c313a;
+  --d-text-selection: #67769660;
   --d-success: #98c379;
   --d-success-bg: #1f2a1c;
   --d-success-border: #34482d;
@@ -53,6 +54,7 @@
   --d-border: #d3d3d4;
   --d-accent: #4078f2;
   --d-selection: #e5e5e6;
+  --d-text-selection: #e5e5e6;
   --d-success: #50a14f;
   --d-success-bg: #e7f0e2;
   --d-success-border: #c9dcc0;

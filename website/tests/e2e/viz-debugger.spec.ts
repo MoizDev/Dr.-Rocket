@@ -23,6 +23,29 @@ const typeAtEnd = async (page: Page, root: ReturnType<Page["locator"]>, text: st
 };
 
 test.describe("visualizer", () => {
+  test("selected code keeps its colours on the selection colour, also on the current line", async ({ page }) => {
+    const root = await live(page, "visualizer");
+    const lines = root.locator(".cm-content .cm-line");
+    const a = (await lines.nth(8).boundingBox())!;
+    const b = (await lines.nth(10).boundingBox())!;
+    await page.mouse.move(a.x + 140, a.y + a.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(b.x + 120, b.y + b.height / 2, { steps: 8 });
+    await page.mouse.up();
+    const got = await root.evaluate((el) => {
+      const token = el.querySelectorAll(".cm-line")[9].querySelector("[class*='tk-'], [class*='rb-']")!;
+      return {
+        own: getComputedStyle(token).color,
+        selected: getComputedStyle(token, "::selection").color,
+        band: getComputedStyle(el.querySelector(".cm-selectionBackground")!).backgroundColor,
+        currentLine: getComputedStyle(el.querySelector(".cm-activeLine")!).backgroundColor,
+      };
+    });
+    expect(got.selected).toBe(got.own);
+    expect(got.band).toBe("rgba(103, 118, 150, 0.376)");
+    expect(got.currentLine).toBe("rgba(0, 0, 0, 0)");
+  });
+
   test("rests on step 68, steps both ways", async ({ page }) => {
     const root = await live(page, "visualizer");
     await expect(root.getByText("Step 68 of 92", { exact: true })).toBeVisible();

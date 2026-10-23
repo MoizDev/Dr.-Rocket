@@ -51,23 +51,29 @@
 .cm :global(.cm-lineNumbers .cm-gutterElement) { width: 37px; padding: 0 17px 0 0; box-sizing: content-box; min-width: 0; }
 .cm :global(.cm-activeLine), .static :global(.active) { background: var(--d-active-line); }
 .cm :global(.cm-activeLineGutter) { background: transparent; color: var(--d-text); }
-.cm :global(.cm-selectionBackground), .cm:global(.cm-focused) :global(.cm-selectionBackground) { background: var(--d-selection) !important; }
+.cm :global(.cm-selectionBackground), .cm:global(.cm-focused) :global(.cm-selectionBackground) { background: var(--d-text-selection) !important; }
+/* The selection is drawn under the text, so while there is one the current line isn't
+   highlighted (as in VS Code): its opaque fill would hide the selection on that line. */
+.cm:has(:global(.cm-selectionBackground)) :global(.cm-activeLine) { background: transparent; }
+/* Selected text keeps its colours: the page's own ::selection is navy, for its light backgrounds. */
+.code ::selection { color: var(--d-fg); background: var(--d-text-selection); }
 .cm :global(.cm-cursor) { border-left: 2px solid var(--d-accent); }
 .cm :global(.cm-matchingBracket) { background: var(--d-hl); outline: 1PX solid var(--d-border); }
 
-/* Token colours, shared by the static lines and CodeMirror. */
-.code :global(.tk-keyword) { color: var(--d-c-keyword); }
-.code :global(.tk-function) { color: var(--d-c-function); }
-.code :global(.tk-variable) { color: var(--d-c-variable); }
-.code :global(.tk-number), .code :global(.tk-constant), .code :global(.tk-symbol) { color: var(--d-c-number); }
-.code :global(.tk-string) { color: var(--d-c-string); }
-.code :global(.tk-comment) { color: var(--d-c-comment); font-style: italic; }
-.code :global(.tk-operator) { color: var(--d-c-operator); }
-.code :global(.tk-type) { color: var(--d-c-type); }
-.code :global(.tk-punct) { color: var(--d-c-punct); }
-.code :global(.rb-1) { color: var(--d-r1); }
-.code :global(.rb-2) { color: var(--d-r2); }
-.code :global(.rb-3) { color: var(--d-r3); }
+/* Token colours, shared by the static lines and CodeMirror, selected or not. */
+.code :global(.tk-keyword), .code :global(.tk-keyword)::selection { color: var(--d-c-keyword); }
+.code :global(.tk-function), .code :global(.tk-function)::selection { color: var(--d-c-function); }
+.code :global(.tk-variable), .code :global(.tk-variable)::selection { color: var(--d-c-variable); }
+.code :global(.tk-number), .code :global(.tk-constant), .code :global(.tk-symbol),
+.code :global(.tk-number)::selection, .code :global(.tk-constant)::selection, .code :global(.tk-symbol)::selection { color: var(--d-c-number); }
+.code :global(.tk-string), .code :global(.tk-string)::selection { color: var(--d-c-string); }
+.code :global(.tk-comment), .code :global(.tk-comment)::selection { color: var(--d-c-comment); font-style: italic; }
+.code :global(.tk-operator), .code :global(.tk-operator)::selection { color: var(--d-c-operator); }
+.code :global(.tk-type), .code :global(.tk-type)::selection { color: var(--d-c-type); }
+.code :global(.tk-punct), .code :global(.tk-punct)::selection { color: var(--d-c-punct); }
+.code :global(.rb-1), .code :global(.rb-1)::selection { color: var(--d-r1); }
+.code :global(.rb-2), .code :global(.rb-2)::selection { color: var(--d-r2); }
+.code :global(.rb-3), .code :global(.rb-3)::selection { color: var(--d-r3); }
 /* Indent bands as in paint_indent_bands: a faint fill per 2-column step, a dot on each space. */
 .code :global(.band) {
   background-color: color-mix(in srgb, var(--band) var(--band-alpha, 9%), transparent);
