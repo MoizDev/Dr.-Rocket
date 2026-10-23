@@ -1,0 +1,92 @@
+{
+ "module": "lang/htdp-intermediate",
+ "binders": {
+  "3": {
+   "name": "average",
+   "kind": "definition",
+   "uses": [
+    68,
+    144
+   ]
+  },
+  "4": {
+   "name": "marks",
+   "kind": "parameter",
+   "uses": [
+    10,
+    14
+   ]
+  },
+  "21": {
+   "name": "total",
+   "kind": "definition",
+   "uses": [
+    9,
+    42,
+    55
+   ]
+  },
+  "22": {
+   "name": "marks",
+   "kind": "parameter",
+   "uses": [
+    29,
+    39,
+    45
+   ]
+  },
+  "81": {
+   "name": "letter",
+   "kind": "definition",
+   "uses": [
+    119,
+    127,
+    149
+   ]
+  },
+  "82": {
+   "name": "mark",
+   "kind": "parameter",
+   "uses": [
+    89,
+    97,
+    105
+   ]
+  },
+  "134": {
+   "name": "marks",
+   "kind": "definition",
+   "uses": [
+    145,
+    150
+   ]
+  }
+ },
+ "imported": {
+  "1": "define",
+  "7": "/",
+  "13": "length",
+  "19": "define",
+  "25": "cond",
+  "28": "empty?",
+  "34": "else",
+  "36": "+",
+  "38": "first",
+  "44": "rest",
+  "53": "check-expect",
+  "57": "list",
+  "66": "check-expect",
+  "70": "list",
+  "79": "define",
+  "85": "cond",
+  "88": ">=",
+  "96": ">=",
+  "104": ">=",
+  "111": "else",
+  "117": "check-expect",
+  "125": "check-expect",
+  "133": "define",
+  "136": "list",
+  "148": "map"
+ }
+}

@@ -1,0 +1,30 @@
+/* App points (828.5 × 470), measured from checksyntax.png. */
+.app { position: absolute; inset: 0; background: var(--d-editor); }
+.tabs { position: absolute; left: 0; right: 0; top: 0; height: 40px; display: flex; align-items: center; gap: 10px; padding: 0 14px 0 7px; }
+.tab { display: flex; align-items: center; gap: 7px; height: 28px; padding: 0 10px; background: var(--d-elevated); border-radius: 7px; font-size: 14px; color: var(--d-text); }
+.dirty { font-size: 10px; }
+.spacer { flex: 1; }
+.tabIcons { display: flex; align-items: center; gap: 16px; color: var(--d-muted); font-size: 16px; }
+/* The editor in the screenshot is zoomed to 20pt: draw the 15pt editor at 1.356×. */
+.zoom { position: absolute; top: 29.5px; left: 0; width: 611px; bottom: 0; zoom: 1.356; }
+.overlay { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.arrow { fill: none; stroke: #6c9ccb; stroke-width: 1.3; stroke-dasharray: 1; }
+.head { fill: #6c9ccb; }
+.occ { background: var(--d-selection); border-radius: 3px; }
+.tip {
+  position: absolute;
+  padding: 6px 9px;
+  background: var(--d-elevated);
+  border: 1px solid var(--d-selection);
+  border-radius: 6px;
+  font-size: 10px;
+  color: var(--d-text);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: 0 4px 12px rgb(0 0 0 / 0.35);
+}
+.zoom[data-drawing] .arrow { animation: draw 0.9s ease-out both; }
+.zoom[data-drawing] .tip { animation: fade 0.4s 0.8s ease-out both; }
+@keyframes draw { from { stroke-dashoffset: 1; } to { stroke-dashoffset: 0; } }
+@keyframes fade { from { opacity: 0; } to { opacity: 1; } }
+.notice { position: absolute; left: 10px; right: 10px; bottom: 10px; }
