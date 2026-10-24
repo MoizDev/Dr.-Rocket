@@ -232,6 +232,28 @@ See [DESIGN.md](DESIGN.md) for the details.
 
 ### Development
 
+Install Rust (Cargo) and Racket, then run from the repository root:
+
+```sh
+tools/dev.sh path/to/scratch-file.rkt
+```
+
+This builds the current branch and opens a local app. Source changes rebuild and restart it;
+theme JSON changes apply live. Settings, sessions, window state, and caches live under
+`target/dev-profile/`, separate from the installed app. Update checks start disabled in this
+profile. It uses the incremental `dev` build; set `DRROCKET_DEV_PROFILE=devfast` for release-speed
+code with a slower first build. No extra watcher installation is needed.
+
+Use copies of programs under `target/dev-playground/` to experiment. Save editor changes
+before changing app sources: automatic restart terminates the running development app.
+Close the app or press Ctrl+C in the launch terminal to stop it. Settings persist between launches; removing
+`target/dev-profile/` while the dev app is stopped resets only this development profile.
+
+To try the customizable stepper, open **Settings → Racket**, choose the test, functional-focus,
+view, and selection options, then press **⇧⌘E** (Ctrl+Shift+E on Linux). For selection mode,
+highlight complete expressions first. Approve the file's execution prompt for your scratch
+program. Execution settings apply on stepper start/restart; the view setting applies immediately.
+
 ```sh
 cargo test                        # unit and backend integration tests (needs Racket)
 cargo clippy --all-targets        # kept warning-free

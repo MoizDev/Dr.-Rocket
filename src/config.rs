@@ -15,6 +15,9 @@ pub fn config_dir() -> PathBuf {
 }
 
 pub fn cache_dir() -> PathBuf {
+    if let Ok(p) = std::env::var("DRROCKET_CACHE_DIR") {
+        return PathBuf::from(p);
+    }
     dirs::cache_dir().unwrap_or_else(std::env::temp_dir).join("dr-rocket")
 }
 

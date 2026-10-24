@@ -58,6 +58,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         persist_window: !automated,
+        persistence_path: std::env::var_os("DRROCKET_CONFIG_DIR").map(|p| PathBuf::from(p).join("window-state")),
         // eframe defaults to a frame latency of 1, which on Metal halves the frame rate (60 -> 30
         // fps) as soon as a frame has real work in it. Queue two frames, as egui-wgpu recommends.
         // DRROCKET_NO_VSYNC renders unthrottled, for measuring (see DRROCKET_FRAME_STATS).
