@@ -1104,6 +1104,7 @@
     [else
      (define port (open-source-port source source-images))
      (port-count-lines! port)
+     (define value-printer #f)
      (define loaded?
        (guard
         (λ ()
@@ -1120,7 +1121,8 @@
           (unless (configure-teaching-output!)
             (run-configure-runtime! mod-path))
           (set! fraction-view (if (pretty-print-exact-as-decimal) 'decimal 'mixed))
-          (current-print (make-value-printer (current-print)))
+          (set! value-printer (make-value-printer (current-print)))
+          (current-print value-printer)
           (init-markup-support!)
           (hook-test-display!)
           (when (eq? instrument 'visualize) (viz-start!))
@@ -1132,7 +1134,11 @@
        (hook-test-display!)
        (for ([sub (in-list submodules)])
          (define sp `(submod ,mod-path ,sub))
-         (guard (λ () (when (module-declared? sp #t) (dynamic-require sp #f))))))
+         (guard (λ () (when (module-declared? sp #t) (dynamic-require sp #f)))))
+       ;; Teaching-language initialization may install its own interaction printer.
+       ;; Keep the runner's capture in front of whichever printer is active.
+       (unless (eq? (current-print) value-printer)
+         (current-print (make-value-printer (current-print)))))
      (when (eq? instrument 'coverage) (guard emit-coverage!))
      (set! repl-namespace
            (or (with-handlers ([exn:fail? (λ (e) #f)]) (module->namespace mod-path))
