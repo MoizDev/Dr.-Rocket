@@ -332,6 +332,9 @@ pub struct EditorView {
     id: Id,
     scroll: Vec2,
     max_line_chars: usize,
+    width_version: Option<u64>,
+    /// Logical line offsets, plus the total height, for soft-wrapped REPL input.
+    wrapped_line_tops: Vec<f32>,
     goal_col: Option<usize>,
     last_activity: f64,
     /// Focus last frame, so gaining it restarts the caret blink (the caret shows at once).
@@ -410,6 +413,8 @@ impl EditorView {
             id,
             scroll: Vec2::ZERO,
             max_line_chars: 0,
+            width_version: None,
+            wrapped_line_tops: Vec::new(),
             goal_col: None,
             last_activity: 0.0,
             was_focused: false,
@@ -506,7 +511,54 @@ impl EditorView {
     // ================================================================= layout helpers
 
     fn line_y(&self, line: usize) -> f32 {
-        self.geom.top + line as f32 * self.geom.line_h - self.scroll.y
+        self.geom.top + self.wrapped_line_tops.get(line).copied().unwrap_or(line as f32 * self.geom.line_h) - self.scroll.y
+    }
+
+    fn cursor_pos(&self, line: usize, col: usize) -> Pos2 {
+        let row_y = if self.wrapped_line_tops.is_empty() { 0.0 } else { self.galleys.get(&line).map_or(0.0, |g| g.pos_from_cursor(CCursor::new(col)).top()) };
+        pos2(self.x_of(line, col), self.line_y(line) + row_y)
+    }
+
+    /// Measure and lay out soft wrapping without inserting newlines into the program.
+    pub fn repl_height(&mut self, ui: &Ui, width: f32, style: &EditorStyle) -> f32 {
+        self.doc.sync();
+        self.wrapped_line_tops.clear();
+        self.galleys.clear();
+        let line_h = (style.font_size * style.settings.line_height).round();
+        let tokens = self.doc.tokens_shared();
+        let mut height = 0.0;
+        for line in 0..self.doc.buffer.line_count() {
+            let mut job = self.line_job(line, style, &tokens);
+            job.wrap.max_width = (width - SCROLLBAR_W - 4.0).max(1.0);
+            job.first_row_min_height = line_h;
+            for section in &mut job.sections {
+                section.format.line_height = Some(line_h);
+            }
+            let galley = ui.painter().layout_job(job);
+            self.wrapped_line_tops.push(height);
+            height += galley.size().y.max(line_h);
+            self.galleys.insert(line, galley);
+        }
+        self.wrapped_line_tops.push(height);
+        height
+    }
+
+    fn max_scroll_x(&mut self, rect: Rect, text_left: f32, char_w: f32, style: &EditorStyle) -> f32 {
+        if style.mode != EditorMode::Code {
+            return 0.0;
+        }
+        if self.width_version != Some(self.doc.version()) {
+            self.max_line_chars = (0..self.doc.buffer.line_count()).map(|l| self.doc.buffer.line_len(l)).max().unwrap_or(0);
+            self.width_version = Some(self.doc.version());
+        }
+        // The visualizer's notes extend their lines: scrolling reaches their ends too.
+        let note_scale = (style.font_size * 0.86).round() / style.font_size;
+        let mut note_chars: HashMap<usize, f32> = HashMap::new();
+        for n in &self.deco.viz_notes {
+            *note_chars.entry(self.doc.buffer.line_of(n.pos)).or_default() += (n.text.chars().count() as f32 + 3.0) * note_scale;
+        }
+        let widest = note_chars.iter().map(|(l, w)| self.doc.buffer.line_len(*l) as f32 + 2.0 + w).fold(self.max_line_chars as f32, f32::max);
+        (widest * char_w - (rect.right() - text_left - SCROLLBAR_W - 40.0)).max(0.0)
     }
 
     /// Screen x of a char position on its line (uses this frame's galley if available).
@@ -570,10 +622,15 @@ impl EditorView {
     fn pos_at(&self, p: Pos2) -> usize {
         let b = &self.doc.buffer;
         let rel_y = p.y - self.geom.top + self.scroll.y;
-        let line = if rel_y < 0.0 { 0 } else { ((rel_y / self.geom.line_h) as usize).min(b.line_count().saturating_sub(1)) };
+        let line = if self.wrapped_line_tops.is_empty() {
+            ((rel_y / self.geom.line_h).max(0.0) as usize).min(b.line_count().saturating_sub(1))
+        } else {
+            self.wrapped_line_tops.partition_point(|y| *y <= rel_y).saturating_sub(1).min(b.line_count().saturating_sub(1))
+        };
         let rel_x = p.x - self.geom.text_left + self.scroll.x;
         let col = if let Some(g) = self.galleys.get(&line) {
-            g.cursor_from_pos(vec2(rel_x.max(0.0), g.size().y / 2.0)).index.0
+            let y = self.wrapped_line_tops.get(line).map_or(g.size().y / 2.0, |top| rel_y - top);
+            g.cursor_from_pos(vec2(rel_x.max(0.0), y)).index.0
         } else {
             ((rel_x / self.geom.char_w).round().max(0.0)) as usize
         };
@@ -680,7 +737,7 @@ impl EditorView {
     // ================================================================= main entry
 
     /// Show the editor filling `rect`. In REPL mode the height adapts to content.
-    pub fn show(&mut self, ui: &mut Ui, rect: Rect, style: &EditorStyle) -> Response {
+    pub fn show(&mut self, ui: &mut Ui, outer_rect: Rect, style: &EditorStyle) -> Response {
         let ctx = ui.ctx().clone();
         let theme = style.theme;
         let tk = Tokens::of(theme);
@@ -688,6 +745,7 @@ impl EditorView {
         let char_w = ctx.fonts_mut(|f| f.glyph_width(&font, 'M'));
         let line_h = (style.font_size * style.settings.line_height).round();
         let code = style.mode == EditorMode::Code;
+        let mut rect = outer_rect;
 
         self.doc.sync();
         self.shift_decorations();
@@ -698,6 +756,14 @@ impl EditorView {
         let gutter_w = if code && style.settings.show_line_numbers { 22.0 + digits * char_w + 18.0 } else if code { 26.0 } else { 0.0 };
         let pad_top = if code { 6.0 } else { 0.0 };
         let text_left = rect.left() + gutter_w + if code { 6.0 } else { 0.0 };
+        if code {
+            self.wrapped_line_tops.clear();
+            if self.max_scroll_x(rect, text_left, char_w, style) > 0.0 {
+                rect.max.y -= SCROLLBAR_W;
+            }
+        } else {
+            self.repl_height(ui, rect.width(), style);
+        }
         self.geom = Geometry { rect, text_left, top: rect.top() + pad_top, line_h, char_w };
 
         // ---- interaction
@@ -776,13 +842,16 @@ impl EditorView {
         }
 
         // ---- scrolling
+        let max_scroll_x = self.max_scroll_x(outer_rect, text_left, char_w, style);
+        rect.max.y = outer_rect.bottom() - if max_scroll_x > 0.0 { SCROLLBAR_W } else { 0.0 };
+        self.geom.rect = rect;
         let viewport_h = rect.height() - pad_top;
-        let content_h = line_count as f32 * line_h;
+        let content_h = if code { line_count as f32 * line_h } else { self.repl_height(ui, rect.width(), style) };
         let overscroll = if code { (viewport_h - line_h * 3.0).max(0.0) } else { 0.0 };
         let max_scroll_y = (content_h + overscroll - viewport_h).max(0.0);
         if resp.hovered() || ui.rect_contains_pointer(rect) {
             let (delta, shift) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers.shift));
-            if delta != Vec2::ZERO && !ui.ctx().is_being_dragged(self.id.with("vscroll")) {
+            if delta != Vec2::ZERO && !ui.ctx().is_being_dragged(self.id.with("vscroll")) && !ui.ctx().is_being_dragged(self.id.with("hscroll")) {
                 if shift && delta.x == 0.0 {
                     self.scroll.x -= delta.y;
                 } else {
@@ -831,26 +900,23 @@ impl EditorView {
             }
             self.scroll_to_cursor = false;
         }
-        self.scroll.y = self.scroll.y.clamp(0.0, max_scroll_y);
-        // The visualizer's notes extend their lines: scrolling reaches their ends too.
-        let note_scale = (style.font_size * 0.86).round() / style.font_size;
-        let mut note_chars: Vec<(usize, f32)> = Vec::new();
-        for n in &self.deco.viz_notes {
-            let line = self.doc.buffer.line_of(n.pos);
-            let w = n.text.chars().count() as f32 * note_scale;
-            match note_chars.iter_mut().find(|(l, _)| *l == line) {
-                Some((_, total)) => *total += w + 3.0 * note_scale,
-                None => note_chars.push((line, w)),
+        if self.scroll_to_cursor && !code {
+            let head = self.doc.buffer.selections.primary().head;
+            let pos = self.cursor_pos(self.doc.buffer.line_of(head), self.doc.buffer.col_of(head));
+            if pos.y < rect.top() {
+                self.scroll.y -= rect.top() - pos.y;
+            } else if pos.y + line_h > rect.bottom() {
+                self.scroll.y += pos.y + line_h - rect.bottom();
             }
+            self.scroll_to_cursor = false;
         }
-        let widest = note_chars.iter().map(|(l, w)| self.doc.buffer.line_len(*l) as f32 + 2.0 + w).fold(self.max_line_chars as f32, f32::max);
-        let max_scroll_x = (widest * char_w - (rect.right() - text_left - SCROLLBAR_W - 40.0)).max(0.0);
+        self.scroll.y = self.scroll.y.clamp(0.0, max_scroll_y);
         self.scroll.x = self.scroll.x.clamp(0.0, max_scroll_x);
 
         // ---- visible lines
-        let first = (self.scroll.y / line_h).floor() as usize;
+        let first = if code { (self.scroll.y / line_h).floor() as usize } else { 0 };
         let visible = (viewport_h / line_h).ceil() as usize + 1;
-        let last = (first + visible).min(line_count.saturating_sub(1));
+        let last = if code { (first + visible).min(line_count.saturating_sub(1)) } else { line_count.saturating_sub(1) };
         let painter = ui.painter_at(rect);
         // Signature context for the blue box (needs the document's own token access).
         let primary0 = self.doc.buffer.selections.primary();
@@ -868,14 +934,14 @@ impl EditorView {
         let toks: &[Token] = &toks_arc;
 
         // Lay out visible lines.
-        let mut galleys = HashMap::with_capacity(visible + 1);
-        for line in first..=last {
-            let job = self.line_job(line, style, toks);
-            let g = painter.layout_job(job);
-            galleys.insert(line, g);
-            self.max_line_chars = self.max_line_chars.max(self.doc.buffer.line_len(line));
+        if code {
+            let mut galleys = HashMap::with_capacity(visible + 1);
+            for line in first..=last {
+                let job = self.line_job(line, style, toks);
+                galleys.insert(line, painter.layout_job(job));
+            }
+            self.galleys = galleys;
         }
-        self.galleys = galleys;
 
         let sels = self.doc.buffer.selections.clone();
         let primary = sels.primary();
@@ -904,15 +970,14 @@ impl EditorView {
                 let t = toks[k];
                 let line = self.doc.buffer.line_of(t.start);
                 if (first..=last).contains(&line) {
-                    let x0 = self.x_of(line, t.start - self.doc.buffer.line_start(line));
-                    let x1 = self.x_of(line, t.end - self.doc.buffer.line_start(line));
-                    let y = self.line_y(line);
-                    let r = Rect::from_min_max(pos2(x0 - 1.0, y + 3.0), pos2(x1 + 1.0, y + line_h - 3.0));
                     let (fill, stroke) = match pair_color {
                         Some(pc) => (with_alpha(pc, 45), Stroke::new(1.0, with_alpha(pc, 200))),
                         None => (with_alpha(theme.bracket_match, 150), Stroke::new(1.0, with_alpha(theme.text_muted, 90))),
                     };
-                    tp.rect(r, CornerRadius::same(3), fill, stroke, StrokeKind::Inside);
+                    let ls = self.doc.buffer.line_start(line);
+                    for r in self.range_rects(line, t.start - ls, t.end - ls) {
+                        tp.rect(r.shrink2(vec2(-1.0, 3.0)), CornerRadius::same(3), fill, stroke, StrokeKind::Inside);
+                    }
                 }
             }
         }
@@ -1021,7 +1086,7 @@ impl EditorView {
         // Text.
         for line in first..=last {
             if let Some(g) = self.galleys.get(&line) {
-                let y = self.line_y(line) + (line_h - g.size().y) / 2.0;
+                let y = self.line_y(line) + if code { (line_h - g.size().y) / 2.0 } else { 0.0 };
                 tp.galley(pos2(text_left - self.scroll.x, y), g.clone(), theme.editor_fg);
             }
         }
@@ -1106,6 +1171,9 @@ impl EditorView {
         if code || content_h > viewport_h {
             self.paint_scrollbar(ui, rect, content_h + overscroll, viewport_h, style);
         }
+        if max_scroll_x > 0.0 {
+            self.paint_horizontal_scrollbar(ui, outer_rect, max_scroll_x, style);
+        }
 
         // Find bar and completion popup.
         if self.find.open && code {
@@ -1126,9 +1194,8 @@ impl EditorView {
         if focused {
             let head = primary.head;
             let line = self.doc.buffer.line_of(head);
-            let x = self.x_of(line, head - self.doc.buffer.line_start(line));
-            let y = self.line_y(line);
-            let cr = Rect::from_min_size(pos2(x, y), vec2(2.0, line_h));
+            let pos = self.cursor_pos(line, head - self.doc.buffer.line_start(line));
+            let cr = Rect::from_min_size(pos, vec2(2.0, line_h));
             ctx.output_mut(|o| o.ime = Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect, cursor_rect: cr, should_interrupt_composition: false }));
         }
 
@@ -1144,6 +1211,27 @@ impl EditorView {
         (s.clamp(ls, le) - ls, e.clamp(ls, le) - ls)
     }
 
+    fn range_rects(&self, line: usize, c0: usize, c1: usize) -> Vec<Rect> {
+        if !self.wrapped_line_tops.is_empty() && let Some(g) = self.galleys.get(&line) {
+            let mut start = 0;
+            let mut rects = Vec::new();
+            for row in &g.rows {
+                let end = start + row.char_count_excluding_newline().0;
+                if c0 < end && c1 > start || c0 == c1 && c0 >= start && c0 <= end {
+                    let x = self.geom.text_left - self.scroll.x + row.pos.x;
+                    let y = self.line_y(line) + row.pos.y;
+                    rects.push(Rect::from_min_max(
+                        pos2(x + row.x_offset(CCursor::new(c0.saturating_sub(start)).index), y),
+                        pos2(x + row.x_offset(CCursor::new(c1.min(end) - start).index), y + row.height()),
+                    ));
+                }
+                start = end;
+            }
+            return rects;
+        }
+        vec![Rect::from_min_max(pos2(self.x_of(line, c0), self.line_y(line)), pos2(self.x_of(line, c1), self.line_y(line) + self.geom.line_h))]
+    }
+
     fn paint_range_bg(&self, p: &egui::Painter, s: usize, e: usize, first: usize, last: usize, color: Color32) {
         if e <= s && s != e {
             return;
@@ -1152,16 +1240,15 @@ impl EditorView {
         let (l0, l1) = (b.line_of(s), b.line_of(e));
         for line in l0.max(first)..=l1.min(last) {
             let (c0, c1) = self.line_range_cols(line, s, e);
-            let x0 = self.x_of(line, c0);
-            let mut x1 = self.x_of(line, c1);
-            if line < l1 {
-                x1 += self.geom.char_w * 0.5;
+            let mut rects = self.range_rects(line, c0, c1);
+            if line < l1 && let Some(r) = rects.last_mut() {
+                r.max.x += self.geom.char_w * 0.5;
             }
-            if x1 - x0 < 1.0 && s != e {
-                continue;
+            for r in rects {
+                if r.width() >= 1.0 || s == e {
+                    p.rect_filled(r.shrink2(vec2(0.0, 1.0)), CornerRadius::same(3), color);
+                }
             }
-            let y = self.line_y(line);
-            p.rect_filled(Rect::from_min_max(pos2(x0, y + 1.0), pos2(x1, y + self.geom.line_h - 1.0)), CornerRadius::same(3), color);
         }
     }
 
@@ -1191,13 +1278,13 @@ impl EditorView {
         let (l0, l1) = (b.line_of(s), b.line_of(e));
         for line in l0.max(first)..=l1.min(last) {
             let (c0, c1) = self.line_range_cols(line, s, e);
-            let x0 = self.x_of(line, c0);
-            let mut x1 = self.x_of(line, c1);
-            if line < l1 {
-                x1 += self.geom.char_w * 0.6;
+            let mut rects = self.range_rects(line, c0, c1);
+            if line < l1 && let Some(r) = rects.last_mut() {
+                r.max.x += self.geom.char_w * 0.6;
             }
-            let y = self.line_y(line);
-            p.rect_filled(Rect::from_min_max(pos2(x0, y), pos2(x1, y + self.geom.line_h)), CornerRadius::same(3), color);
+            for r in rects {
+                p.rect_filled(r, CornerRadius::same(3), color);
+            }
         }
     }
 
@@ -1303,7 +1390,7 @@ impl EditorView {
             let s = &Selection::new(s.anchor, head);
             let line = self.doc.buffer.line_of(s.head);
             let col = s.head - self.doc.buffer.line_start(line);
-            let target = pos2(self.x_of(line, col), self.line_y(line));
+            let target = self.cursor_pos(line, col);
             // Animate the primary caret (smooth caret movement).
             let pos = if k == sels.primary && style.settings.smooth_caret {
                 let prev = self.caret_anim.unwrap_or(target);
@@ -1530,6 +1617,29 @@ impl EditorView {
         }
     }
 
+    fn paint_horizontal_scrollbar(&mut self, ui: &Ui, rect: Rect, max_scroll: f32, style: &EditorStyle) {
+        let track = Rect::from_min_max(pos2(self.geom.text_left, rect.bottom() - SCROLLBAR_W), pos2(rect.right() - SCROLLBAR_W, rect.bottom()));
+        if track.width() <= 1.0 {
+            return;
+        }
+        let resp = ui.interact(track, self.id.with("hscroll"), Sense::click_and_drag()).on_hover_cursor(CursorIcon::Default);
+        let thumb_w = (track.width().powi(2) / (track.width() + max_scroll)).clamp(28.0_f32.min(track.width()), track.width());
+        let travel = (track.width() - thumb_w).max(1.0);
+        if resp.dragged() {
+            self.scroll.x = (self.scroll.x + resp.drag_delta().x / travel * max_scroll).clamp(0.0, max_scroll);
+        } else if resp.clicked() && let Some(p) = resp.interact_pointer_pos() {
+            self.scroll.x = ((p.x - track.left() - thumb_w / 2.0) / travel).clamp(0.0, 1.0) * max_scroll;
+        }
+        let thumb_x = track.left() + travel * self.scroll.x / max_scroll;
+        let thumb = Rect::from_min_size(pos2(thumb_x, track.top() + 3.0), vec2(thumb_w, SCROLLBAR_W - 6.0));
+        let p = ui.painter_at(rect);
+        p.rect_filled(track, CornerRadius::ZERO, style.theme.editor_bg);
+        p.rect_filled(thumb, CornerRadius::same(4), if resp.hovered() || resp.dragged() { style.theme.scrollbar_thumb_hover } else { style.theme.scrollbar_thumb });
+        if resp.dragged() || resp.clicked() {
+            ui.ctx().request_repaint();
+        }
+    }
+
     fn paint_scrollbar(&mut self, ui: &Ui, rect: Rect, total_h: f32, viewport_h: f32, style: &EditorStyle) {
         let theme = style.theme;
         if total_h <= viewport_h + 1.0 {
@@ -1732,6 +1842,9 @@ impl EditorView {
     // ================================================================= input
 
     fn handle_mouse(&mut self, ui: &Ui, resp: &Response, style: &EditorStyle, _now: f64) {
+        if resp.interact_pointer_pos().is_some_and(|p| p.y >= self.geom.rect.bottom() || p.x >= self.geom.rect.right() - SCROLLBAR_W) {
+            return;
+        }
         if let Some(pos) = ui.ctx().data_mut(|d| d.remove_temp::<usize>(self.id.with("sticky-jump"))) {
             self.doc.buffer.selections = Selections::single(Selection::caret(pos));
             self.pending_reveal = Some(self.doc.buffer.line_of(pos));
@@ -2190,6 +2303,21 @@ impl EditorView {
     }
 
     fn vertical(&mut self, lines: isize, extend: bool) {
+        if !self.wrapped_line_tops.is_empty() {
+            let mut sels = self.doc.buffer.selections.clone();
+            let head = sels.primary().head;
+            let cursor = self.cursor_pos(self.doc.buffer.line_of(head), self.doc.buffer.col_of(head));
+            let goal = *self.goal_col.get_or_insert_with(|| ((cursor.x - self.geom.text_left) / self.geom.char_w).round().max(0.0) as usize);
+            for s in &mut sels.list {
+                let cursor = self.cursor_pos(self.doc.buffer.line_of(s.head), self.doc.buffer.col_of(s.head));
+                let pos = self.pos_at(pos2(self.geom.text_left + goal as f32 * self.geom.char_w, cursor.y + lines as f32 * self.geom.line_h + self.geom.line_h / 2.0));
+                *s = if extend { Selection::new(s.anchor, pos) } else { Selection::caret(pos) };
+            }
+            sels.normalize();
+            self.doc.buffer.selections = sels;
+            self.doc.buffer.break_undo_group();
+            return;
+        }
         let mut sels = self.doc.buffer.selections.clone();
         let goal = *self.goal_col.get_or_insert_with(|| self.doc.buffer.col_of(sels.primary().head));
         let n = self.doc.buffer.line_count() as isize;
@@ -2362,6 +2490,10 @@ impl EditorView {
     fn on_edge_line(&self, down: bool) -> bool {
         let b = &self.doc.buffer;
         let line = b.line_of(b.selections.primary().head);
+        if !self.wrapped_line_tops.is_empty() {
+            let y = self.cursor_pos(line, b.col_of(b.selections.primary().head)).y + self.scroll.y - self.geom.top;
+            return if down { y + self.geom.line_h >= self.wrapped_line_tops.last().copied().unwrap_or(0.0) - 0.5 } else { y < 0.5 };
+        }
         if down { line + 1 >= b.line_count() } else { line == 0 }
     }
 
@@ -2749,6 +2881,65 @@ mod tests {
 
     fn key(k: Key) -> Event {
         Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+    }
+
+    #[test]
+    fn horizontal_scrollbar_drags_and_hides_after_shortening_code() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap();
+        let settings = Settings::default();
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        let ctx = egui::Context::default();
+        let mut ed = EditorView::new(&"x".repeat(500), Id::unique("scroll-test"));
+        frame(&ctx, &mut ed, &style, vec![]);
+        frame(&ctx, &mut ed, &style, vec![]);
+        let track = ctx.read_response(ed.id.with("hscroll")).expect("long code needs a scrollbar").rect;
+        let text_bottom = ed.geom.rect.bottom();
+        let start = pos2(track.left() + 20.0, track.center().y);
+        let end = start + vec2(100.0, 0.0);
+        let button = |pos, pressed| Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        frame(&ctx, &mut ed, &style, vec![Event::PointerMoved(start), button(start, true)]);
+        frame(&ctx, &mut ed, &style, vec![Event::PointerMoved(end)]);
+        frame(&ctx, &mut ed, &style, vec![button(end, false)]);
+        assert!(ed.scroll.x > 0.0, "dragging the thumb should scroll code");
+        assert_eq!(ed.doc.buffer.selections.primary().head, 0, "scrolling must not move the caret");
+        ed.set_text("(+ 1 2)");
+        frame(&ctx, &mut ed, &style, vec![]);
+        assert_eq!(ed.scroll.x, 0.0);
+        assert!(ed.geom.rect.bottom() > text_bottom, "short code should reclaim scrollbar space");
+    }
+
+    #[test]
+    fn repl_wraps_without_changing_input_and_tracks_visual_rows() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap();
+        let settings = Settings { smooth_caret: false, ..Default::default() };
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Repl };
+        let ctx = egui::Context::default();
+        let text = format!("(list {})\n\"{}\"", "1 ".repeat(200), "a".repeat(200));
+        let mut ed = EditorView::new(&text, Id::unique("wrap-test"));
+        ed.request_focus();
+        frame(&ctx, &mut ed, &style, vec![]);
+        assert!(ed.galleys[&0].rows.len() > 1);
+        assert!(ed.galleys[&1].rows.len() > 1, "long strings also wrap");
+        assert_eq!(ed.doc.text(), text);
+        assert_eq!(ed.scroll.x, 0.0);
+        assert!(ed.line_y(1) > ed.line_y(0) + ed.geom.line_h);
+        for pos in (0..ed.doc.buffer.len()).step_by(7) {
+            let cursor = ed.cursor_pos(ed.doc.buffer.line_of(pos), ed.doc.buffer.col_of(pos));
+            assert_eq!(ed.pos_at(cursor + vec2(0.0, ed.geom.line_h / 2.0)), pos, "hit testing at {pos}");
+        }
+        ed.doc.buffer.selections = Selections::single(Selection::caret(ed.doc.buffer.len()));
+        let before = ed.cursor_pos(1, ed.doc.buffer.line_len(1));
+        frame(&ctx, &mut ed, &style, vec![key(Key::ArrowUp)]);
+        let head = ed.doc.buffer.selections.primary().head;
+        let after = ed.cursor_pos(ed.doc.buffer.line_of(head), ed.doc.buffer.col_of(head));
+        assert!(after.y < before.y);
+        assert!(!ed.actions.contains(&EditorAction::HistoryPrev), "Up inside wrapped input should move the caret");
+        ed.doc.buffer.selections = Selections::single(Selection::caret(ed.doc.buffer.len()));
+        frame(&ctx, &mut ed, &style, vec![key(Key::Enter)]);
+        assert!(ed.actions.contains(&EditorAction::Submit));
+        assert_eq!(ed.doc.text(), text, "wrapping and submitting must preserve the original source");
     }
 
     /// Deleting the last line must not paint the stale line count (crashed in the indent
