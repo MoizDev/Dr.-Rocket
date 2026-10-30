@@ -343,10 +343,12 @@ impl Document {
                 }
                 ')' | ']' | '}' if !in_str && s.is_empty() && (auto_close || typing.match_closers) => {
                     // DrRacket: insert the closer that matches the innermost open bracket, and
-                    // step over an existing identical closer.
+                    // step over an existing identical closer, unless a list around the caret
+                    // still needs one: in `(a (b|)` the `)` belongs to `(b`, and `(a` needs
+                    // the new one.
                     let opener = sexp::enclosing_open(&self.tokens, start).filter(|_| typing.match_closers);
                     let want = opener.map_or(c, |o| closer_for(self.chars[self.tokens[o].end - 1]));
-                    if next == Some(want) {
+                    if next == Some(want) && !sexp::missing_closer(&self.tokens, &self.chars, start) {
                         edits.push(Replace { range: start..start, text: String::new() });
                         after.push(Selection::caret(((start as isize + shift) as usize) + 1));
                         continue;
@@ -1074,6 +1076,41 @@ mod tests {
         d.type_text(")", Typing::default());
         assert_eq!(d.text(), "(a)");
         assert_eq!(d.buffer.selections.primary().head, 3);
+    }
+
+    #[test]
+    fn closer_is_inserted_when_an_outer_list_still_needs_one() {
+        // `(a (b|)`: the `)` belongs to `(b`, so typing `)` adds the one `(a` needs.
+        let mut d = doc("(a (b)", 5);
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), "(a (b))");
+        assert_eq!(d.buffer.selections.primary().head, 6);
+        // Once everything is closed, typing `)` again steps over.
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), "(a (b))");
+        assert_eq!(d.buffer.selections.primary().head, 7);
+
+        // `(` typed before `x` doesn't auto-close; closing it after `2` keeps `(define` closed.
+        let src = "(define (f x)\n  (+ (* x 2))\n";
+        let mut d = doc(src, src.find("2)").unwrap() + 1);
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), "(define (f x)\n  (+ (* x 2)))\n");
+
+        // Also with bracket matching off.
+        let typing = Typing { match_closers: false, ..Typing::default() };
+        let mut d = doc("(a (b)", 5);
+        d.type_text(")", typing);
+        assert_eq!(d.text(), "(a (b))");
+    }
+
+    #[test]
+    fn a_broken_form_further_up_doesnt_stop_stepping_over() {
+        let src = "(define x\n\n(define (f y)\n  (g y))\n";
+        let at = src.find("y))").unwrap() + 1;
+        let mut d = doc(src, at);
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), src);
+        assert_eq!(d.buffer.selections.primary().head, at + 1);
     }
 
     #[test]
