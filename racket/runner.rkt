@@ -396,7 +396,9 @@
                                                     get-rewritten-error-message)
                            (test-engine/test-engine current-test-object test-object-tests
                                                     test-object-failed-checks test-object-copy
-                                                    test-object=? run-tests!)
+                                                    test-object=? run-tests!
+                                                    failed-check-reason fail-reason-srcloc
+                                                    unexpected-error? unexpected-error-exn)
                            (test-engine/syntax test-display-results!)
                            (simple-tree-text-markup/data
                             empty-markup? horizontal-markup? horizontal-markup-markups
@@ -412,15 +414,43 @@
     (when (and param (test-fn 'current-test-object) (test-fn 'vertical-markup?))
       (param report-test-results!))))
 
+;; Each failure comes from the test engine's own list of failed checks, so none can be missed
+;; however its markup is laid out; the markup only supplies the wording.
 (define (report-test-results! markup)
   (define to ((test-fn 'current-test-object)))
   (define total (length ((test-fn 'test-object-tests) to)))
-  (define failed (length ((test-fn 'test-object-failed-checks) to)))
+  (define checks (reverse ((test-fn 'test-object-failed-checks) to)))
+  (define texts (markup->failures markup))
   (emit* (hasheq 'ev "tests"
                  'total total
-                 'passed (max 0 (- total failed))
+                 'passed (max 0 (- total (length checks)))
                  'text (markup->text markup)
-                 'failures (markup->failures markup))))
+                 'failures (for/list ([fc (in-list checks)]
+                                      [i (in-naturals)])
+                             (define text (and (= (length texts) (length checks)) (list-ref texts i)))
+                             (failure->jsexpr fc text)))))
+
+;; A failed check as {message, srcloc}. For a check whose expression raised an error, the
+;; message is its first line (what was expected) and the error itself, as DrRacket shows it,
+;; without the error's own location and context lines.
+(define (failure->jsexpr fc text)
+  (define reason ((test-fn 'failed-check-reason) fc))
+  (define message
+    (cond
+      [((test-fn 'unexpected-error?) reason)
+       (define e ((test-fn 'unexpected-error-exn) reason))
+       (define error-message
+         (if rewrite-error-message
+             (with-handlers ([(λ (x) #t) (λ (x) (exn-message e))]) (rewrite-error-message e))
+             (exn-message e)))
+       (define first-line
+         (if text
+             (string-trim (car (string-split (string-append text "\n") "\n" #:trim? #f)))
+             "check encountered the following error instead of the expected value."))
+       (string-append first-line "\n:: " error-message)]
+      [text text]
+      [else "Check failed."]))
+  (hasheq 'message message 'srcloc (srcloc->jsexpr ((test-fn 'fail-reason-srcloc) reason))))
 
 ;; markup->text : markup -> string
 (define (markup->text m)
@@ -444,8 +474,15 @@
            (number->string n))]
       [else (format "~a" m)])))
 
-;; Verticals are flattened by the markup constructors, so a failure is the run of
-;; non-text lines immediately preceding its srcloc link.
+;; The wording of each failure, in order. Verticals are flattened by the markup constructors,
+;; so a failure is the run of non-text lines immediately preceding its srcloc link: a bare
+;; link, or for a check that raised an error, "in X caused by expression in Y".
+(define (error-link? m)
+  (define (call name . args) (apply (test-fn name) args))
+  (and (call 'horizontal-markup? m)
+       (let ([kids (call 'horizontal-markup-markups m)])
+         (and (pair? kids) (call 'srcloc-markup? (car kids))))))
+
 (define (markup->failures markup)
   (define (call name . args) (apply (test-fn name) args))
   (define failures '())
@@ -456,13 +493,11 @@
          (unless (null? kids)
            (define k (car kids))
            (cond
-             [(call 'srcloc-markup? k)
+             [(or (call 'srcloc-markup? k) (error-link? k))
               (define msg (string-join (for/list ([r (in-list (reverse run))])
                                          (string-trim (markup->text r)))
                                        "\n"))
-              (set! failures (cons (hasheq 'message msg
-                                           'srcloc (srcloc->jsexpr (call 'srcloc-markup-srcloc k)))
-                                   failures))
+              (set! failures (cons msg failures))
               (loop (cdr kids) '())]
              [(or (string? k) (call 'empty-markup? k)
                   (string=? (string-trim (markup->text k)) ""))

@@ -957,6 +957,10 @@ fn short_test_message(msg: &str) -> String {
     if let Some(c) = re.captures(&one_line) {
         return format!("got {}, expected {}", &c[1], &c[2]);
     }
+    // A check whose expression raised an error: the error says what went wrong.
+    if let Some((_, err)) = msg.split_once("\n:: ") {
+        return short_test_message(err);
+    }
     let re = regex::Regex::new(r"^Actual value (.+?) is not within (.+?) of expected value (.+?)\.?$").expect("valid regex");
     if let Some(c) = re.captures(&one_line) {
         return format!("got {}, expected {} ± {}", &c[1], &c[3], &c[2]);
@@ -3102,5 +3106,6 @@ mod tests {
         assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
         assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
         assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
+        assert_eq!(short_test_message("check-expect encountered the following error instead of the expected value, 6.\n:: f: expects only 2 arguments, but found 3"), "f: expects only 2 arguments, but found 3");
     }
 }

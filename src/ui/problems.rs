@@ -73,7 +73,7 @@ pub fn paint_row(ui: &Ui, theme: &Theme, r: Rect, p: &Problem, location: &str) {
 }
 
 /// "2 errors, 1 warning".
-fn summary(problems: &[Problem]) -> String {
+pub fn summary(problems: &[Problem]) -> String {
     let count = |k| problems.iter().filter(|p| p.kind == k).count();
     let mut parts = Vec::new();
     for (kind, one, many) in [(ProblemKind::Error, "error", "errors"), (ProblemKind::Warning, "warning", "warnings"), (ProblemKind::FailedTest, "failed test", "failed tests")] {
