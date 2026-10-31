@@ -317,6 +317,34 @@ impl Default for Geometry {
     }
 }
 
+// Long lines use independently shaped, grapheme-aligned rope chunks. Only widths
+// survive off screen; visible chunks and caret chunks retain their galleys.
+struct LineChunk {
+    cols: Range<usize>,
+    x: f32,
+    width: f32,
+    cursors: Arc<Vec<f32>>,
+    galley: Option<Arc<Galley>>,
+}
+
+#[derive(Default)]
+struct LongLine {
+    chunks: Vec<LineChunk>,
+    width: f32,
+}
+
+impl LongLine {
+    fn x(&self, col: usize) -> f32 {
+        let Some(c) = self.chunks.iter().find(|c| c.cols.end >= col) else { return self.width };
+        c.x + c.cursors[col.saturating_sub(c.cols.start).min(c.cols.len())]
+    }
+
+    fn col(&self, x: f32) -> usize {
+        let Some(c) = self.chunks.iter().find(|c| c.x + c.width >= x) else { return self.chunks.last().map_or(0, |c| c.cols.end) };
+        c.cols.start + c.galley.as_ref().map_or_else(|| c.cursors.iter().enumerate().min_by(|(_, a), (_, b)| ((x - c.x) - **a).abs().total_cmp(&((x - c.x) - **b).abs())).map_or(0, |(i, _)| i), |g| g.cursor_from_pos(vec2((x - c.x).max(0.0), g.size().y / 2.0)).index.0).min(c.cols.len())
+    }
+}
+
 pub struct EditorView {
     pub doc: Document,
     pub deco: Decorations,
@@ -329,12 +357,16 @@ pub struct EditorView {
     scroll: Vec2,
     max_line_chars: usize,
     goal_col: Option<usize>,
+    input_modifiers: Modifiers,
     last_activity: f64,
     caret_anim: Option<Pos2>,
     /// The current mouse press already placed the caret (so its click on release doesn't).
     press_placed: bool,
     geom: Geometry,
     galleys: HashMap<usize, Arc<Galley>>,
+    long_lines: HashMap<usize, LongLine>,
+    long_line_key: Option<(u64, u64)>,
+    chunk_widths: HashMap<u64, (LayoutJob, f32, Arc<Vec<f32>>)>,
     drag_anchor: Option<(usize, usize)>,
     drag_unit_word: bool,
     hover: Option<(Pos2, f64)>,
@@ -405,11 +437,15 @@ impl EditorView {
             scroll: Vec2::ZERO,
             max_line_chars: 0,
             goal_col: None,
+            input_modifiers: Modifiers::NONE,
             last_activity: 0.0,
             caret_anim: None,
             press_placed: false,
             geom: Geometry::default(),
             galleys: HashMap::new(),
+            long_lines: HashMap::new(),
+            long_line_key: None,
+            chunk_widths: HashMap::new(),
             drag_anchor: None,
             drag_unit_word: false,
             hover: None,
@@ -521,7 +557,13 @@ impl EditorView {
         let mut preview = None;
         for line in first..=last {
             let (ls, le) = (b.line_start(line), b.line_end(line));
-            for (k, &c) in chars[ls..le].iter().enumerate() {
+            let cols = self.long_lines.get(&line).and_then(|l| {
+                let mut visible = l.chunks.iter().filter(|c| c.x + c.width >= self.scroll.x && c.x <= self.scroll.x + self.geom.rect.width());
+                let first = visible.next()?;
+                Some(first.cols.start..visible.next_back().unwrap_or(first).cols.end)
+            }).unwrap_or(0..le - ls);
+            for k in cols {
+                let c = chars[ls + k];
                 if !crate::editor::images::is_image_char(c) {
                     continue;
                 }
@@ -554,6 +596,9 @@ impl EditorView {
     }
 
     fn x_of(&self, line: usize, col: usize) -> f32 {
+        if let Some(g) = self.long_lines.get(&line) {
+            return self.geom.text_left - self.scroll.x + g.x(col);
+        }
         if let Some(g) = self.galleys.get(&line) {
             return self.geom.text_left - self.scroll.x + g.pos_from_cursor(CCursor::new(col)).min.x;
         }
@@ -565,7 +610,9 @@ impl EditorView {
         let rel_y = p.y - self.geom.top + self.scroll.y;
         let line = if rel_y < 0.0 { 0 } else { ((rel_y / self.geom.line_h) as usize).min(b.line_count().saturating_sub(1)) };
         let rel_x = p.x - self.geom.text_left + self.scroll.x;
-        let col = if let Some(g) = self.galleys.get(&line) {
+        let col = if let Some(g) = self.long_lines.get(&line) {
+            g.col(rel_x.max(0.0))
+        } else if let Some(g) = self.galleys.get(&line) {
             g.cursor_from_pos(vec2(rel_x.max(0.0), g.size().y / 2.0)).index.0
         } else {
             ((rel_x / self.geom.char_w).round().max(0.0)) as usize
@@ -606,13 +653,17 @@ impl EditorView {
     /// Build the colored layout job for one line.
     fn line_job(&self, line: usize, style: &EditorStyle, toks: &[Token]) -> LayoutJob {
         let b = &self.doc.buffer;
-        let ls = b.line_start(line);
-        let le = b.line_end(line);
+        self.range_job(b.line_start(line)..b.line_end(line), style, toks)
+    }
+
+    fn range_job(&self, range: Range<usize>, style: &EditorStyle, toks: &[Token]) -> LayoutJob {
+        let (ls, le) = (range.start, range.end);
         let chars = self.doc.chars();
         let font = self.font(style);
         let theme = style.theme;
         let mut job = LayoutJob::default();
         job.wrap.max_width = f32::INFINITY;
+        job.keep_trailing_whitespace = true;
         let unused = self.deco.semantic.as_ref().map(|s| &s.unused);
         let images = &self.doc.images;
         let space_w = self.geom.char_w;
@@ -670,6 +721,67 @@ impl EditorView {
         job
     }
 
+    fn layout_long_line(&mut self, line: usize, style: &EditorStyle, toks: &[Token], painter: &egui::Painter) {
+        use unicode_segmentation::UnicodeSegmentation;
+        let b = &self.doc.buffer;
+        let start = b.line_start(line);
+        let len = b.line_len(line);
+        if len <= 4096 { return; }
+        let mut layout = self.long_lines.remove(&line).unwrap_or_default();
+        if layout.chunks.is_empty() {
+            let slice = b.rope().slice(start..start + len);
+            let text = slice.to_string();
+            // Rope chunks remain stable away from edits, making their width jobs reusable.
+            // Snap seams to complete graphemes so emoji/combining sequences stay together.
+            let mut boundaries = slice.chunks().scan(0usize, |n, s| { *n += s.len(); Some(*n) });
+            let mut next = boundaries.next().unwrap_or(text.len());
+            let (mut byte_start, mut col_start, mut col) = (0, 0, 0);
+            for (byte, grapheme) in text.grapheme_indices(true) {
+                col += grapheme.chars().count();
+                let end = byte + grapheme.len();
+                if end < next && end < text.len() { continue; }
+                let job = self.range_job(start + col_start..start + col, style, toks);
+                let key = egui::epaint::util::hash((&job, painter.ctx().pixels_per_point().to_bits()));
+                let (width, cursors) = if let Some((_, width, cursors)) = self.chunk_widths.get(&key).filter(|(old, _, _)| *old == job) {
+                    (*width, cursors.clone())
+                } else {
+                    let g = painter.layout_job(job.clone());
+                    let width = g.size().x;
+                    let cursors = Arc::new((0..=col - col_start).map(|i| g.pos_from_cursor(CCursor::new(i)).min.x).collect::<Vec<_>>());
+                    // Bound retained metadata too, even after visiting many huge lines.
+                    if self.chunk_widths.len() >= 4096 { self.chunk_widths.clear(); }
+                    self.chunk_widths.insert(key, (job, width, cursors.clone()));
+                    (width, cursors)
+                };
+                layout.chunks.push(LineChunk { cols: col_start..col, x: layout.width, width, cursors, galley: None });
+                layout.width += width;
+                byte_start = end;
+                col_start = col;
+                while next <= end && next < text.len() { next = boundaries.next().unwrap_or(text.len()); }
+            }
+            debug_assert_eq!(byte_start, text.len());
+        }
+        let visible = self.scroll.x..self.scroll.x + self.geom.rect.width();
+        for chunk in &mut layout.chunks {
+            let needed = chunk.x + chunk.width >= visible.start && chunk.x <= visible.end
+                || self.doc.buffer.selections.list.iter().any(|s| [s.anchor, s.head].into_iter().any(|p| p >= start + chunk.cols.start && p <= start + chunk.cols.end));
+            if needed {
+                chunk.galley = Some(painter.layout_job(self.range_job(start + chunk.cols.start..start + chunk.cols.end, style, toks)));
+            } else if !needed { chunk.galley = None; }
+        }
+        self.long_lines.insert(line, layout);
+    }
+
+    fn paint_long_line(&self, painter: &egui::Painter, line: usize, y: f32, color: Color32) {
+        if let Some(layout) = self.long_lines.get(&line) {
+            for chunk in &layout.chunks {
+                if let Some(g) = &chunk.galley {
+                    painter.galley(pos2(self.geom.text_left - self.scroll.x + chunk.x, y - g.size().y / 2.0), g.clone(), color);
+                }
+            }
+        }
+    }
+
     // ================================================================= main entry
 
     /// Show the editor filling `rect`. In REPL mode the height adapts to content.
@@ -719,6 +831,7 @@ impl EditorView {
         // Vim mode follows the setting (code editors only).
         let vim_on = style.settings.vim_mode && code && !self.read_only;
         if vim_on != self.vim.is_some() {
+            self.doc.buffer.close_groups();
             self.vim = vim_on.then(crate::editor::vim::Vim::new);
         }
         if focused {
@@ -763,6 +876,21 @@ impl EditorView {
                 self.hover = None;
             }
         }
+
+        let syntax = &theme.syntax;
+        let highlights = [syntax.keyword, syntax.function, syntax.variable, syntax.string, syntax.string_escape,
+            syntax.regex, syntax.number, syntax.constant, syntax.symbol, syntax.comment, syntax.punctuation,
+            syntax.operator, syntax.lang, syntax.hash_keyword].map(|h| (h.color, h.italic));
+        let style_key = egui::epaint::util::hash((self.font(style), ctx.pixels_per_point().to_bits(), line_h.to_bits(),
+            highlights, theme.editor_fg, theme.error, &theme.rainbow, style.settings.rainbow_brackets));
+        let layout_key = (self.doc.version(), style_key);
+        if self.long_line_key != Some(layout_key) {
+            self.long_lines.clear();
+            self.long_line_key = Some(layout_key);
+        }
+        let layout_toks = self.doc.tokens_shared();
+        let head_line = self.doc.buffer.line_of(self.doc.buffer.selections.primary().head);
+        self.layout_long_line(head_line, style, &layout_toks, ui.painter());
 
         // ---- scrolling
         let viewport_h = rect.height() - pad_top;
@@ -811,7 +939,9 @@ impl EditorView {
             } else if y + line_h > self.scroll.y + viewport_h - margin {
                 self.scroll.y = y + line_h - viewport_h + margin;
             }
-            let col = self.doc.buffer.col_of(head) as f32 * char_w;
+            let line = self.doc.buffer.line_of(head);
+            let column = self.doc.buffer.col_of(head);
+            let col = self.long_lines.get(&line).map_or(column as f32 * char_w, |g| g.x(column));
             let text_w = rect.right() - text_left - SCROLLBAR_W - 8.0;
             if col < self.scroll.x {
                 self.scroll.x = (col - 4.0 * char_w).max(0.0);
@@ -833,7 +963,8 @@ impl EditorView {
             }
         }
         let widest = note_chars.iter().map(|(l, w)| self.doc.buffer.line_len(*l) as f32 + 2.0 + w).fold(self.max_line_chars as f32, f32::max);
-        let max_scroll_x = (widest * char_w - (rect.right() - text_left - SCROLLBAR_W - 40.0)).max(0.0);
+        let pixel_width = self.long_lines.values().map(|g| g.width).fold(widest * char_w, f32::max);
+        let max_scroll_x = (pixel_width - (rect.right() - text_left - SCROLLBAR_W - 40.0)).max(0.0);
         self.scroll.x = self.scroll.x.clamp(0.0, max_scroll_x);
 
         // ---- visible lines
@@ -859,12 +990,15 @@ impl EditorView {
         // Lay out visible lines.
         let mut galleys = HashMap::with_capacity(visible + 1);
         for line in first..=last {
+            self.layout_long_line(line, style, toks, &painter);
+            if self.long_lines.contains_key(&line) { continue; }
             let job = self.line_job(line, style, toks);
             let g = painter.layout_job(job);
             galleys.insert(line, g);
             self.max_line_chars = self.max_line_chars.max(self.doc.buffer.line_len(line));
         }
         self.galleys = galleys;
+        self.long_lines.retain(|&line, _| (first..=last).contains(&line) || line == head_line);
 
         let sels = self.doc.buffer.selections.clone();
         let primary = sels.primary();
@@ -1009,6 +1143,7 @@ impl EditorView {
 
         // Text.
         for line in first..=last {
+            self.paint_long_line(&tp, line, self.line_y(line) + line_h / 2.0, theme.editor_fg);
             if let Some(g) = self.galleys.get(&line) {
                 let y = self.line_y(line) + (line_h - g.size().y) / 2.0;
                 tp.galley(pos2(text_left - self.scroll.x, y), g.clone(), theme.editor_fg);
@@ -1123,6 +1258,7 @@ impl EditorView {
             ctx.output_mut(|o| o.ime = Some(egui::output::IMEOutput { purpose: egui::IMEPurpose::Normal, rect, cursor_rect: cr, should_interrupt_composition: false }));
         }
 
+        self.input_modifiers = ctx.input(|i| i.modifiers);
         let _ = tk;
         resp
     }
@@ -1428,7 +1564,7 @@ impl EditorView {
         let b = &self.doc.buffer;
         let active_open = sexp::enclosing_open(toks, cursor);
         let col_x = |line: usize, col: usize| -> f32 {
-            if self.galleys.contains_key(&line) && col <= b.line_len(line) {
+            if (self.galleys.contains_key(&line) || self.long_lines.contains_key(&line)) && col <= b.line_len(line) {
                 self.x_of(line, col)
             } else {
                 self.geom.text_left - self.scroll.x + col as f32 * self.geom.char_w
@@ -1483,7 +1619,7 @@ impl EditorView {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn paint_sticky(&self, ui: &Ui, p: &egui::Painter, rect: Rect, gutter_w: f32, first: usize, toks: &[Token], style: &EditorStyle) {
+    fn paint_sticky(&mut self, ui: &Ui, p: &egui::Painter, rect: Rect, gutter_w: f32, first: usize, toks: &[Token], style: &EditorStyle) {
         let b = &self.doc.buffer;
         let probe = b.line_start(first.min(b.line_count().saturating_sub(1)));
         let mut top = None;
@@ -1507,7 +1643,11 @@ impl EditorView {
             let a = (24 - k * 4) as u8;
             p.hline(r.x_range(), r.bottom() + 1.0 + k as f32, Stroke::new(1.0, Color32::from_black_alpha(if theme.dark { a } else { a / 3 })));
         }
-        if let Some(g) = self.galleys.get(&line).cloned().or_else(|| Some(p.layout_job(self.line_job(line, style, toks)))) {
+        self.layout_long_line(line, style, toks, p);
+        if self.long_lines.contains_key(&line) {
+            let tp = p.with_clip_rect(Rect::from_min_max(pos2(rect.left() + gutter_w, r.top()), r.max));
+            self.paint_long_line(&tp, line, r.top() + h / 2.0 + 1.0, theme.editor_fg);
+        } else if let Some(g) = self.galleys.get(&line).cloned().or_else(|| Some(p.layout_job(self.line_job(line, style, toks)))) {
             let tp = p.with_clip_rect(Rect::from_min_max(pos2(rect.left() + gutter_w, r.top()), r.max));
             tp.galley(pos2(self.geom.text_left - self.scroll.x, r.top() + (h - g.size().y) / 2.0 + 1.0), g, theme.editor_fg);
         }
@@ -1876,6 +2016,10 @@ impl EditorView {
         let auto_close = style.settings.auto_close_brackets;
         let repl = style.mode == EditorMode::Repl;
         for e in events {
+            match &e {
+                Event::ModifiersChanged(m) | Event::Key { modifiers: m, .. } => self.input_modifiers = *m,
+                _ => {}
+            }
             if self.vim.is_some() && self.vim_event(ui, style, &e) {
                 continue;
             }
@@ -2038,6 +2182,17 @@ impl EditorView {
         let Some(v) = self.vim.as_ref() else { return false };
         let typing = matches!(v.mode, Mode::Insert | Mode::Replace) && v.cmdline.is_none() && !v.awaits_key();
         match e {
+            // egui-winit translates these platform shortcuts into clipboard events on
+            // Windows/Linux, so they need the same Ctrl routing as ordinary key events.
+            Event::Copy | Event::Cut | Event::Paste(_) if self.input_modifiers.ctrl && !self.input_modifiers.mac_cmd => {
+                let k = match e { Event::Copy => ESC, Event::Cut => ctrl('x'), _ => ctrl('v') };
+                if !typing || matches!(e, Event::Copy) {
+                    self.vim_feed(ui, style, k);
+                    return true;
+                }
+                false
+            }
+
             Event::Text(t) => {
                 if t.chars().all(|c| c.is_control()) {
                     return true;
@@ -2064,7 +2219,7 @@ impl EditorView {
             }
             Event::Key { key, pressed: true, modifiers, .. } => {
                 let (key, m) = (*key, *modifiers);
-                if m.command || m.mac_cmd {
+                if m.mac_cmd || m.command && !m.ctrl {
                     return false;
                 }
                 let ctrl_key = m.ctrl;
@@ -2718,6 +2873,119 @@ mod tests {
             ed.show(ui, rect, style);
         });
         out.textures_delta.clear();
+    }
+
+    #[test]
+    fn ctrl_keys_reach_vim_and_disabling_vim_closes_insert_history() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap();
+        let mut settings = Settings { vim_mode: true, ..Settings::default() };
+        let ctx = egui::Context::default();
+        let mut ed = EditorView::new("1\n2\n3", Id::unique("ctrl-vim"));
+        ed.request_focus();
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        frame(&ctx, &mut ed, &style, vec![]);
+        let control = |key| Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers { ctrl: true, command: true, ..Modifiers::NONE } };
+        frame(&ctx, &mut ed, &style, vec![control(Key::A)]);
+        assert!(ed.doc.text().starts_with('2'), "Ctrl+A increments through Vim, even when egui command=true");
+        frame(&ctx, &mut ed, &style, vec![Event::Text("i".into()), Event::Text("a".into())]);
+        assert_eq!(ed.vim.as_ref().unwrap().mode, crate::editor::vim::Mode::Insert);
+        settings.vim_mode = false;
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        frame(&ctx, &mut ed, &style, vec![Event::Text("b".into())]);
+        assert!(ed.doc.buffer.undo());
+        assert_eq!(ed.doc.text(), "a2\n2\n3");
+        assert!(ed.doc.buffer.undo());
+        assert_eq!(ed.doc.text(), "2\n2\n3");
+    }
+
+    #[test]
+    fn platform_clipboard_events_route_ctrl_but_preserve_mac_commands() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap();
+        let settings = Settings { vim_mode: true, ..Settings::default() };
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        let ctx = egui::Context::default();
+        let mut ed = EditorView::new("1", Id::unique("vim-clipboard"));
+        ed.request_focus();
+        frame(&ctx, &mut ed, &style, vec![Event::Text("i".into())]);
+        let mut event = |event, modifiers| {
+            let mut out = ctx.run_ui(egui::RawInput { events: vec![Event::ModifiersChanged(modifiers), event], ..Default::default() }, |ui| {
+                ed.show(ui, ui.max_rect(), &style);
+            });
+            out.textures_delta.clear();
+        };
+        let control = Modifiers { ctrl: true, command: true, ..Modifiers::NONE };
+        event(Event::Copy, control);
+        event(Event::Cut, control);
+        event(Event::Copy, Modifiers { mac_cmd: true, command: true, ..Modifiers::NONE });
+        assert_eq!(ed.vim.as_ref().unwrap().mode, crate::editor::vim::Mode::Normal);
+        assert_eq!(ed.doc.text(), "0");
+    }
+
+    #[test]
+    fn long_lines_layout_only_visible_chunks_and_map_unicode_carets() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap();
+        let settings = Settings::default();
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        let ctx = egui::Context::default();
+        let src = "λ猫🙂e\u{301} ".repeat(10000);
+        let mut ed = EditorView::new(&src, Id::unique("long-unicode"));
+        frame(&ctx, &mut ed, &style, vec![]);
+        assert!(!ed.galleys.contains_key(&0));
+        let layout = &ed.long_lines[&0];
+        assert!(layout.chunks.len() > 20);
+        assert!(layout.chunks.iter().filter(|c| c.galley.is_some()).count() < 8);
+        assert_eq!(layout.chunks.last().unwrap().cols.end, src.chars().count());
+        // Exact cached caret positions are available even in off-screen Unicode chunks.
+        let c = &layout.chunks[layout.chunks.len() / 2];
+        for offset in 1..20 {
+            let col = c.cols.start + offset;
+            if offset % 6 == 4 { continue; } // combining mark shares its cluster's cursor
+            let p = pos2(ed.x_of(0, col), ed.line_y(0) + ed.geom.line_h / 2.0);
+            let actual = ed.pos_at(p);
+            assert!((actual as isize - col as isize).abs() <= 1, "{col} -> {actual}");
+        }
+        let at = ed.doc.buffer.len() - 10;
+        ed.doc.buffer.selections = Selections::single(Selection::caret(at));
+        ed.scroll_to_cursor = true;
+        frame(&ctx, &mut ed, &style, vec![]);
+        let x = ed.x_of(0, at);
+        assert!(x >= ed.geom.text_left && x < 800.0, "caret scrolled into view: {x}");
+        ed.doc.type_text("Z", false);
+        frame(&ctx, &mut ed, &style, vec![]);
+        assert_eq!(ed.doc.buffer.len(), src.chars().count() + 1);
+        assert!(ed.doc.buffer.undo());
+        assert_eq!(ed.doc.text(), src);
+    }
+
+    #[test]
+    #[ignore = "representative performance measurement"]
+    fn long_line_frame_speed() {
+        let themes = crate::theme::ThemeRegistry::load();
+        let theme = themes.get(crate::theme::DEFAULT_THEME).unwrap();
+        let settings = Settings::default();
+        let style = EditorStyle { theme, settings: &settings, font_size: 14.0, mode: EditorMode::Code };
+        let ctx = egui::Context::default();
+        let mut seed = 13u32;
+        let varied: String = (0..350_000).map(|_| {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (b'a' + (seed >> 24) as u8 % 26) as char
+        }).collect();
+        for (name, text) in [("repeated", "a".repeat(350_000)), ("varied", varied)] {
+            let mut ed = EditorView::new(&text, Id::unique("long-bench"));
+            let start = std::time::Instant::now();
+            frame(&ctx, &mut ed, &style, vec![]);
+            eprintln!("350k {name} line first headless frame: {:?}", start.elapsed());
+            let start = std::time::Instant::now();
+            for _ in 0..20 {
+                ed.doc.type_text("a", false);
+                frame(&ctx, &mut ed, &style, vec![]);
+            }
+            eprintln!("350k {name} line typing headless frame: {:?} avg", start.elapsed() / 20);
+            assert!(ed.long_lines[&0].chunks.iter().filter(|c| c.galley.is_some()).count() < 8);
+        }
     }
 
     #[test]

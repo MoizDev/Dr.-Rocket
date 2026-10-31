@@ -17,6 +17,7 @@ pub struct Document {
     edit_log: Vec<(Range<usize>, usize)>,
     /// Outline cached per buffer version (the status bar asks every frame).
     outline_cache: Option<(u64, std::sync::Arc<Vec<OutlineItem>>)>,
+    outline_headers: Vec<Range<usize>>,
     /// Images embedded in the text (DrRacket's pasted images).
     pub images: super::images::ImageStore,
 }
@@ -45,7 +46,7 @@ impl Lines for Buffer {
 
 impl Document {
     pub fn new(text: &str) -> Self {
-        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new(), outline_cache: None, images: Default::default() };
+        let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new(), outline_cache: None, outline_headers: Vec::new(), images: Default::default() };
         d.sync();
         d.buffer.take_changes();
         d
@@ -98,7 +99,22 @@ impl Document {
             self.chars = self.buffer.rope().chars().collect();
         }
         let delta = self.chars.len() as isize - old_len as isize;
-        lexer::relex(std::sync::Arc::make_mut(&mut self.tokens), &self.chars, lo, hi, delta);
+        let same_structure = lexer::relex(std::sync::Arc::make_mut(&mut self.tokens), &self.chars, lo, hi, delta);
+        if same_structure && changes.len() == 1 && self.outline_cache.as_ref().is_some_and(|(v, _)| *v == self.synced_version) {
+            let (range, inserted) = &changes[0];
+            if self.outline_headers.iter().all(|h| range.end < h.start || range.start > h.end)
+                && let Some((v, items)) = &mut self.outline_cache {
+                for item in std::sync::Arc::make_mut(items) {
+                    item.pos = super::buffer::map_pos(item.pos, range, *inserted, true);
+                    item.name_pos = super::buffer::map_pos(item.name_pos, range, *inserted, true);
+                }
+                for h in &mut self.outline_headers {
+                    h.start = super::buffer::map_pos(h.start, range, *inserted, true);
+                    h.end = super::buffer::map_pos(h.end, range, *inserted, true);
+                }
+                *v = self.buffer.version();
+            }
+        }
         self.synced_version = self.buffer.version();
     }
 
@@ -136,17 +152,16 @@ impl Document {
     /// Is `pos` inside a string or comment (where Racket structure editing is disabled)?
     pub fn in_string_or_comment(&mut self, pos: usize) -> bool {
         self.sync();
-        lexer::token_at(&self.tokens, pos).is_some_and(|(_, t)| {
-            t.start < pos
-                && (matches!(t.kind, Kind::String | Kind::StringEscape | Kind::ByteString | Kind::HereString | Kind::Regex | Kind::BlockComment | Kind::LineComment)
-                    || t.kind == Kind::Char)
-        }) || self.line_comment_before(pos)
-    }
-
-    fn line_comment_before(&self, pos: usize) -> bool {
-        // A line comment ending exactly at `pos` (cursor at end of a comment line).
+        let inside = |k| matches!(k, Kind::String | Kind::StringEscape | Kind::ByteString | Kind::HereString | Kind::Regex | Kind::BlockComment | Kind::LineComment | Kind::Char);
+        if lexer::token_at(&self.tokens, pos).is_some_and(|(_, t)| t.start < pos && inside(t.kind)) {
+            return true;
+        }
+        // At a split string boundary the token to the right starts at the caret. The
+        // left piece records whether the lexical unit actually ended, including at EOF.
         let i = lexer::token_index_at(&self.tokens, pos);
-        i > 0 && self.tokens[i - 1].kind == Kind::LineComment && self.tokens[i - 1].end == pos
+        i > 0 && self.tokens[i - 1].end == pos
+            && (self.tokens[i - 1].kind == Kind::LineComment
+                || inside(self.tokens[i - 1].kind) && !self.tokens[i - 1].terminated)
     }
 
     /// Range of the identifier/word at `pos` (for double click, find-selection, rename).
@@ -330,8 +345,7 @@ impl Document {
                     (want.to_string(), 1)
                 }
                 '"' if auto_close && s.is_empty() => {
-                    let in_string_tok = lexer::token_at(&self.tokens, start).is_some_and(|(_, t)| t.start < start && matches!(t.kind, Kind::String | Kind::StringEscape));
-                    if next == Some('"') && (in_string_tok || self.prev_char(start) != Some('\\') && self.string_ends_at(start + 1)) {
+                    if next == Some('"') && self.string_ends_at(start + 1) {
                         edits.push(Replace { range: start..start, text: String::new() });
                         carets.push(((start as isize + shift) as usize) + 1);
                         continue;
@@ -366,8 +380,8 @@ impl Document {
     }
 
     fn string_ends_at(&self, end: usize) -> bool {
-        lexer::token_index_at(&self.tokens, end.saturating_sub(1)) < self.tokens.len()
-            && self.tokens.iter().any(|t| matches!(t.kind, Kind::String) && t.end == end)
+        lexer::token_at(&self.tokens, end.saturating_sub(1))
+            .is_some_and(|(_, t)| t.kind == Kind::String && t.end == end && t.terminated)
     }
 
     /// Paste text (multi-cursor aware: N lines into N cursors distributes them).
@@ -408,7 +422,13 @@ impl Document {
                     // Delete an empty bracket pair or empty string together.
                     let prev = self.buffer.char_at(pos - 1);
                     let next = self.buffer.char_at(pos);
-                    let pair = matches!((prev, next), (Some('('), Some(')')) | (Some('['), Some(']')) | (Some('{'), Some('}')) | (Some('"'), Some('"')));
+                    let adjacent = matches!((prev, next), (Some('('), Some(')')) | (Some('['), Some(']')) | (Some('{'), Some('}')) | (Some('"'), Some('"')));
+                    let pair = adjacent && lexer::token_at(&self.tokens, pos - 1).is_some_and(|(i, t)| {
+                        (t.kind == Kind::Open && t.start == pos - 1 && t.end == pos
+                            && t.partner == Some((i + 1) as u32)
+                            && self.tokens.get(i + 1).is_some_and(|c| c.start == pos && c.end == pos + 1 && !c.mismatched))
+                            || (t.kind == Kind::String && t.start == pos - 1 && t.end == pos + 1 && t.terminated)
+                    });
                     if pair {
                         edits.push(Replace { range: pos - 1..pos + 1, text: String::new() });
                         continue;
@@ -520,50 +540,77 @@ impl Document {
         sexp::indent_for(&self.tokens, &self.chars, &self.buffer, ls)
     }
 
+    fn indent_one_line(&mut self, line: usize, merge: bool) {
+        if !merge { self.buffer.break_undo_group(); }
+        if line >= self.buffer.line_count() { return; }
+        let Some(mut want) = self.desired_indent(line) else { return };
+        let have = self.buffer.indentation(line);
+        let ls = self.buffer.line_start(line);
+        if self.buffer.line_len(line) == have && !self.buffer.selections.list.iter().any(|s| self.buffer.line_of(s.head) == line) { want = 0; }
+        if have == want && self.chars[ls..ls + have].iter().all(|&c| c == ' ') { return; }
+        let mut after = self.buffer.selections.clone();
+        for sel in &mut after.list {
+            let fix = |p| {
+                if p < ls { p } else if p <= ls + have { ls + want } else { p - have + want }
+            };
+            *sel = Selection::new(fix(sel.anchor), fix(sel.head));
+        }
+        if !merge { self.buffer.begin_group(); }
+        self.buffer.apply(vec![Replace { range: ls..ls + have, text: " ".repeat(want) }], Some(after), EditKind::Other);
+        if !merge { self.buffer.end_group(); }
+        self.sync();
+    }
+
     /// Reindent the given lines (sequentially, since each line's indent depends on the ones
     /// before it). `merge` folds the edit into the current undo step.
     pub fn indent_lines(&mut self, lines: &[usize], merge: bool) {
         let mut lines = lines.to_vec();
         lines.sort_unstable();
         lines.dedup();
-        if !merge {
-            self.buffer.begin_group();
-        }
-        for line in lines {
-            let Some(want) = self.desired_indent(line) else { continue };
-            let have = self.buffer.indentation(line);
-            let ls = self.buffer.line_start(line);
-            let line_blank = self.buffer.line_len(line) == have;
-            // Blank lines are left empty (no trailing spaces), except the one being typed on.
-            let want = if line_blank && !self.buffer.selections.list.iter().any(|s| self.buffer.line_of(s.head) == line) {
-                0
-            } else {
-                want
+        if lines.len() == 1 { self.indent_one_line(lines[0], merge); return; }
+        self.sync();
+        // Whitespace edits cannot alter token structure here: protected multi-line units
+        // are skipped. Compute in original coordinates, overlaying the indentation of
+        // each earlier line, then apply the replacements as one atomic transaction.
+        let starts: Vec<usize> = (0..self.buffer.line_count()).map(|l| self.buffer.line_start(l)).collect();
+        let mut indents: Vec<Option<usize>> = vec![None; starts.len()];
+        let mut index = sexp::IndentIndex::new(&self.tokens);
+        let mut edits = Vec::new();
+        let mut after = self.buffer.selections.clone();
+        let mut shift = 0isize;
+        for line in lines.into_iter().filter(|&l| l < starts.len()) {
+            let ls = starts[line];
+            let column = |p: usize| {
+                let l = self.buffer.line_of(p);
+                let first = starts[l];
+                if let Some(want) = indents[l] {
+                    let have = self.buffer.indentation(l);
+                    if p >= first + have { return self.chars[first + have..p].iter().fold(want, |col, &c| if c == '\t' { col + 8 - col % 8 } else { col + 1 }); }
+                }
+                self.chars[first..p].iter().fold(0, |col, &c| if c == '\t' { col + 8 - col % 8 } else { col + 1 })
             };
-            let current: String = self.buffer.slice(ls..ls + have);
-            if current.chars().all(|c| c == ' ') && have == want {
-                continue;
-            }
-            let sels = self.buffer.selections.clone();
-            let mut after = sels.clone();
-            for s in after.list.iter_mut() {
+            let Some(mut want) = index.indent(&self.tokens, &self.chars, &self.buffer, ls, &column) else { continue };
+            let have = self.buffer.indentation(line);
+            let blank = self.buffer.line_len(line) == have;
+            if blank && !self.buffer.selections.list.iter().any(|s| self.buffer.line_of(s.head) == line) { want = 0; }
+            if have == want && self.chars[ls..ls + have].iter().all(|&c| c == ' ') { continue; }
+            indents[line] = Some(want);
+            let new_start = (ls as isize + shift) as usize;
+            for sel in &mut after.list {
                 let fix = |p: usize| {
-                    if p < ls {
-                        p
-                    } else if p <= ls + have {
-                        ls + want
-                    } else {
-                        p + want - have
-                    }
+                    if p < new_start { p }
+                    else if p <= new_start + have { new_start + want }
+                    else { p - have + want }
                 };
-                *s = Selection::new(fix(s.anchor), fix(s.head));
+                *sel = Selection::new(fix(sel.anchor), fix(sel.head));
             }
-            self.buffer.apply(vec![Replace { range: ls..ls + have, text: " ".repeat(want) }], Some(after), EditKind::Other);
-            self.sync();
+            shift += want as isize - have as isize;
+            edits.push(Replace { range: ls..ls + have, text: " ".repeat(want) });
         }
-        if !merge {
-            self.buffer.end_group();
-        }
+        if !merge { self.buffer.begin_group(); }
+        self.buffer.apply(edits, Some(after), EditKind::Other);
+        if !merge { self.buffer.end_group(); }
+        self.sync();
     }
 
     /// DrRacket's Tab: reindent the lines touched by the selections.
@@ -641,7 +688,10 @@ impl Document {
         let s = self.buffer.selections.primary();
         if let Some((_, t)) = lexer::token_at(&self.tokens, s.start()).filter(|(_, t)| t.kind == Kind::BlockComment) {
             let (a, b) = (t.start, t.end);
-            let edits = vec![Replace { range: a..a + 2, text: String::new() }, Replace { range: b - 2..b, text: String::new() }];
+            let mut edits = vec![Replace { range: a..a + 2, text: String::new() }];
+            if t.terminated {
+                edits.push(Replace { range: b - 2..b, text: String::new() });
+            }
             self.buffer.apply(edits, None, EditKind::Other);
         } else if !s.is_empty() {
             let edits = vec![Replace { range: s.start()..s.start(), text: "#|".into() }, Replace { range: s.end()..s.end(), text: "|#".into() }];
@@ -861,21 +911,28 @@ impl Document {
     fn compute_outline(&mut self) -> Vec<OutlineItem> {
         let toks = &self.tokens;
         let mut out = Vec::new();
+        let mut headers = Vec::new();
         let mut i = 0;
         while i < toks.len() {
             let t = toks[i];
             if t.kind == Kind::Open && t.depth == 0 {
-                self.outline_form(i, &mut out, 0);
+                self.outline_form(i, &mut out, &mut headers, 0);
                 i = t.partner.map(|p| p as usize + 1).unwrap_or(i + 1);
             } else {
                 i += 1;
             }
         }
+        self.outline_headers = headers;
         out
     }
 
-    fn outline_form(&self, open: usize, out: &mut Vec<OutlineItem>, level: usize) {
+    fn outline_form(&self, open: usize, out: &mut Vec<OutlineItem>, headers: &mut Vec<Range<usize>>, level: usize) {
         let toks = &self.tokens;
+        // All inspected head/name text is a dependency, including non-definitions and
+        // incomplete forms that could become definitions after a later edit.
+        let end = (open + 1..toks.len()).filter(|&k| !toks[k].is_trivia()).take(3).last()
+            .map_or(self.chars.len(), |k| toks[k].end);
+        headers.push(toks[open].start..end);
         let text = |t: &Token| -> String { self.chars[t.start..t.end].iter().collect() };
         let head_i = (open + 1..toks.len()).find(|&k| !toks[k].is_trivia());
         let Some(hi) = head_i else { return };
@@ -902,6 +959,7 @@ impl Document {
         let Some(nt) = name_tok.and_then(|k| toks.get(k)) else { return };
         let mut name = if kind == OutlineKind::Test {
             let close = toks[open].partner.map(|p| toks[p as usize].end).unwrap_or(toks[open].end);
+            headers.push(toks[open].start..close);
             let s: String = self.chars[toks[open].start..close].iter().collect();
             let one_line: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
             if one_line.chars().count() > 48 { format!("{}…", one_line.chars().take(47).collect::<String>()) } else { one_line }
@@ -918,7 +976,7 @@ impl Document {
                 let mut k = hi + 1;
                 while k < close as usize {
                     if toks[k].kind == Kind::Open && toks[k].depth == toks[open].depth + 1 {
-                        self.outline_form(k, out, level + 1);
+                        self.outline_form(k, out, headers, level + 1);
                         k = toks[k].partner.map(|p| p as usize + 1).unwrap_or(k + 1);
                     } else {
                         k += 1;
@@ -978,6 +1036,141 @@ mod tests {
         let mut d = Document::new(text);
         d.buffer.selections = Selections::single(Selection::caret(caret));
         d
+    }
+
+    #[test]
+    fn escaped_quotes_and_character_literals_are_not_empty_pairs() {
+        for (before, after) in [(r#"(f "a\"")"#, r#"(f "a\")"#), (r#"#\()"#, r#"#\)"#), (r#""()""#, r#"")""#)] {
+            let mut d = Document::new(before);
+            let pos = if before.starts_with("(f") { 7 } else if before.starts_with("#") { 3 } else { 2 };
+            d.buffer.selections = Selections::single(Selection::caret(pos));
+            d.backspace(Motion::Left);
+            assert_eq!(d.text(), after, "{before}");
+            assert!(d.buffer.undo());
+            assert_eq!(d.text(), before);
+        }
+    }
+
+    #[test]
+    fn string_boundaries_and_eof_keep_structure_editing_literal() {
+        let mut d = Document::new(r#"[display "a\n"]"#);
+        d.buffer.selections = Selections::single(Selection::caret(13));
+        assert!(d.in_string_or_comment(13));
+        d.type_text(")", true);
+        assert_eq!(d.text(), r#"[display "a\n)"]"#);
+        let mut d = Document::new(r#""C:\\""#);
+        d.buffer.selections = Selections::single(Selection::caret(5));
+        d.type_text("\"", true);
+        assert_eq!(d.text(), r#""C:\\""#);
+        assert_eq!(d.buffer.selections.primary().head, 6);
+        for src in [r#""abc"#, r#""a\n"#, r#"#"abc"#, "#<<END\nabc", "#|abc", ";abc"] {
+            let mut d = Document::new(src);
+            let end = d.buffer.len();
+            d.buffer.selections = Selections::single(Selection::caret(end));
+            assert!(d.in_string_or_comment(end), "{src}");
+            d.type_text("(", true);
+            assert_eq!(d.text(), format!("{src}("));
+        }
+    }
+
+    #[test]
+    fn unterminated_block_comments_only_remove_existing_delimiters() {
+        for (src, expected) in [("#|", ""), ("#|a", "a"), ("#| abc", " abc"), ("#| x #| y |#", " x #| y |#"), ("#|abc|#", "abc")] {
+            let mut d = Document::new(src);
+            d.buffer.selections = Selections::single(Selection::caret(1));
+            d.toggle_block_comment();
+            assert_eq!(d.text(), expected);
+            assert!(d.buffer.undo());
+            assert_eq!(d.text(), src);
+        }
+    }
+
+    #[test]
+    fn batched_indentation_matches_sequential_edits_and_selections() {
+        for src in ["(begin\n(define (f x)\n(+ x\n1))\n(f 2))", "'(#; (foo x)\nbar\n#|a\nb|#\n\"a\nb\")", "(a [b)\nc]\n(\nfoo\nbar", "(foo\n\t(one two)\n\tthree)"] {
+            let mut batched = Document::new(src);
+            let mut sequential = Document::new(src);
+            let end = batched.buffer.len();
+            let sels = Selections { list: vec![Selection::new(end, 0)], primary: 0 };
+            batched.buffer.selections = sels.clone();
+            sequential.buffer.selections = sels;
+            batched.reindent_all();
+            for l in 0..sequential.buffer.line_count() { sequential.indent_lines(&[l], false); }
+            assert_eq!(batched.text(), sequential.text(), "{src}");
+            assert_eq!(batched.buffer.selections, sequential.buffer.selections);
+            assert!(batched.buffer.undo());
+            assert_eq!(batched.text(), src);
+        }
+    }
+
+    #[test]
+    fn outline_cache_tracks_body_edits_but_recomputes_changed_headers() {
+        let mut d = Document::new("(define (f x)\n  (+ x 1))\n(define y 2)");
+        d.outline();
+        for (at, text) in [(21, "\n"), (1, "x"), (10, "z")] {
+            d.buffer.selections = Selections::single(Selection::caret(at));
+            d.type_text(text, false);
+            let actual = d.outline();
+            let mut fresh = Document::new(&d.text());
+            assert_eq!(format!("{actual:?}"), format!("{:?}", fresh.outline()));
+        }
+    }
+
+    #[test]
+    fn outline_test_labels_track_the_entire_form() {
+        let mut d = Document::new("(check-expect (f x) 123)");
+        d.outline();
+        let at = d.buffer.len() - 2;
+        d.buffer.apply(vec![Replace { range: at..at + 1, text: "4".into() }], None, EditKind::Other);
+        assert_eq!(format!("{:?}", d.outline()), format!("{:?}", Document::new(&d.text()).outline()));
+    }
+
+    #[test]
+    fn outline_does_not_revalidate_a_stale_snapshot_after_unobserved_edits() {
+        let mut d = Document::new("(foo x)\n(define y 2)");
+        d.outline();
+        d.buffer.apply(vec![Replace { range: 1..4, text: "define".into() }], None, EditKind::Other);
+        d.sync();
+        d.buffer.apply(vec![Replace { range: 9..9, text: " ".into() }], None, EditKind::Other);
+        let actual = d.outline();
+        assert_eq!(format!("{actual:?}"), format!("{:?}", Document::new(&d.text()).outline()));
+    }
+
+    #[test]
+    #[ignore = "representative performance measurement"]
+    fn enter_near_top_of_large_file_speed() {
+        for unmatched in [false, true] {
+            let src = format!("{}{}", if unmatched { "(\n" } else { "" }, "(define (f x)\n  (+ x\n     1))\n".repeat(6667));
+            let mut d = Document::new(&src);
+            let at = src.find("(+").unwrap() + 3;
+            d.buffer.selections = Selections::single(Selection::caret(at));
+            d.outline();
+            let start = std::time::Instant::now();
+            for _ in 0..50 {
+                d.newline(true);
+                d.sync();
+                d.outline();
+                assert!(d.buffer.undo());
+                d.sync();
+                d.outline();
+            }
+            eprintln!("Enter/indent/outline/undo near top ~20k lines (unmatched={unmatched}): {:?} avg", start.elapsed() / 50);
+            assert_eq!(d.text(), src);
+            assert_eq!(d.tokens_cached(), lexer::lex_chars(d.chars()));
+        }
+    }
+
+    #[test]
+    #[ignore = "representative performance measurement"]
+    fn reindent_large_file_speed() {
+        let src = "(define (f x)\n(+ x\n1))\n".repeat(6667);
+        let mut d = Document::new(&src);
+        let start = std::time::Instant::now();
+        d.reindent_all();
+        eprintln!("reindent ~20k flush-left lines: {:?}", start.elapsed());
+        assert!(d.text().starts_with("(define (f x)\n  (+ x\n     1))"));
+        assert!(d.buffer.undo());
+        assert_eq!(d.text(), src);
     }
 
     #[test]

@@ -75,11 +75,15 @@ pub struct Token {
     pub partner: Option<u32>,
     /// For Open/Close: whether the pair is mismatched (`(` closed by `]`).
     pub mismatched: bool,
+    /// Whether this token ends its lexical unit (false inside/at EOF of an open string/comment).
+    pub terminated: bool,
+    /// Exact equivalence class of the source text read by syntax classification.
+    classification_key: u32,
 }
 
 impl Token {
     fn new(start: usize, end: usize, kind: Kind) -> Self {
-        Token { start, end, kind, class: Class::Plain, depth: 0, partner: None, mismatched: false }
+        Token { start, end, kind, class: Class::Plain, depth: 0, partner: None, mismatched: false, terminated: true, classification_key: 0 }
     }
     pub fn is_open(&self) -> bool {
         self.kind == Kind::Open
@@ -161,7 +165,7 @@ impl<'a> Lexer<'a> {
             }
             if c == '\\' && kind == Kind::String {
                 if self.i > seg {
-                    self.out.push(Token::new(seg, self.i, kind));
+                    self.out.push(Token { terminated: false, ..Token::new(seg, self.i, kind) });
                 }
                 let esc_start = self.i;
                 self.i += 1;
@@ -193,7 +197,7 @@ impl<'a> Lexer<'a> {
                     Some(_) => self.i += 1,
                     None => {}
                 }
-                self.out.push(Token::new(esc_start, self.i, Kind::StringEscape));
+                self.out.push(Token { terminated: false, ..Token::new(esc_start, self.i, Kind::StringEscape) });
                 seg = self.i;
                 continue;
             }
@@ -206,7 +210,7 @@ impl<'a> Lexer<'a> {
         // Unterminated string runs to EOF.
         self.i = self.s.len();
         if self.i > seg {
-            self.out.push(Token::new(seg, self.i, kind));
+            self.out.push(Token { terminated: false, ..Token::new(seg, self.i, kind) });
         }
     }
 
@@ -228,6 +232,7 @@ impl<'a> Lexer<'a> {
             }
         }
         self.push(start, Kind::BlockComment);
+        self.out.last_mut().unwrap().terminated = depth == 0;
     }
 
     fn line_rest(&mut self) {
@@ -245,6 +250,7 @@ impl<'a> Lexer<'a> {
         let term_start = self.i;
         self.line_rest();
         let term: String = self.s[term_start..self.i].iter().collect();
+        let mut terminated = false;
         loop {
             if self.i >= self.s.len() {
                 break;
@@ -254,10 +260,12 @@ impl<'a> Lexer<'a> {
             self.line_rest();
             let line: String = self.s[ls..self.i].iter().collect();
             if line == term {
+                terminated = true;
                 break;
             }
         }
         self.push(start, Kind::HereString);
+        self.out.last_mut().unwrap().terminated = terminated;
     }
 
     fn hash(&mut self, start: usize) {
@@ -514,8 +522,26 @@ pub fn lex(text: &str) -> Vec<Token> {
 
 pub fn lex_chars(chars: &[char]) -> Vec<Token> {
     let mut toks = Lexer { s: chars, i: 0, out: Vec::with_capacity(chars.len() / 4) }.run();
+    classification_keys(&mut toks, chars);
     classify(&mut toks, chars);
     toks
+}
+
+// This is deliberately an equivalence key, not a text hash: collisions cannot make
+// an incremental result silently retain stale quote/comment/semantic classification.
+fn classification_keys(toks: &mut [Token], chars: &[char]) {
+    for t in toks {
+        let text = &chars[t.start..t.end];
+        t.classification_key = match t.kind {
+            Kind::Open => *text.last().unwrap_or(&' ') as u32,
+            Kind::Close => text[0] as u32,
+            Kind::Quote => match text { ['\''] => 1, ['`'] => 2, [','] => 3, _ => 4 },
+            Kind::Symbol if text == ['q', 'u', 'o', 't', 'e'] => 5,
+            Kind::Symbol if is_operator_chars(text) => 6,
+            Kind::Symbol if KEYWORDS.binary_search_by(|k| k.chars().cmp(text.iter().copied())).is_ok() => 7,
+            _ => 0,
+        };
+    }
 }
 
 fn is_operator_chars(s: &[char]) -> bool {
@@ -733,11 +759,12 @@ fn outermost_open(toks: &[Token], pos: usize) -> Option<usize> {
 /// Incrementally update `toks` (lexed from the previous text) to match `chars`, given that
 /// every change lies within `lo..hi` of the new text and the length changed by `delta`.
 /// Produces exactly the same tokens as a full `lex_chars`, re-lexing only the edited region
-/// and reclassifying only the affected top-level forms.
-pub fn relex(toks: &mut Vec<Token>, chars: &[char], lo: usize, hi: usize, delta: isize) {
+/// and reclassifying only the affected top-level forms. Returns true when every input
+/// to classification is equivalent and the complete old structural result was retained.
+pub fn relex(toks: &mut Vec<Token>, chars: &[char], lo: usize, hi: usize, delta: isize) -> bool {
     if toks.is_empty() {
         *toks = lex_chars(chars);
-        return;
+        return false;
     }
     // Restart one token before the first token touching the edit, at a unit start.
     let mut i0 = toks.partition_point(|t| t.end < lo).saturating_sub(1);
@@ -745,20 +772,6 @@ pub fn relex(toks: &mut Vec<Token>, chars: &[char], lo: usize, hi: usize, delta:
         i0 -= 1;
     }
     let restart = toks.get(i0).map(|t| t.start.min(lo)).unwrap_or(lo).min(chars.len());
-
-    // Top-level boundary for reclassification, using the old (valid) structure.
-    let mut c0 = outermost_open(toks, restart.min(toks[i0].start)).unwrap_or(i0).min(i0);
-    loop {
-        let mut k = c0;
-        while k > 0 && toks[k - 1].is_trivia() {
-            k -= 1;
-        }
-        if k > 0 && is_prefix(&toks[k - 1]) {
-            c0 = k - 1;
-        } else {
-            break;
-        }
-    }
 
     // Old tokens at/after the edited region, in old coordinates.
     let hi_old = hi as isize - delta;
@@ -779,6 +792,7 @@ pub fn relex(toks: &mut Vec<Token>, chars: &[char], lo: usize, hi: usize, delta:
                 && ot.start as isize + delta == nt.start as isize
                 && ot.end as isize + delta == nt.end as isize
                 && ot.kind == nt.kind
+                && ot.terminated == nt.terminated
                 && is_unit_start(toks, j)
             {
                 lx.out.truncate(before);
@@ -787,19 +801,50 @@ pub fn relex(toks: &mut Vec<Token>, chars: &[char], lo: usize, hi: usize, delta:
             }
         }
     }
-    let new = lx.out;
+    let mut new = lx.out;
+    classification_keys(&mut new, chars);
     let new_len = new.len();
     let tail_from = resync.unwrap_or(toks.len());
     let idx_delta = (i0 + new_len) as isize - tail_from as isize;
-    toks.splice(i0..tail_from, new);
-    for t in toks.iter_mut().skip(i0 + new_len) {
-        t.start = (t.start as isize + delta) as usize;
-        t.end = (t.end as isize + delta) as usize;
-        if let Some(p) = t.partner {
-            t.partner = Some((p as isize + idx_delta) as u32);
+    let same_structure = new_len == tail_from - i0 && new.iter().zip(&toks[i0..tail_from]).all(|(n, o)| {
+        n.kind == o.kind && n.terminated == o.terminated && n.classification_key == o.classification_key
+    });
+    if same_structure {
+        for (n, o) in new.iter_mut().zip(&toks[i0..tail_from]) {
+            n.class = o.class;
+            n.depth = o.depth;
+            n.partner = o.partner;
+            n.mismatched = o.mismatched;
         }
     }
-    classify_range(toks, chars, c0, i0 + new_len);
+    let c0 = if same_structure { 0 } else {
+        let mut c0 = outermost_open(toks, restart.min(toks[i0].start)).unwrap_or(i0).min(i0);
+        loop {
+            let mut k = c0;
+            while k > 0 && toks[k - 1].is_trivia() {
+                k -= 1;
+            }
+            if k > 0 && is_prefix(&toks[k - 1]) {
+                c0 = k - 1;
+            } else {
+                break;
+            }
+        }
+
+        c0
+    };
+    toks.splice(i0..tail_from, new);
+    if delta != 0 || idx_delta != 0 {
+        for t in toks.iter_mut().skip(i0 + new_len) {
+            t.start = (t.start as isize + delta) as usize;
+            t.end = (t.end as isize + delta) as usize;
+            if let Some(p) = t.partner {
+                t.partner = Some((p as isize + idx_delta) as u32);
+            }
+        }
+    }
+    if !same_structure { classify_range(toks, chars, c0, i0 + new_len); }
+    same_structure
 }
 
 /// Index one past the end of the datum starting at the first significant token at/after `i`.

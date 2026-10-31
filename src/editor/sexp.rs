@@ -277,17 +277,17 @@ fn visual_col(text: &[char], pos: usize) -> usize {
     text[start..pos].iter().fold(0, |col, &c| if c == '\t' { col + 8 - col % 8 } else { col + 1 })
 }
 
+fn protected_line(toks: &[Token], i: usize, start: usize) -> bool {
+    let protected = |k| matches!(k, Kind::String | Kind::StringEscape | Kind::BlockComment | Kind::HereString | Kind::ByteString | Kind::Regex);
+    toks.get(i).is_some_and(|t| t.start < start && protected(t.kind))
+        || i > 0 && toks[i - 1].end == start && protected(toks[i - 1].kind) && !toks[i - 1].terminated
+}
+
 /// Desired indentation (in columns) for the line starting at `line_start`, or None if the
 /// line is inside a multi-line string or block comment and must be left alone.
 pub fn indent_for(toks: &[Token], text: &[char], lines: &impl Lines, line_start: usize) -> Option<usize> {
-    use HeadType::*;
     let i = token_index_at(toks, line_start);
-    if let Some(t) = toks.get(i)
-        && t.start < line_start
-        && matches!(t.kind, Kind::String | Kind::StringEscape | Kind::BlockComment | Kind::HereString | Kind::ByteString | Kind::Regex)
-    {
-        return None;
-    }
+    if protected_line(toks, i, line_start) { return None; }
     let Some(o) = enclosing_open(toks, line_start) else { return Some(0) };
 
     // The list's elements that start before this line.
@@ -303,13 +303,66 @@ pub fn indent_for(toks: &[Token], text: &[char], lines: &impl Lines, line_start:
             _ => break,
         }
     }
+    indent_from_children(toks, text, lines, i, o, &kids, &|p| visual_col(text, p))
+}
+
+/// Structural work shared by an entire sequential indentation pass. Token positions
+/// remain in original coordinates; the caller supplies the already updated columns.
+pub struct IndentIndex {
+    parents: Vec<Option<usize>>,
+    children: std::collections::HashMap<usize, Vec<usize>>,
+}
+
+impl IndentIndex {
+    pub fn new(toks: &[Token]) -> Self {
+        let mut stack = Vec::new();
+        let mut parents = Vec::with_capacity(toks.len() + 1);
+        for (i, t) in toks.iter().enumerate() {
+            parents.push(stack.last().copied());
+            match t.kind {
+                Kind::Open => stack.push(i),
+                Kind::Close if t.partner.is_some() => { stack.pop(); }
+                _ => {}
+            }
+        }
+        parents.push(stack.last().copied());
+        Self { parents, children: Default::default() }
+    }
+
+    pub fn indent(&mut self, toks: &[Token], text: &[char], lines: &impl Lines, start: usize, column: &impl Fn(usize) -> usize) -> Option<usize> {
+        let i = token_index_at(toks, start);
+        if protected_line(toks, i, start) { return None; }
+        let Some(o) = self.parents[i] else { return Some(0) };
+        let kids = self.children.entry(o).or_insert_with(|| {
+            let mut kids = Vec::new();
+            let mut k = o + 1;
+            loop {
+                k = skip_trivia(toks, k);
+                match toks.get(k) {
+                    Some(t) if t.kind != Kind::Close => {
+                        kids.push(k);
+                        k = datum_end(toks, k).unwrap_or(k + 1);
+                    }
+                    _ => break,
+                }
+            }
+            kids
+        });
+        let end = kids.partition_point(|&k| toks[k].start < start);
+        indent_from_children(toks, text, lines, i, o, &kids[..end], column)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn indent_from_children(toks: &[Token], text: &[char], lines: &impl Lines, i: usize, o: usize, kids: &[usize], column: &impl Fn(usize) -> usize) -> Option<usize> {
+    use HeadType::*;
     // Nothing before this line: just inside the bracket.
     let (Some(&first), Some(&last)) = (kids.first(), kids.last()) else {
-        return Some(visual_col(text, toks[o].start) + 1);
+        return Some(column(toks[o].start) + 1);
     };
     let head = &toks[first];
     let contains = head.start;
-    let col = visual_col(text, contains);
+    let col = column(contains);
     let token_text = |t: &Token| text[t.start..t.end].iter().collect::<String>();
     let head_type = if head.kind == Kind::Symbol { head_type(&token_text(head)) } else { None };
 
@@ -322,7 +375,7 @@ pub fn indent_for(toks: &[Token], text: &[char], lines: &impl Lines, line_start:
         });
     }
     if head_type == Some(ForFold) && kids.len() == 2 {
-        return Some(visual_col(text, toks[last].start));
+        return Some(column(toks[last].start));
     }
     if matches!(head_type, Some(Define | Lambda | ForFold)) {
         return Some(col + 1);
@@ -348,12 +401,12 @@ pub fn indent_for(toks: &[Token], text: &[char], lines: &impl Lines, line_start:
         }
         let head_end = toks[datum_end(toks, first).unwrap_or(first + 1) - 1].end;
         let arg = (head_end..text.len()).find(|&p| text[p] == '\n' || !text[p].is_whitespace()).unwrap_or(text.len());
-        return Some(visual_col(text, arg));
+        return Some(column(arg));
     }
     // Align with the first element on the line of the last one.
     let last_line = lines.line_of(toks[last].start);
     let row_start = kids.iter().rev().take_while(|&&k| lines.line_of(toks[k].start) == last_line).last().unwrap_or(&last);
-    Some(visual_col(text, toks[*row_start].start))
+    Some(column(toks[*row_start].start))
 }
 
 #[cfg(test)]

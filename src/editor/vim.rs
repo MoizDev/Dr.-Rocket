@@ -29,6 +29,19 @@ pub enum Mode {
 }
 
 
+// Counts bound loops as well as allocations. Replays share a key budget, including
+// recursive macros, and repeated insertion has a separate byte budget.
+const MAX_COUNT: usize = 100_000;
+const MAX_REPLAY_KEYS: usize = 100_000;
+const MAX_EXPANSION_BYTES: usize = 8 * 1024 * 1024;
+
+struct Replay {
+    keys: Vec<char>,
+    index: usize,
+    times: usize,
+    visual: Option<(usize, usize, bool)>,
+}
+
 pub const ESC: char = '\x1b';
 pub const ENTER: char = '\r';
 pub const BACKSPACE: char = '\x08';
@@ -273,6 +286,11 @@ pub struct Vim {
     recording: Option<(char, Vec<char>)>,
     last_macro: Option<char>,
     replaying: usize,
+    replay_queue: Vec<Replay>,
+    motion_failed: bool,
+    expansion_left: usize,
+    /// Recreate the visual extent before replaying the last visual operator.
+    dot_visual: Option<(usize, usize, bool)>,
     /// Visual mode: the fixed end and the cursor.
     anchor: usize,
     cursor: usize,
@@ -306,6 +324,10 @@ impl Default for Vim {
             recording: None,
             last_macro: None,
             replaying: 0,
+            replay_queue: Vec::new(),
+            motion_failed: false,
+            expansion_left: MAX_EXPANSION_BYTES,
+            dot_visual: None,
             anchor: 0,
             cursor: 0,
             last_visual: None,
@@ -480,18 +502,34 @@ impl Vim {
                     self.message = None;
                     return fx;
                 }
+                if self.keys.len() >= 128 {
+                    self.keys.clear();
+                    self.message = Some("Command count is too long".into());
+                    self.motion_failed = true;
+                    return fx;
+                }
                 self.keys.push(k);
                 match self.parse() {
                     Parse::Incomplete => {}
                     Parse::Invalid => {
                         self.keys.clear();
+                        self.motion_failed = true;
                         self.end_one_shot();
                     }
                     Parse::Done(cmd) => {
                         let keys = std::mem::take(&mut self.keys);
                         self.message = None;
                         doc.buffer.begin_group();
+                        let visual = matches!(self.mode, Mode::Visual | Mode::VisualLine).then(|| {
+                            let (a, b) = self.visual_range(doc);
+                            let first = line_of(doc, a);
+                            let last = line_of(doc, b.saturating_sub(1));
+                            (last - first, if first == last { b - a } else { doc.buffer.col_of(b.saturating_sub(1)) + 1 }, self.mode == Mode::VisualLine)
+                        });
                         let changed = self.run(doc, view, cmd, &mut fx);
+                        if self.replaying == 0 && (changed || matches!(self.mode, Mode::Insert | Mode::Replace)) {
+                            self.dot_visual = visual;
+                        }
                         // A change that went into insert mode is recorded until Escape.
                         if matches!(self.mode, Mode::Insert | Mode::Replace) {
                             self.insert_group = true;
@@ -657,7 +695,7 @@ impl Vim {
             while *i < k.len() && (k[*i].is_ascii_digit() && (k[*i] != '0' || *i > s)) {
                 *i += 1;
             }
-            (*i > s).then(|| k[s..*i].iter().collect::<String>().parse().ok()).flatten()
+            (*i > s).then(|| k[s..*i].iter().fold(0usize, |n, c| n.saturating_mul(10).saturating_add(*c as usize - '0' as usize).min(MAX_COUNT)))
         };
         let count = count_at(&mut i);
         let Some(&c) = k.get(i) else { return Parse::Incomplete };
@@ -675,7 +713,7 @@ impl Vim {
         }
         let done = |op: Option<Op>, action: Action, count2: Option<usize>| {
             let count = match (count, count2) {
-                (Some(a), Some(b)) => Some(a * b),
+                (Some(a), Some(b)) => Some(a.saturating_mul(b).min(MAX_COUNT)),
                 (a, b) => a.or(b),
             };
             Parse::Done(Cmd { reg, count, op, action })
@@ -769,7 +807,7 @@ impl Vim {
                     let to = if span == Span::Linewise && matches!(*m, 'G' | 'g' | 'H' | 'M' | 'L' | '\'' | '+' | '-' | '_' | ENTER) { first_non_blank(doc, line_of(doc, to)) } else { to };
                     doc.buffer.selections = Selections::single(Selection::caret(to));
                     doc.buffer.break_undo_group();
-                }
+                } else { self.motion_failed = true; }
                 false
             }
             (Some(op), Action::Lines) => {
@@ -779,13 +817,19 @@ impl Vim {
                 op != Op::Yank
             }
             (Some(op), Action::Motion(m, arg)) => {
-                let Some((mut to, mut span)) = self.motion(doc, view, pos, *m, *arg, cmd.count, true, fx) else { return false };
+                let Some((mut to, mut span)) = self.motion(doc, view, pos, *m, *arg, cmd.count, true, fx) else { self.motion_failed = true; return false };
                 // `cw` changes to the end of the word, like `ce`; `dw` stops at the line's end.
                 if op == Op::Change && matches!(m, 'w' | 'W') && doc.buffer.char_at(pos).is_some_and(|c| !c.is_whitespace()) {
-                    if let Some((e, _)) = self.motion(doc, view, pos, if *m == 'w' { 'e' } else { 'E' }, None, cmd.count, true, fx) {
-                        to = e;
-                        span = Span::Inclusive;
+                    // Unlike `e`, `cw` may end on the character already under the cursor.
+                    let chars = doc.chars();
+                    let mut e = pos;
+                    for step in 0..count {
+                        if step > 0 { e = word_start_next(chars, e, *m == 'W'); }
+                        let cl = class(chars.get(e).copied().unwrap_or(' '), *m == 'W');
+                        while e + 1 < chars.len() && !chars[e + 1].is_whitespace() && class(chars[e + 1], *m == 'W') == cl { e += 1; }
                     }
+                    to = e;
+                    span = Span::Inclusive;
                 } else if matches!(m, 'w' | 'W') && line_of(doc, to) > line_of(doc, pos) {
                     let l = line_of(doc, to);
                     let lend = line_end(doc, line_of(doc, pos));
@@ -797,7 +841,7 @@ impl Vim {
                 op != Op::Yank
             }
             (Some(op), Action::Object(inner, obj)) => {
-                let Some((a, b, linewise)) = self.object(doc, pos, *inner, *obj, count) else { return false };
+                let Some((a, b, linewise)) = self.object(doc, pos, *inner, *obj, count) else { self.motion_failed = true; return false };
                 if linewise {
                     self.apply_op(doc, op, a, b.saturating_sub(1), Span::Linewise, cmd.reg, fx);
                 } else {
@@ -953,7 +997,18 @@ impl Vim {
 
     fn put(&mut self, doc: &mut Document, view: &View, before: bool, count: usize, reg: Option<char>) {
         let Some(r) = self.fetch(reg, view) else { return };
-        let text = r.text.repeat(count);
+        let Some(bytes) = r.text.len().checked_mul(count).filter(|&n| n <= self.expansion_left) else {
+            self.message = Some("Repeated insertion exceeds the 8 MiB command limit".into());
+            self.motion_failed = true;
+            return;
+        };
+        let mut text = String::new();
+        if text.try_reserve(bytes).is_err() {
+            self.message = Some("Unable to allocate repeated insertion".into());
+            self.motion_failed = true;
+            return;
+        }
+        for _ in 0..count { text.push_str(&r.text); }
         let pos = doc.buffer.selections.primary().head;
         if r.linewise {
             let line = line_of(doc, pos);
@@ -992,6 +1047,7 @@ impl Vim {
                 if e > pos {
                     self.apply_op(doc, Op::Delete, pos, e, Span::Exclusive, reg, fx);
                 }
+                self.motion_failed |= e == pos;
                 e > pos
             }
             ('X', None) => {
@@ -1000,6 +1056,7 @@ impl Vim {
                 if s < pos {
                     self.apply_op(doc, Op::Delete, s, pos, Span::Exclusive, reg, fx);
                 }
+                self.motion_failed |= s == pos;
                 s < pos
             }
             ('D', None) | ('C', None) => {
@@ -1026,6 +1083,7 @@ impl Vim {
             }
             ('r', Some(c)) => {
                 if pos + count > lend {
+                    self.motion_failed = true;
                     return false;
                 }
                 let text = if c == ENTER { "\n".to_string() } else { c.to_string().repeat(count) };
@@ -1039,6 +1097,7 @@ impl Vim {
                     self.apply_op(doc, Op::Toggle, pos, e, Span::Exclusive, reg, fx);
                     caret(doc, e.min(lend.saturating_sub(1)).max(pos));
                 }
+                self.motion_failed |= e == pos;
                 e > pos
             }
             ('J', None) | ('g', Some('J')) => {
@@ -1048,6 +1107,7 @@ impl Vim {
                 for _ in 0..joins {
                     let l = line_of(doc, doc.buffer.selections.primary().head);
                     if l >= last_line(doc) {
+                        self.motion_failed = true;
                         break;
                     }
                     let e = line_end(doc, l);
@@ -1079,6 +1139,7 @@ impl Vim {
                 for _ in 0..count {
                     if !doc.buffer.undo() {
                         self.message = Some("Already at oldest change".into());
+                        self.motion_failed = true;
                         break;
                     }
                 }
@@ -1089,6 +1150,7 @@ impl Vim {
                 for _ in 0..count {
                     if !doc.buffer.redo() {
                         self.message = Some("Already at newest change".into());
+                        self.motion_failed = true;
                         break;
                     }
                 }
@@ -1145,7 +1207,7 @@ impl Vim {
                     return false;
                 }
                 let times = if raw_count.is_some() { count } else { 1 };
-                self.replay(doc, view, &keys, times, fx);
+                self.replay(doc, view, &keys, times, self.dot_visual, fx);
                 false
             }
             ('m', Some(c)) => {
@@ -1169,7 +1231,7 @@ impl Vim {
                 self.last_macro = Some(r);
                 if let Some(m) = self.regs.get(&r).cloned() {
                     let keys: Vec<char> = m.text.chars().collect();
-                    self.replay(doc, view, &keys, count, fx);
+                    self.replay(doc, view, &keys, count, None, fx);
                 }
                 false
             }
@@ -1267,23 +1329,50 @@ impl Vim {
             e += 1;
         }
         let Ok(n) = text[s..e].iter().collect::<String>().parse::<i64>() else { return false };
-        let new = (n + by).to_string();
+        let new = n.saturating_add(by).to_string();
         let to = ls + s + new.chars().count() - 1;
         doc.buffer.apply(vec![Replace { range: ls + s..ls + e, text: new }], Some(Selections::single(Selection::caret(to))), EditKind::Other);
         true
     }
 
-    fn replay(&mut self, doc: &mut Document, view: &View, keys: &[char], times: usize, fx: &mut Vec<Effect>) {
-        if self.replaying > 20 {
-            return;
-        }
-        self.replaying += 1;
-        for _ in 0..times {
-            for &k in keys {
-                fx.extend(self.feed(doc, view, k));
+    fn replay(&mut self, doc: &mut Document, view: &View, keys: &[char], times: usize, visual: Option<(usize, usize, bool)>, fx: &mut Vec<Effect>) {
+        if keys.is_empty() { return; }
+        self.replay_queue.push(Replay { keys: keys.to_vec(), index: 0, times, visual });
+        // A nested @ schedules work; the outer loop executes it without using the call stack.
+        if self.replaying > 0 { return; }
+        self.replaying = 1;
+        self.motion_failed = false;
+        self.expansion_left = MAX_EXPANSION_BYTES;
+        let mut budget = MAX_REPLAY_KEYS;
+        while let Some(mut replay) = self.replay_queue.pop() {
+            if budget == 0 || self.motion_failed { break; }
+            if replay.index == 0 && let Some((lines, columns, linewise)) = replay.visual {
+                let at = doc.buffer.selections.primary().head;
+                self.anchor = at;
+                self.cursor = if lines == 0 { (at + columns.saturating_sub(1)).min(line_end(doc, line_of(doc, at)).saturating_sub(1).max(at)) }
+                    else { let l = (line_of(doc, at) + lines).min(last_line(doc)); line_start(doc, l) + columns.saturating_sub(1).min(doc.buffer.line_len(l).saturating_sub(1)) };
+                self.mode = if linewise { Mode::VisualLine } else { Mode::Visual };
+                self.show_visual(doc);
             }
+            let k = replay.keys[replay.index];
+            replay.index += 1;
+            if replay.index == replay.keys.len() {
+                replay.times -= 1;
+                replay.index = 0;
+            }
+            if replay.times > 0 { self.replay_queue.push(replay); }
+            let bytes = doc.buffer.rope().len_bytes();
+            fx.extend(self.feed(doc, view, k));
+            let added = doc.buffer.rope().len_bytes().saturating_sub(bytes);
+            self.expansion_left = self.expansion_left.saturating_sub(added);
+            budget -= 1;
+            if self.expansion_left == 0 { self.motion_failed = true; }
         }
-        self.replaying -= 1;
+        if budget == 0 { self.message = Some("Macro key limit reached".into()); }
+        self.replay_queue.clear();
+        self.keys.clear();
+        self.expansion_left = MAX_EXPANSION_BYTES;
+        self.replaying = 0;
     }
 
     // ------------------------------------------------------------------ visual mode
@@ -1336,7 +1425,7 @@ impl Vim {
             (None, Action::Motion(m, arg)) => {
                 if let Some((to, _)) = self.motion(doc, view, self.cursor, *m, *arg, cmd.count, false, fx) {
                     self.cursor = to.min(doc.buffer.len());
-                }
+                } else { self.motion_failed = true; }
                 false
             }
             (None, Action::Object(inner, obj)) => {
@@ -1428,7 +1517,7 @@ impl Vim {
         let n = doc.buffer.len();
         let c = count.unwrap_or(1).max(1);
         let line = line_of(doc, pos);
-        let chars: Vec<char> = doc.chars().to_vec();
+        let chars = doc.chars();
         let at = |p: usize| chars.get(p).copied().unwrap_or('\n');
         let vertical = |me: &mut Self, doc: &Document, target: usize| -> usize {
             let goal = *me.goal.get_or_insert_with(|| doc.buffer.col_of(pos));
@@ -1444,7 +1533,9 @@ impl Vim {
                 let lim = if for_op { line_end(doc, line) } else { line_end(doc, line).saturating_sub(1).max(line_start(doc, line)) };
                 ((pos + c).min(lim), Span::Exclusive)
             }
+            'j' if line == last_line(doc) => return None,
             'j' => (vertical(self, doc, line + c), Span::Linewise),
+            'k' if line == 0 => return None,
             'k' => (vertical(self, doc, line.saturating_sub(c)), Span::Linewise),
             '+' | ENTER => (line_start(doc, (line + c).min(last_line(doc))), Span::Linewise),
             '-' => (line_start(doc, line.saturating_sub(c)), Span::Linewise),
@@ -1464,7 +1555,7 @@ impl Vim {
                     let big = arg == Some('E');
                     let mut p = pos;
                     for _ in 0..c {
-                        p = word_end_back(&chars, p, big);
+                        p = word_end_back(chars, p, big);
                     }
                     (p, Span::Inclusive)
                 }
@@ -1482,28 +1573,28 @@ impl Vim {
             'w' | 'W' => {
                 let mut p = pos;
                 for _ in 0..c {
-                    p = word_start_next(&chars, p, m == 'W');
+                    p = word_start_next(chars, p, m == 'W');
                 }
                 (p.min(n), Span::Exclusive)
             }
             'b' | 'B' => {
                 let mut p = pos;
                 for _ in 0..c {
-                    p = word_start_back(&chars, p, m == 'B');
+                    p = word_start_back(chars, p, m == 'B');
                 }
                 (p, Span::Exclusive)
             }
             'e' | 'E' => {
                 let mut p = pos;
                 for _ in 0..c {
-                    p = word_end_next(&chars, p, m == 'E');
+                    p = word_end_next(chars, p, m == 'E');
                 }
                 (p.min(n.saturating_sub(1)), Span::Inclusive)
             }
             'f' | 'F' | 't' | 'T' => {
                 let ch = arg?;
                 self.last_find = Some((m, ch));
-                (find_in_line(doc, &chars, pos, m, ch, c, false)?, if matches!(m, 'f' | 't') { Span::Inclusive } else { Span::Exclusive })
+                (find_in_line(doc, chars, pos, m, ch, c, false)?, if matches!(m, 'f' | 't') { Span::Inclusive } else { Span::Exclusive })
             }
             ';' | ',' => {
                 let (k, ch) = self.last_find?;
@@ -1517,7 +1608,7 @@ impl Vim {
                 } else {
                     k
                 };
-                (find_in_line(doc, &chars, pos, k, ch, c, true)?, if matches!(k, 'f' | 't') { Span::Inclusive } else { Span::Exclusive })
+                (find_in_line(doc, chars, pos, k, ch, c, true)?, if matches!(k, 'f' | 't') { Span::Inclusive } else { Span::Exclusive })
             }
             '%' => {
                 if let Some(k) = count.filter(|_| count.is_some()) {
@@ -1591,6 +1682,9 @@ impl Vim {
             }
             _ => return None,
         };
+        if r.0 == pos && matches!(m, 'h' | 'l' | ' ' | BACKSPACE | 'w' | 'W' | 'b' | 'B' | 'e' | 'E' | '+' | '-' | ENTER | '{' | '}') {
+            return None;
+        }
         Some(r)
     }
 
@@ -1598,7 +1692,7 @@ impl Vim {
 
     /// A text object around `pos`: (start, end exclusive, linewise).
     fn object(&self, doc: &mut Document, pos: usize, inner: bool, obj: char, count: usize) -> Option<(usize, usize, bool)> {
-        let chars: Vec<char> = doc.chars().to_vec();
+        let chars = doc.chars();
         match obj {
             'w' | 'W' => {
                 let big = obj == 'W';
@@ -1959,11 +2053,11 @@ fn find_in_line(doc: &Document, chars: &[char], pos: usize, k: char, ch: char, c
 }
 
 /// `%`: the bracket matching the one at (or next on the line after) the cursor.
-fn match_bracket(doc: &mut Document, pos: usize) -> Option<usize> {
+fn match_bracket(doc: &Document, pos: usize) -> Option<usize> {
     let line = line_of(doc, pos);
     let le = line_end(doc, line);
-    let toks = doc.tokens().to_vec();
-    let mut i = lexer::token_index_at(&toks, pos);
+    let toks = doc.tokens_cached();
+    let mut i = lexer::token_index_at(toks, pos);
     while let Some(t) = toks.get(i) {
         if t.start >= le {
             return None;
@@ -1980,9 +2074,9 @@ fn match_bracket(doc: &mut Document, pos: usize) -> Option<usize> {
 }
 
 /// The `count`-th enclosing bracket pair of this kind around `pos`: (open, close) positions.
-fn enclosing_bracket(doc: &mut Document, pos: usize, open: char, count: usize) -> Option<(usize, usize)> {
-    let toks = doc.tokens().to_vec();
-    let chars = doc.chars().to_vec();
+fn enclosing_bracket(doc: &Document, pos: usize, open: char, count: usize) -> Option<(usize, usize)> {
+    let toks = doc.tokens_cached();
+    let chars = doc.chars();
     let mut found: Vec<(usize, usize)> = toks
         .iter()
         .filter(|t| t.kind == Kind::Open && chars.get(t.end - 1) == Some(&open))
@@ -2066,6 +2160,53 @@ mod tests {
                 vim.feed(doc, &view, k);
             }
         }
+    }
+
+    #[test]
+    fn change_word_can_end_on_current_character() {
+        assert_eq!(run("(f x y)", 3, "cwZ<Esc>").0, "(f Z y)");
+        assert_eq!(run("last next", 3, "cwZ<Esc>").0, "lasZ next");
+        assert_eq!(run("a b c", 0, "c2wZ<Esc>").0, "Z c");
+        assert_eq!(run("(x y)", 1, "cWZ<Esc>").0, "(Z y)");
+    }
+
+    #[test]
+    fn dot_recreates_visual_extent_without_pending_operator() {
+        assert_eq!(run("abcd efgh", 0, "vld.").0, " efgh");
+        assert_eq!(run("abcdefghi", 0, "vld2.").0, "ghi");
+        assert_eq!(run("abcd\nefgh\nijkl", 0, "vld.j").0, "\nefgh\nijkl");
+        assert_eq!(run("a\nb\nc\nd", 0, "Vd.").0, "c\nd");
+        assert_eq!(run("abcd efgh", 0, "vlcZ<Esc>w.").0, "Zcd Zgh");
+    }
+
+    #[test]
+    fn failed_motions_stop_operators_and_macro_playback() {
+        assert_eq!(run("a\nb\nc", 4, "dj").0, "a\nb\nc");
+        assert_eq!(run("a\nb\nc", 0, "dk").0, "a\nb\nc");
+        assert_eq!(run("a\nb\nc\nd\ne\nf\ng\nh", 0, "qqjddq100@q").0, "a\nc\ne\ng");
+        // Recursive playback must run beyond the old depth-21 limit, and stop at EOF.
+        let mut doc = Document::new(&"x\n".repeat(80));
+        let mut vim = Vim::new();
+        vim.regs.insert('q', Register { text: "jdd@q".into(), linewise: false });
+        feed(&mut vim, &mut doc, "@q");
+        assert!(doc.buffer.line_count() < 50);
+        assert!(doc.buffer.line_count() > 1);
+    }
+
+    #[test]
+    fn counts_and_replay_expansion_are_bounded() {
+        assert_eq!(run("a", 0, "yy10000000000000000000p").0.len(), 200001);
+        let mut doc = Document::new("safe");
+        let mut vim = Vim::new();
+        vim.regs.insert('a', Register { text: "x".repeat(1000), linewise: false });
+        feed(&mut vim, &mut doc, "\"a999999999999999999999p");
+        assert_eq!(doc.text(), "safe");
+        assert!(vim.message.as_deref().unwrap().contains("limit"));
+        vim.regs.insert('q', Register { text: "@q".into(), linewise: false });
+        feed(&mut vim, &mut doc, "@q");
+        assert_eq!(doc.text(), "safe");
+        assert!(vim.message.as_deref().unwrap().contains("limit"));
+        assert_eq!(run("abc", 0, "999999999999999999999d999999999999999999999l").0, "");
     }
 
     #[test]
