@@ -299,9 +299,8 @@ impl Buffer {
             && self.undo.last().is_some_and(|t| {
                 t.kind == kind && now.duration_since(t.at) < Duration::from_millis(1200) && t.after == before
             });
-        if merge {
+        if let Some(t) = self.undo.last_mut().filter(|_| merge) {
             // Changes are sequential, so the new edit simply appends to the previous step.
-            let t = self.undo.last_mut().unwrap();
             t.changes.extend(changes);
             t.after = after;
             t.at = now;
@@ -333,6 +332,14 @@ impl Buffer {
         }
     }
 
+    /// History navigation and leaving an editing mode end any outstanding transaction.
+    /// A later matching `end_group` is harmless; subsequent edits start fresh history.
+    pub fn close_groups(&mut self) {
+        self.group_depth = 0;
+        self.group_started = false;
+        self.break_undo = true;
+    }
+
     /// Replace each selection with `text` (typing / paste).
     pub fn insert_at_selections(&mut self, text: &str, kind: EditKind) {
         let edits = self.selections.list.iter().map(|s| Replace { range: s.range(), text: text.to_string() }).collect();
@@ -358,6 +365,7 @@ impl Buffer {
     }
 
     pub fn undo(&mut self) -> bool {
+        self.close_groups();
         let Some(t) = self.undo.pop() else { return false };
         // Changes within a transaction are sequential: each is expressed against the document
         // after the previous ones. Undo in reverse order.
@@ -375,6 +383,7 @@ impl Buffer {
     }
 
     pub fn redo(&mut self) -> bool {
+        self.close_groups();
         let Some(t) = self.redo.pop() else { return false };
         for c in &t.changes {
             let r = c.range.start..c.range.start + c.removed.chars().count();
@@ -398,6 +407,38 @@ impl Buffer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn history_navigation_closes_nested_and_empty_groups() {
+        for history in [false, true] {
+            for redo in [false, true] {
+                let mut b = Buffer::new("");
+                if history { b.insert_at_selections("old", EditKind::Other); }
+                b.begin_group();
+                b.begin_group();
+                b.insert_at_selections("a", EditKind::Insert);
+                assert!(b.undo());
+                if redo { assert!(b.redo()); }
+                b.insert_at_selections("b", EditKind::Insert);
+                b.end_group();
+                b.end_group();
+                assert!(b.undo());
+                assert_eq!(b.text(), format!("{}{}", if history { "old" } else { "" }, if redo { "a" } else { "" }));
+                if redo { assert!(b.undo()); }
+                if history { assert!(b.undo()); }
+                assert_eq!(b.text(), "");
+                assert!(!b.undo());
+            }
+        }
+        let mut b = Buffer::new("");
+        b.begin_group();
+        assert!(!b.undo());
+        b.insert_at_selections("a", EditKind::Insert);
+        b.close_groups();
+        b.insert_at_selections("b", EditKind::Insert);
+        assert!(b.undo());
+        assert_eq!(b.text(), "a");
+    }
 
     #[test]
     fn multi_cursor_insert_and_undo() {
