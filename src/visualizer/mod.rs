@@ -58,6 +58,11 @@ impl Trace {
     }
 
     pub fn push(&mut self, mut step: VizStep) {
+        if let Some(previous) = self.steps.last() {
+            for (frame, old) in step.frames.iter_mut().zip(&previous.frames) {
+                if **frame == **old { *frame = old.clone(); }
+            }
+        }
         // Consecutive definitions of functions read as one step ("Defining f and g").
         let fn_define = |s: &VizStep| s.kind == "define" && s.name.as_deref().is_some_and(|names| names.split(", ").all(|n| s.globals.iter().any(|(g, v)| g == n && matches!(v, VizRef::Prim { k, .. } if k == "fn"))));
         if fn_define(&step) && self.steps.last().is_some_and(fn_define) {
@@ -1669,9 +1674,20 @@ mod tests {
     fn cell(id: u64, first: VizRef, rest: VizRef) -> VizObject {
         VizObject { id, k: "cons".into(), first: Some(first), rest: Some(rest), ..Default::default() }
     }
-    fn frame(name: &str, vars: Vec<(&str, VizRef)>, replaced: bool) -> VizFrame {
-        VizFrame { name: name.into(), nargs: vars.len(), vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced, pos: None, span: 0, done: vec![] }
+    fn frame(name: &str, vars: Vec<(&str, VizRef)>, replaced: bool) -> std::sync::Arc<VizFrame> {
+        std::sync::Arc::new(VizFrame { name: name.into(), nargs: vars.len(), vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced, pos: None, span: 0, done: vec![] })
     }
+    #[test]
+    fn unchanged_frames_share_storage_without_changing_prior_snapshots() {
+        let mut trace = Trace::default();
+        trace.push(VizStep { kind: "call".into(), frames: vec![frame("outer", vec![("x", prim("1", "num"))], false)], ..Default::default() });
+        trace.push(VizStep { kind: "call".into(), frames: vec![frame("outer", vec![("x", prim("1", "num"))], false), frame("inner", vec![], false)], ..Default::default() });
+        assert!(Arc::ptr_eq(&trace.steps[0].frames[0], &trace.steps[1].frames[0]));
+        trace.push(VizStep { kind: "set".into(), frames: vec![frame("outer", vec![("x", prim("2", "num"))], false)], ..Default::default() });
+        assert!(!Arc::ptr_eq(&trace.steps[1].frames[0], &trace.steps[2].frames[0]));
+        assert_eq!(trace.steps[0].frames[0].vars[0].1, prim("1", "num"));
+    }
+
     /// (rvrs '(1 2) '()) -> (rvrs '(2) '(1)): the replaced call is gone, as in Racket, and
     /// the call that replaced it says so.
     #[test]

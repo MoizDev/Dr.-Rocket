@@ -600,7 +600,7 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
             let pos = step.frames.iter().rposition(|f| !f.replaced);
             let replaced = pos.and_then(|k| k.checked_sub(1)).and_then(|k| step.frames.get(k)).filter(|f| f.replaced);
             let tail = replaced.is_some();
-            let from = replaced.or(caller).map(frame_name);
+            let from = replaced.map(|f| f.as_ref()).or(caller).map(frame_name);
             let recursive = from.as_deref() == Some(name.as_str());
             ex.headline = match (&from, recursive) {
                 (Some(_), true) => vec![Piece::Name(name.clone()), text(if tail { " calls itself again (a tail call)" } else { " calls itself" })],
@@ -634,7 +634,7 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
             // What the caller will do with the answer, when there's more to do than pass it on.
             if !tail
                 && let Some(c) = caller
-                && let Some(k) = step.frames.iter().position(|f| std::ptr::eq(f, c))
+                && let Some(k) = step.frames.iter().position(|f| std::ptr::eq(f.as_ref(), c))
                 && let Some(w) = waiting(trace, step, Some(k))
             {
                 ex.lines.push(vec![text("When it returns, "), Piece::Name(c.name.clone()), text(" goes on with "), Piece::Code(seg_text(&w))]);
@@ -698,7 +698,7 @@ pub fn explain(view: &VisualizerView, step: &VizStep, code: &dyn Fn(usize, usize
             ex.lines.extend(built_lines(&ctx, value));
             let back_to = live.len().checked_sub(2).and_then(|k| live.get(k)).copied();
             // Where the answer goes: into the hole of what the caller was waiting to do.
-            let k = back_to.and_then(|b| step.frames.iter().position(|f| std::ptr::eq(f, b)));
+            let k = back_to.and_then(|b| step.frames.iter().position(|f| std::ptr::eq(f.as_ref(), b)));
             let then = if back_to.is_some() { k.and_then(|k| waiting(trace, step, Some(k))) } else { waiting(trace, step, None) };
             let mut line = match back_to {
                 Some(b) => vec![text("Back to "), Piece::Name(b.name.clone()), text(", which was waiting for this result")],
@@ -889,8 +889,8 @@ mod tests {
     fn obj(id: u64) -> VizRef {
         VizRef::Object { id }
     }
-    fn frame(name: &str, vars: Vec<(&str, VizRef)>, nargs: usize, pos: Option<usize>, span: usize) -> VizFrame {
-        VizFrame { name: name.into(), nargs, vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced: false, pos, span, done: vec![] }
+    fn frame(name: &str, vars: Vec<(&str, VizRef)>, nargs: usize, pos: Option<usize>, span: usize) -> std::sync::Arc<VizFrame> {
+        std::sync::Arc::new(VizFrame { name: name.into(), nargs, vars: vars.into_iter().map(|(n, v)| (n.to_string(), v)).collect(), replaced: false, pos, span, done: vec![] })
     }
     fn node(id: u64, key: &str, left: VizRef, right: VizRef) -> VizObject {
         VizObject { id, k: "struct".into(), name: Some("node".into()), fields: vec![("key".into(), prim(key, "num")), ("left".into(), left), ("right".into(), right)], ..Default::default() }

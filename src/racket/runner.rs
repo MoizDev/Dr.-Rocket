@@ -125,7 +125,12 @@ impl RunSession {
 
     /// All events received so far.
     pub fn drain(&self) -> Vec<RunEvent> {
-        let events = self.events.try_iter().take(super::transport::FRAME_EVENTS).collect();
+        let start = std::time::Instant::now();
+        let mut events = Vec::new();
+        while events.len() < super::transport::FRAME_EVENTS && start.elapsed() < std::time::Duration::from_millis(2) {
+            let Ok(event) = self.events.try_recv() else { break };
+            events.push(event);
+        }
         if !self.events.is_empty() { self.process.repaint(); }
         events
     }

@@ -22,10 +22,11 @@
 ;; Protocol plumbing
 
 (define protocol-in (current-input-port))
+(define real-exit-handler (exit-handler))
 
 ;; Everything user code writes is buffered and coalesced into `output` events. Any other
 ;; event flushes the buffer first so the IDE sees output and results in program order.
-(define out-lock (make-semaphore 1))
+;; The protocol writer alone mutates the pending output buffer.
 (define pending-stream #f)
 (define pending (open-output-string))
 (define pending-size 0)
@@ -38,13 +39,12 @@
   (set! pending-stream #f))
 
 (define (flush-output-events!)
-  (call-with-semaphore out-lock flush-pending!/locked))
+  (protocol-submit flush-pending!/locked))
 
 (define (buffer-output! stream str)
   (viz-note-output! str)
   (unless (string=? str "")
-    (call-with-semaphore
-     out-lock
+    (protocol-submit
      (λ ()
        (unless (equal? stream pending-stream)
          (flush-pending!/locked)
@@ -56,8 +56,7 @@
 
 ;; emit* : like emit, but keeps ordering with buffered output.
 (define (emit* msg)
-  (flush-output-events!)
-  (emit msg))
+  (protocol-submit (λ () (flush-pending!/locked) (emit msg))))
 
 (define (start-flusher!)
   (thread (λ () (let loop () (sleep 0.025) (flush-output-events!) (loop)))))
@@ -250,26 +249,30 @@
 
 (define (exn-srclocs e)
   (if (exn:srclocs? e)
-      (for/list ([sl (in-list ((exn:srclocs-accessor e) e))] #:when (srcloc? sl))
+      (for/list ([sl (in-list ((exn:srclocs-accessor e) e))] [_ (in-range 100)] #:when (srcloc? sl))
         (srcloc->jsexpr sl))
       '()))
+
+(define (stack-window xs)
+  (if (<= (length xs) 100) xs
+      (append (take xs 50) (take-right xs 50))))
 
 (define (exn-stack e)
   (define marks (exn-continuation-marks e))
   (define et
     (if (and errortrace-key* marks)
-        (for/list ([m (in-list (continuation-mark-set->list marks errortrace-key*))]
+        (for/list ([m (in-list (stack-window (continuation-mark-set->list marks errortrace-key*)))]
                    #:when (and (list? m) (= (length m) 6) (not (internal-source? (cadr m)))))
           (define-values (datum src line col pos span) (apply values m))
           (hash-set (srcloc->jsexpr (srcloc src line col pos span))
-                    'name (truncate-string (format "~s" datum) 80)))
+                    'name (bounded-format datum 80)))
         '()))
   (cond
     [(pair? et) et]
     [marks
-     (for/list ([f (in-list (continuation-mark-set->context marks))]
+     (for/list ([f (in-list (stack-window (continuation-mark-set->context marks)))]
                 #:when (and (cdr f) (not (internal-source? (srcloc-source (cdr f))))))
-       (hash-set (srcloc->jsexpr (cdr f)) 'name (if (car f) (symbol->string (car f)) (json-null))))]
+       (hash-set (srcloc->jsexpr (cdr f)) 'name (if (car f) (bounded-format (car f) 80 'display) (json-null))))]
     [else '()]))
 
 (define rewrite-error-message #f)
@@ -287,9 +290,9 @@
            [(pair? direct) direct]
            [(pair? stack) (list (hash-remove (car stack) 'name))]
            [else '()])))
-     (emit* (hasheq 'ev "error" 'message msg 'kind (exn-kind e) 'srclocs srclocs 'stack stack))]
+     (emit* (hasheq 'ev "error" 'message (truncate-string msg 32768) 'kind (exn-kind e) 'srclocs srclocs 'stack stack))]
     [else
-     (emit* (hasheq 'ev "error" 'message (format "uncaught exception: ~e" e) 'kind "runtime"
+     (emit* (hasheq 'ev "error" 'message (string-append "uncaught exception: " (bounded-format e 32768)) 'kind "runtime"
                     'srclocs '() 'stack '()))]))
 
 ;; ---------------------------------------------------------------------------
@@ -302,6 +305,9 @@
 (define (capture-printed thunk)
   ;; Run `thunk` with output going to a port that records text and image segments.
   (define segments '())
+  (define remaining (* 256 1024))
+  (define image-remaining (* 16 1024 1024))
+  (define stop #f)
   (define text (open-output-string))
   (define (flush-text!)
     (define s (bytes->string/utf-8 (get-output-bytes text #t) #\?))
@@ -312,17 +318,27 @@
      'value
      always-evt
      (λ (bs start end non-block? breakable?)
-       (write-bytes bs text start end)
+       (define n (min remaining (- end start)))
+       (write-bytes bs text start (+ start n))
+       (set! remaining (- remaining n))
+       (when (< n (- end start))
+         (write-string "… [value truncated]" text)
+         (stop (void)))
        (- end start))
      void
      (λ (v non-block? breakable?)
        (cond
-         [(value->image v) => (λ (img) (flush-text!) (set! segments (cons img segments)))]
-         [(number-markup?* v) (write-string (number-markup->text v) text)]
-         [else (write-string (format "~a" v) text)])
+         [(value->image v) => (λ (img)
+                                  (define n (string-length (hash-ref img 'png "")))
+                                  (when (> n image-remaining) (write-string "… [images truncated]" text) (stop (void)))
+                                  (set! image-remaining (- image-remaining n))
+                                  (flush-text!) (set! segments (cons img segments)))]
+         [(number-markup?* v) (write-string (number-markup->text v) port)]
+         [else (display v port)])
        #t)))
-  (parameterize ([current-output-port port])
-    (thunk))
+  (let/ec escape
+    (set! stop escape)
+    (parameterize ([current-output-port port]) (thunk)))
   (flush-output port)
   (flush-text!)
   (reverse segments))
@@ -362,7 +378,6 @@
       ;; Printed results are the program's output too (as the visualizer shows it).
       (viz-note-output! (string-append (apply string-append (for/list ([s trimmed]) (hash-ref s 'text (if (hash-ref s 'png #f) "[image]" "")))) "\n"))
       (emit* (hasheq 'ev "value"
-                     'text (apply string-append (for/list ([s trimmed]) (hash-ref s 'text "")))
                      'segments trimmed)))))
 
 (define (trim-trailing-newline segs)
@@ -693,6 +708,20 @@
 ;; ---------------------------------------------------------------------------
 ;; Running the program
 
+;; If reading the body failed before a module syntax object existed, try its
+;; reader/header with an empty body. This preserves #lang and DrRacket metadata
+;; language bindings without trying to execute broken definitions.
+(define (header-language source source-name)
+  (with-handlers ([exn:fail? (λ (e) #f)])
+    (define line (regexp-match-positions #px"(?m:^#lang[^\n]*(?:\n|$))" source))
+    (define end (if (> (source-offset) 0) (source-offset) (and line (cdar line))))
+    (and end
+         (let ([stx (with-module-reading-parameterization
+                     (λ () (read-syntax source-name (open-input-string (substring source 0 end)))))])
+           (syntax-case stx ()
+             [(_ name lang . _) (let ([v (syntax->datum #'lang)]) (and (module-path? v) v))]
+             [_ #f])))))
+
 (define module-language-error
   (string-append "Module Language: only a module expression is allowed, either\n"
                  "    #lang <language-name>\n or\n    (module <name> <language> ...)\n"))
@@ -973,6 +1002,8 @@
 
   (emit* (hasheq 'ev "started" 'racket_version (version)
                  'language (format "~a" (setting language 'kind "module"))))
+  ;; Finish protocol initialization before starting user execution/profiling.
+  (protocol-drain!)
   (parameterize ([current-custodian cust])
     (set! user-thread
           (thread
@@ -988,8 +1019,9 @@
                             [exit-handler (λ (code)
                                             (flush-output user-out)
                                             (flush-output user-err)
-                                            (emit* (hasheq 'ev "exit" 'code (if (exact-integer? code) code 0)))
-                                            (exit (if (byte? code) code 0)))])
+                                            (emit* (hasheq 'ev "exit" 'code (if (byte? code) code 0)))
+                                            (protocol-drain!)
+                                            (real-exit-handler code))])
                (parameterize-break #t
                  (run-user! source source-name language instrument submodules user-out user-err)))))))
   (thread-wait user-thread)
@@ -1104,10 +1136,12 @@
     [else
      (define port (open-source-port source source-images))
      (port-count-lines! port)
+     (define module-language #f)
      (define loaded?
        (guard
         (λ ()
           (define stx (read-module-syntax port source-name))
+          (set! module-language (syntax->datum (list-ref (syntax->list stx) 2)))
           (parameterize ([current-module-declare-name (make-resolved-module-path mod-name)])
             (eval (cond
                     [(eq? instrument 'debug) (debug-annotate (expand stx) source-name)]
@@ -1136,7 +1170,11 @@
      (when (eq? instrument 'coverage) (guard emit-coverage!))
      (set! repl-namespace
            (or (with-handlers ([exn:fail? (λ (e) #f)]) (module->namespace mod-path))
-               (current-namespace)))])
+               (let ([fallback-language (or module-language (header-language source source-name) 'racket/base)])
+                 (guard (λ () (namespace-require fallback-language)))
+                 (configure-teaching-output!)
+                 (current-print (make-value-printer (current-print)))
+                 (current-namespace))))])
   (current-namespace repl-namespace)
   (flush-output user-out)
   (flush-output user-err)

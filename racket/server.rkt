@@ -98,6 +98,10 @@
   (match cmd
     ["check-syntax" (check-syntax req)]
     ["bluebox" (bluebox req)]
+    ["bluebox-cached"
+     (define cached (hash-ref hover-cache (req-ref req 'cache_id #f) #f))
+     (unless cached (error 'bluebox "cache-miss"))
+     (bluebox (hash-set* (car cached) 'pos (req-ref req 'pos #f) 'name (json-null) 'cached_docs (cdr cached)))]
     ["docs-search" (docs-search req)]
     ["completions" (completions req)]
     ["macro-steps" (macro-steps req)]
@@ -313,6 +317,15 @@
 
 ;; Last successful docs annotations per path, for bluebox lookups by position.
 (define docs-cache (make-hash))
+;; Request ids identify immutable buffer snapshots, including distinct unsaved tabs.
+(define hover-cache (make-hasheqv))
+(define (cache-docs! name source offset entries)
+  (when (>= (hash-count docs-cache) 32) (hash-clear! docs-cache))
+  (hash-set! docs-cache name (list source offset entries)))
+(define (cached-docs name source offset)
+  (define cached (hash-ref docs-cache name #f))
+  (and cached (equal? source (car cached)) (= offset (cadr cached)) (caddr cached)))
+
 
 (define (run-check-syntax source source-name offset)
   (define collector (new collector% [src source-name] [offset offset]))
@@ -346,8 +359,12 @@
    req
    (λ (source source-name offset)
      (define-values (collector errors) (run-check-syntax source source-name offset))
-     (hash-set! docs-cache source-name (send collector doc-entries))
-     (send collector result errors))))
+     (cache-docs! source-name source offset (send collector doc-entries))
+     (define token (req-ref req 'id #f))
+     (when token
+       (when (>= (hash-count hover-cache) 32) (hash-clear! hover-cache))
+       (hash-set! hover-cache token (cons req (send collector doc-entries))))
+     (hash-set (send collector result errors) 'cache_id (or token (json-null))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Documentation
@@ -414,10 +431,11 @@
      (cond
        [(and (exact-nonnegative-integer? pos) (not name))
         (define entries
-          (or (hash-ref docs-cache source-name #f)
+          (or (req-ref req 'cached_docs #f)
+              (cached-docs source-name source offset)
               (let-values ([(collector errors) (run-check-syntax source source-name offset)])
                 (define d (send collector doc-entries))
-                (hash-set! docs-cache source-name d)
+                (cache-docs! source-name source offset d)
                 d)))
         (define hit (for/first ([d (in-list entries)]
                                 #:when (and (<= (hash-ref d 'start) pos) (< pos (hash-ref d 'end))))

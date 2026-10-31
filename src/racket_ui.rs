@@ -27,6 +27,8 @@ use std::sync::mpsc::Receiver;
 enum Pending {
     CheckSyntax { tab: u64, version: u64, explicit: bool },
     Hover { tab: u64, pos: usize, version: u64 },
+    Jump { tab: u64, version: u64, path: PathBuf },
+    WxmeWrite { reply: std::sync::mpsc::Sender<Result<(), String>> },
     CallBox { key: String },
     Docs,
     Completions { key: String },
@@ -174,6 +176,9 @@ pub struct RacketTab {
     check_req: Option<RequestId>,
     checked_version: u64,
     last_seen_version: u64,
+    hover_seen: Option<(usize, u64)>,
+    transcript_heights: Vec<f32>,
+    transcript_style: Option<(u32, u32, String)>,
     pub call_box: Option<(String, Vec<String>)>,
     scroll_to_bottom: bool,
 }
@@ -209,6 +214,9 @@ impl RacketTab {
             check_req: None,
             checked_version: u64::MAX,
             last_seen_version: u64::MAX,
+            hover_seen: None,
+            transcript_heights: Vec::new(),
+            transcript_style: None,
             call_box: None,
             scroll_to_bottom: false,
         }
@@ -227,12 +235,14 @@ impl RacketTab {
                 let cut = (cut..last.len()).find(|&i| last.is_char_boundary(i)).unwrap_or(last.len());
                 last.drain(..cut);
             }
+            self.transcript_heights.truncate(self.transcript.len().saturating_sub(1));
             self.scroll_to_bottom = true;
             return;
         }
         self.transcript.push(e);
         if self.transcript.len() > 3000 {
             self.transcript.drain(..500);
+            self.transcript_heights.clear();
         }
         self.scroll_to_bottom = true;
     }
@@ -343,7 +353,46 @@ pub fn read_wxme(app: &mut App, path: &Path) -> Result<proto::WxmeFile, String> 
 
 /// Write program text with images in DrRacket's editor format.
 pub fn write_wxme(app: &mut App, path: &Path, text: &str, images: proto::SourceImages) -> Result<(), String> {
-    server_call(app, ServerRequest::WxmeWrite { path: path.to_string_lossy().into_owned(), text: text.to_string(), images }).map(|_| ())
+    // Compatibility adapter until the file-save owner adopts begin_write_wxme.
+    let task = begin_write_wxme(app, path, text, images)?;
+    let result = app.racket.server.as_mut().and_then(|server| server.wait(task.id, std::time::Duration::from_secs(60)))
+        .unwrap_or_else(|| Err("Racket took too long to answer.".into()));
+    if let Some(Pending::WxmeWrite { reply }) = app.racket.pending.remove(&task.id) {
+        let _ = reply.send(wxme_write_result(result));
+    }
+    task.try_result().unwrap_or_else(|| Err("Racket save result was lost.".into()))
+}
+
+fn wxme_write_result(result: Result<ServerResponse, String>) -> Result<(), String> {
+    match result {
+        Ok(ServerResponse::WxmeWrite) => Ok(()),
+        Ok(_) => Err("Unexpected Racket save response".into()),
+        Err(e) => Err(e),
+    }
+}
+
+/// A nonblocking WXME write. The caller must retain its captured tab, path,
+/// version and save purpose; only a successful completion may mark that version
+/// saved. Dropping this handle does not cancel a disk write already in progress.
+pub struct WxmeWriteTask {
+    pub id: RequestId,
+    reply: Receiver<Result<(), String>>,
+}
+impl WxmeWriteTask {
+    pub fn try_result(&self) -> Option<Result<(), String>> {
+        match self.reply.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("Racket save task disconnected".into())),
+        }
+    }
+}
+
+pub fn begin_write_wxme(app: &mut App, path: &Path, text: &str, images: proto::SourceImages) -> Result<WxmeWriteTask, String> {
+    let (reply, rx) = std::sync::mpsc::channel();
+    let req = ServerRequest::WxmeWrite { path: path.to_string_lossy().into_owned(), text: text.into(), images };
+    let id = request(app, req, Pending::WxmeWrite { reply }).ok_or("The Racket server is not running.")?;
+    Ok(WxmeWriteTask { id, reply: rx })
 }
 
 /// Does this file start with DrRacket's editor-format (WXME) header?
@@ -405,21 +454,45 @@ pub fn poll(app: &mut App, ctx: &egui::Context) {
 
 fn poll_server(app: &mut App) {
     let Some(server) = app.racket.server.as_mut() else { return };
-    server.poll();
     let results = server.take_all();
     for (id, res) in results {
         let Some(p) = app.racket.pending.remove(&id) else { continue };
+        if let Pending::CheckSyntax { tab, .. } = &p
+            && let Some(i) = tab_index(app, *tab)
+            && app.tabs[i].rk.check_req == Some(id)
+        {
+            app.tabs[i].rk.check_req = None;
+        }
         match (p, res) {
+            (Pending::WxmeWrite { reply }, res) => {
+                let _ = reply.send(wxme_write_result(res));
+            }
+            (Pending::Jump { tab, version, path }, res) => {
+                if tab_index(app, tab).is_some_and(|i| app.tabs[i].editor.doc.version() == version && app.active == i) {
+                    app.open_file(&path);
+                    if let Ok(ServerResponse::JumpTarget(Some(target))) = res
+                        && let Some(tab) = app.tabs.get_mut(app.active) {
+                        tab.editor.reveal(target.pos..target.pos);
+                    }
+                }
+            }
             (Pending::CheckSyntax { tab, version, explicit }, Ok(ServerResponse::CheckSyntax(r))) => apply_check(app, tab, version, explicit, r),
             (Pending::CheckSyntax { explicit: true, .. }, Err(e)) => app.toast(format!("Check Syntax failed: {e}"), ToastKind::Error),
             (Pending::Hover { tab, pos, version }, Ok(ServerResponse::Bluebox(b))) => {
                 if let Some(i) = tab_index(app, tab)
                     && app.tabs[i].editor.doc.version() == version
-                    && let Some(b) = b
                 {
+                    app.tabs[i].rk.hover_seen = Some((pos, version));
+                    let Some(b) = b else { continue };
                     let ed = &mut app.tabs[i].editor;
                     let end = ed.doc.symbol_at(pos).map(|s| s.0.end).unwrap_or(pos + 1);
                     ed.deco.hover_doc = Some((pos..end, b.lines));
+                }
+            }
+            (Pending::Hover { tab, pos, version }, Err(e)) if e.contains("cache-miss") => {
+                if let Some(i) = tab_index(app, tab) && app.tabs[i].editor.doc.version() == version {
+                    if let Some(check) = &mut app.tabs[i].rk.check { check.cache_id = None; }
+                    editor_action(app, i, EditorAction::Hover(pos));
                 }
             }
             (Pending::CallBox { key }, Ok(ServerResponse::Bluebox(b))) => {
@@ -513,6 +586,16 @@ fn schedule_check(app: &mut App, i: usize, ctx: &egui::Context) {
 }
 
 fn start_check(app: &mut App, i: usize, explicit: bool) {
+    app.tabs[i].rk.check_due = None;
+    let tab_id = app.tabs[i].id;
+    let version = app.tabs[i].editor.doc.version();
+    for pending in app.racket.pending.values_mut() {
+        if let Pending::CheckSyntax { tab, version: v, explicit: was_explicit } = pending
+            && *tab == tab_id && *v == version {
+            *was_explicit |= explicit;
+            return;
+        }
+    }
     let tab = &app.tabs[i];
     let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
     let images = tab.editor.doc.images.for_text(&source);
@@ -544,7 +627,6 @@ fn apply_check(app: &mut App, tab_id: u64, version: u64, explicit: bool, r: Chec
     if tab.editor.doc.version() != version {
         return; // stale; a newer check is scheduled
     }
-    tab.rk.check_req = None;
     tab.rk.checked_version = version;
     let sem = Semantic {
         arrows: r
@@ -672,6 +754,7 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
                 tab.rk.profile = None;
             }
             tab.rk.transcript.clear();
+            tab.rk.transcript_heights.clear();
             tab.rk.log.clear();
             let version = app.racket.version.clone().unwrap_or_default();
             let lang_name = if tab.language == Language::Module { language_label(tab) } else { tab.language.name().to_string() };
@@ -711,13 +794,14 @@ fn clear_debug_marks(app: &mut App) {
 }
 
 fn poll_session(app: &mut App, i: usize, ctx: &egui::Context) {
-    let Some(session) = app.tabs[i].rk.session.as_ref() else { return };
-    let events = session.drain();
-    if events.is_empty() {
-        return;
-    }
-    for ev in events {
-        handle_run_event(app, i, ev, ctx);
+    let started = std::time::Instant::now();
+    for _ in 0..128 {
+        if started.elapsed() >= std::time::Duration::from_millis(3) {
+            ctx.request_repaint();
+            break;
+        }
+        let Some(event) = app.tabs[i].rk.session.as_ref().and_then(|s| s.try_recv()) else { break };
+        handle_run_event(app, i, event, ctx);
     }
 }
 
@@ -819,8 +903,8 @@ fn handle_run_event(app: &mut App, i: usize, ev: RunEvent, ctx: &egui::Context) 
         RunEvent::Coverage { uncovered, .. } => {
             tab.editor.deco.marks.retain(|m| m.kind != MarkKind::Uncovered);
             // Coverage ranges are [position, span] pairs.
-            for (pos, span) in uncovered {
-                tab.editor.deco.marks.push(Mark { range: pos..pos + span, kind: MarkKind::Uncovered });
+            for range in coverage_ranges(uncovered, tab.editor.doc.buffer.len()) {
+                tab.editor.deco.marks.push(Mark { range, kind: MarkKind::Uncovered });
             }
             let n = tab.editor.deco.marks.iter().filter(|m| m.kind == MarkKind::Uncovered).count();
             let msg = match n {
@@ -1170,6 +1254,7 @@ pub fn run(app: &mut App, cmd: Command) {
         Command::ClearInteractions => {
             let tab = &mut app.tabs[i];
             tab.rk.transcript.clear();
+            tab.rk.transcript_heights.clear();
         }
         Command::CreateExecutable => {
             let Some(path) = app.tabs[i].path.clone() else {
@@ -1330,11 +1415,25 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
         }
         EditorAction::Hover(pos) => {
             let tab = &app.tabs[i];
-            if tab.editor.deco.hover_doc.as_ref().is_some_and(|(r, _)| r.start == pos) {
+            let (tab_id, version) = (tab.id, tab.editor.doc.version());
+            if tab.rk.hover_seen == Some((pos, version)) || app.racket.pending.values().any(|p|
+                matches!(p, Pending::Hover { tab, pos: p, version: v } if *tab == tab_id && *p == pos && *v == version)) {
                 return;
             }
-            let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
-            let req = ServerRequest::Bluebox { path: path_string(tab), source, offset, pos: Some(pos), name: None };
+            let obsolete: Vec<_> = app.racket.pending.iter().filter_map(|(id, p)|
+                matches!(p, Pending::Hover { tab, .. } if *tab == tab_id).then_some(*id)).collect();
+            for id in obsolete {
+                if let Some(server) = app.racket.server.as_mut() { server.cancel(id); }
+                app.racket.pending.remove(&id);
+            }
+            let tab = &app.tabs[i];
+            let cache_id = (tab.rk.checked_version == version).then_some(tab.rk.check.as_ref().and_then(|c| c.cache_id)).flatten();
+            let req = if let Some(cache_id) = cache_id {
+                ServerRequest::BlueboxCached { cache_id, pos }
+            } else {
+                let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
+                ServerRequest::Bluebox { path: path_string(tab), source, offset, pos: Some(pos), name: None }
+            };
             let p = Pending::Hover { tab: tab.id, pos, version: tab.editor.doc.version() };
             request(app, req, p);
         }
@@ -1345,6 +1444,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
                 Some(Some(lines)) => app.tabs[i].rk.call_box = Some((name, lines.clone())),
                 Some(None) => app.tabs[i].rk.call_box = None,
                 None => {
+                    if app.racket.pending.values().any(|p| matches!(p, Pending::CallBox { key: k } if *k == key)) { return; }
                     let (source, offset) = lang::program_text(tab.language, &tab.lang_settings, tab.path.as_deref(), &tab.editor.doc.text());
                     let req = ServerRequest::Bluebox { path: path_string(tab), source, offset, pos: None, name: Some(name) };
                     request(app, req, Pending::CallBox { key });
@@ -1353,6 +1453,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
         }
         EditorAction::GotoDefinition(pos) => goto_definition(app, i, pos),
         EditorAction::OpenDocs(pos) => {
+            if !current_semantics(app, i) { return; }
             let tab = &app.tabs[i];
             let url = tab.rk.check.as_ref().and_then(|c| c.docs.iter().find(|d| d.start <= pos && pos <= d.end)).and_then(|d| d.url());
             match url {
@@ -1363,6 +1464,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
             }
         }
         EditorAction::Rename(pos) => {
+            if !current_semantics(app, i) { return; }
             let tab = &mut app.tabs[i];
             let Some(check) = tab.rk.check.as_ref() else {
                 app.toast(crate::platform::keys("Rename needs Check Syntax information; it runs automatically after edits (or ⇧⌘C)."), ToastKind::Info);
@@ -1375,7 +1477,10 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
                 app.toast(msg, ToastKind::Info);
                 return;
             }
-            let name = tab.editor.doc.buffer.slice(occ[0].0..occ[0].1);
+            let Some(name) = validated_rename(&tab.editor.doc, &occ) else {
+                app.toast("Rename information no longer matches the buffer. Run Check Syntax again.", ToastKind::Info);
+                return;
+            };
             app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::rename(tab.id, occ, name));
         }
         EditorAction::ToggleBreakpoint(line) => {
@@ -1413,7 +1518,41 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
     }
 }
 
+fn coverage_ranges(spans: Vec<proto::Span>, len: usize) -> Vec<std::ops::Range<usize>> {
+    let mut ranges: Vec<_> = spans.into_iter().filter_map(|(pos, span)| {
+        let end = pos.saturating_add(span).min(len);
+        (pos < end).then_some(pos..end)
+    }).collect();
+    ranges.sort_unstable_by_key(|r| (r.start, r.end));
+    let mut merged: Vec<std::ops::Range<usize>> = Vec::new();
+    for r in ranges {
+        if let Some(last) = merged.last_mut() && r.start <= last.end { last.end = last.end.max(r.end); }
+        else { merged.push(r); }
+    }
+    merged
+}
+
+fn current_semantics(app: &mut App, i: usize) -> bool {
+    if app.tabs[i].rk.checked_version == app.tabs[i].editor.doc.version() { return true; }
+    start_check(app, i, false);
+    app.toast("Checking the current buffer; try the action again when Check Syntax finishes.", ToastKind::Info);
+    false
+}
+
+fn validated_rename(doc: &crate::editor::document::Document, ranges: &[proto::Range]) -> Option<String> {
+    let first = ranges.first()?;
+    let valid = |r: &proto::Range| r.0 < r.1 && r.1 <= doc.buffer.len();
+    if !ranges.iter().all(valid) { return None; }
+    let name = doc.buffer.slice(first.0..first.1);
+    let mut sorted = ranges.to_vec();
+    sorted.sort_unstable();
+    if sorted.windows(2).any(|w| w[0].1 > w[1].0)
+        || ranges.iter().any(|r| doc.buffer.slice(r.0..r.1) != name) { return None; }
+    Some(name)
+}
+
 fn goto_definition(app: &mut App, i: usize, pos: usize) {
+    if !current_semantics(app, i) { return; }
     let tab = &mut app.tabs[i];
     let Some(check) = tab.rk.check.clone() else {
         app.toast(crate::platform::keys("Go to Definition needs Check Syntax information (⇧⌘C)."), ToastKind::Info);
@@ -1426,20 +1565,8 @@ fn goto_definition(app: &mut App, i: usize, pos: usize) {
     }
     if let Some(j) = check.jumps.iter().find(|j| j.start <= pos && pos <= j.end).cloned()
         && let Some(p) = j.path.clone() {
-            let path = PathBuf::from(&p);
-            // Ask the server where the name is defined in that file, then open it.
-            let req = ServerRequest::JumpTarget { path: p.clone(), name: j.id.clone() };
-            ensure_backend(app);
-            let target = app.racket.server.as_mut().and_then(|s| {
-                let id = s.request(req);
-                s.wait(id, std::time::Duration::from_secs(5))
-            });
-            app.open_file(&path);
-            if let Some(Ok(ServerResponse::JumpTarget(Some(t)))) = target
-                && let Some(tab) = app.tabs.get_mut(app.active)
-            {
-                tab.editor.reveal(t.pos..t.pos);
-            }
+            let pending = Pending::Jump { tab: tab.id, version: tab.editor.doc.version(), path: PathBuf::from(&p) };
+            request(app, ServerRequest::JumpTarget { path: p, name: j.id.clone() }, pending);
             return;
         }
     if let Some(d) = check.docs.iter().find(|d| d.start <= pos && pos <= d.end)
@@ -1565,8 +1692,22 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
                 ui.add_space(8.0);
                 ui.label(egui::RichText::new(crate::platform::keys("Press ⌘R to run the definitions, then evaluate expressions below.")).color(theme.text_placeholder));
             }
-            for e in &tab.rk.transcript {
-                transcript_entry(ui, e, &theme, &tk, &mono, &mut jump);
+            let style = (ui.available_width().to_bits(), font_size.to_bits(), format!("{:?}", theme));
+            if tab.rk.transcript_style.as_ref() != Some(&style) {
+                tab.rk.transcript_heights.clear();
+                tab.rk.transcript_style = Some(style);
+            }
+            for (idx, e) in tab.rk.transcript.iter().enumerate() {
+                let top = ui.cursor().top();
+                if let Some(&height) = tab.rk.transcript_heights.get(idx)
+                    && !ui.clip_rect().intersects(Rect::from_min_size(pos2(ui.min_rect().left(), top), vec2(ui.available_width(), height))) {
+                    ui.allocate_space(vec2(ui.available_width(), height));
+                } else {
+                    transcript_entry(ui, e, &theme, &tk, &mono, &mut jump);
+                    let height = (ui.cursor().top() - top - ui.spacing().item_spacing.y).max(0.0);
+                    if idx < tab.rk.transcript_heights.len() { tab.rk.transcript_heights[idx] = height; }
+                    else { tab.rk.transcript_heights.push(height); }
+                }
             }
             if let Some((mb, limit)) = tab.rk.memory_pause {
                 memory_action = memory_card(ui, &theme, mb, limit);
@@ -1726,6 +1867,24 @@ pub fn mb_text(mb: u64) -> String {
     }
 }
 
+fn cached_racket_galley(ui: &Ui, text: &str, theme: &crate::theme::Theme, font: &egui::FontId, width: f32) -> Arc<egui::Galley> {
+    type Cache = HashMap<u64, Arc<egui::Galley>>;
+    let id = Id::unique("transcript-galleys");
+    let key = egui::util::hash((text, format!("{theme:?}"), format!("{font:?}"), width.to_bits(), ui.ctx().pixels_per_point().to_bits()));
+    if let Some(galley) = ui.ctx().data_mut(|data| data.get_temp::<Cache>(id).and_then(|cache| cache.get(&key).cloned())) {
+        return galley;
+    }
+    let mut job = racket_job(text, theme, font, &[], Color32::TRANSPARENT);
+    job.wrap.max_width = width;
+    let galley = ui.painter().layout_job(job);
+    ui.ctx().data_mut(|data| {
+        let cache = data.get_temp_mut_or_default::<Cache>(id);
+        if cache.len() >= 64 { cache.clear(); }
+        cache.insert(key, galley.clone());
+    });
+    galley
+}
+
 fn transcript_entry(ui: &mut Ui, e: &Entry, theme: &crate::theme::Theme, tk: &Tokens, mono: &egui::FontId, jump: &mut Option<Srcloc>) {
     let w = ui.available_width();
     match e {
@@ -1741,8 +1900,8 @@ fn transcript_entry(ui: &mut Ui, e: &Entry, theme: &crate::theme::Theme, tk: &To
         Entry::Input(code) => {
             ui.horizontal_top(|ui| {
                 ui.label(egui::RichText::new("›").font(mono.clone()).color(theme.text_accent));
-                let job = racket_job(code, theme, mono, &[], Color32::TRANSPARENT);
-                ui.add(egui::Label::new(job).wrap());
+                let galley = cached_racket_galley(ui, code, theme, mono, ui.available_width());
+                ui.add(egui::Label::new(galley));
             });
         }
         Entry::Output { text, stream } => {
@@ -1835,17 +1994,11 @@ fn value_text(ui: &mut Ui, t: &str, theme: &crate::theme::Theme, mono: &egui::Fo
             n += 1;
         }
     }
-    let mut job = racket_job(&clean, theme, mono, &[], Color32::TRANSPARENT);
-    job.wrap.max_width = w;
-    let resp = ui.label(job);
+    let galley = cached_racket_galley(ui, &clean, theme, mono, w);
+    let resp = ui.label(galley.clone());
     if overlined.is_empty() {
         return;
     }
-    let galley = ui.painter().layout_job({
-        let mut j = racket_job(&clean, theme, mono, &[], Color32::TRANSPARENT);
-        j.wrap.max_width = w;
-        j
-    });
     let color = theme.syntax.number.color;
     for i in overlined {
         let a = galley.pos_from_cursor(egui::text::CCursor::new(i));
@@ -3071,7 +3224,7 @@ pub fn call_box(app: &mut App, ui: &Ui, ed_rect: Rect) {
 
 #[cfg(test)]
 mod tests {
-    use super::{short_test_message, without_srcloc};
+    use super::{short_test_message, without_srcloc, validated_rename, coverage_ranges};
 
     #[test]
     fn reader_messages_lose_their_srcloc() {
@@ -3080,6 +3233,24 @@ mod tests {
         assert_eq!(without_srcloc("C:\\Users\\x.rkt:3:1: read-syntax: bad"), "read-syntax: bad");
         assert_eq!(without_srcloc("define: expected a variable name"), "define: expected a variable name");
         assert_eq!(without_srcloc("cond: x:1:2 is odd"), "cond: x:1:2 is odd");
+    }
+
+    #[test]
+    fn rename_rejects_shifted_mismatched_overlapping_and_invalid_ranges() {
+        let doc = crate::editor::document::Document::new("(define x 1) (+ x x)");
+        assert_eq!(validated_rename(&doc, &[(8, 9), (16, 17), (18, 19)]).as_deref(), Some("x"));
+        assert!(validated_rename(&doc, &[(8, 9), (15, 16)]).is_none());
+        assert!(validated_rename(&doc, &[(8, 9), (8, 9)]).is_none());
+        assert!(validated_rename(&doc, &[(8, usize::MAX)]).is_none());
+        let shifted = crate::editor::document::Document::new("prefix (define x 1) (+ x x)");
+        assert!(validated_rename(&shifted, &[(8, 9), (16, 17), (18, 19)]).is_none());
+    }
+
+    #[test]
+    fn coverage_coalesces_nested_overlapping_and_duplicate_ranges_safely() {
+        assert_eq!(coverage_ranges(vec![(4, 3), (1, 9), (4, 3), (9, 4), (90, usize::MAX), (0, 0)], 20), vec![1..13]);
+        let input = (0..10000).map(|i| (i, 10000 - i)).collect();
+        assert_eq!(coverage_ranges(input, 10000), vec![0..10000]);
     }
 
     #[test]

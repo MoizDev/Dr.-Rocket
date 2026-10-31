@@ -1,6 +1,7 @@
 //! A child Racket process speaking newline-delimited JSON: commands go to its stdin, events
 //! are parsed from its stdout on a reader thread and delivered through a channel.
 
+use base64::Engine;
 use crossbeam_channel::Sender;
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -14,7 +15,8 @@ use std::sync::Arc;
 /// How many lines of the child's stderr we keep for diagnostics.
 const STDERR_TAIL: usize = 200;
 pub(crate) const QUEUE_CAPACITY: usize = 16;
-pub(crate) const FRAME_EVENTS: usize = 8;
+pub(crate) const FRAME_EVENTS: usize = 128;
+const MAX_LOGICAL_MESSAGE: usize = 64 * 1024 * 1024;
 const MAX_MESSAGE: usize = 4 * 1024 * 1024;
 const MAX_STDERR_LINE: usize = 16 * 1024;
 
@@ -23,6 +25,55 @@ fn read_line_limited(reader: &mut impl BufRead, line: &mut String, limit: usize)
     let size = reader.take((limit + 1) as u64).read_line(line)?;
     if size > limit { return Err(std::io::Error::other("Racket protocol message exceeded its size limit")); }
     Ok(size)
+}
+
+/// Chunks are contiguous: the backend's single writer never interleaves messages.
+/// A malformed sequence fails closed, with bounded allocation even for a hostile child.
+#[derive(Default)]
+struct MessageDecoder {
+    assembled: Vec<u8>,
+    frames: Vec<serde_json::Value>,
+}
+
+impl MessageDecoder {
+    fn decode(&mut self, line: &str) -> Result<Option<serde_json::Value>, String> {
+        let mut value: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
+        if let Some(chunk) = value.get("chunk") {
+            let chunk = chunk.as_str().ok_or("invalid Racket chunk")?;
+            let last = value.get("last").and_then(|v| v.as_bool()).ok_or("missing Racket chunk terminator")?;
+            if chunk.len() > 512 * 1024 { return Err("Racket chunk exceeded its size limit".into()); }
+            let bytes = base64::engine::general_purpose::STANDARD.decode(chunk).map_err(|e| e.to_string())?;
+            if bytes.is_empty() || bytes.len() > MAX_LOGICAL_MESSAGE.saturating_sub(self.assembled.len()) {
+                return Err("Racket response exceeded its logical size limit".into());
+            }
+            self.assembled.extend_from_slice(&bytes);
+            if !last { return Ok(None); }
+            value = serde_json::from_slice(&self.assembled).map_err(|e| e.to_string())?;
+            self.assembled = Vec::new();
+        } else if !self.assembled.is_empty() {
+            return Err("interleaved Racket response chunks".into());
+        }
+        if value.get("ev").and_then(|v| v.as_str()) == Some("viz-start") {
+            self.frames.clear();
+        }
+        if value.get("ev").and_then(|v| v.as_str()) == Some("viz-step") {
+            let prefix = value.get("frame_prefix").and_then(|v| v.as_u64()).unwrap_or(0);
+            if prefix > self.frames.len() as u64 { return Err("invalid visualizer frame prefix".into()); }
+            let suffix = value.get("frames").and_then(|v| v.as_array()).ok_or("missing visualizer frames")?;
+            if prefix as usize + suffix.len() > 64 { return Err("visualizer frame limit exceeded".into()); }
+            self.frames.truncate(prefix as usize);
+            self.frames.extend_from_slice(suffix);
+            value["frames"] = serde_json::Value::Array(self.frames.clone());
+        }
+        // Printed text is carried once on the wire. Keep the public RunEvent API
+        // compatible with existing consumers, including images-only values.
+        if value.get("ev").and_then(|v| v.as_str()) == Some("value") && value.get("text").is_none() {
+            let text: String = value.get("segments").and_then(|v| v.as_array()).into_iter().flatten()
+                .filter_map(|s| s.get("text").and_then(|v| v.as_str())).collect();
+            value["text"] = serde_json::Value::String(text);
+        }
+        Ok(Some(value))
+    }
 }
 
 fn kill_child(child: &mut Child) {
@@ -109,6 +160,7 @@ impl Process {
             .name("racket-stdout".into())
             .spawn(move || {
                 let mut reader = BufReader::new(stdout);
+                let mut decoder = MessageDecoder::default();
                 let mut line = String::new();
                 loop {
                     line.clear();
@@ -125,7 +177,16 @@ impl Process {
                     if trimmed.is_empty() {
                         continue;
                     }
-                    match serde_json::from_str::<E>(trimmed) {
+                    let value = match decoder.decode(trimmed) {
+                        Ok(Some(value)) => value,
+                        Ok(None) => continue,
+                        Err(e) => {
+                            tail.lock().push_back(format!("invalid Racket protocol: {e}"));
+                            kill_child(&mut stdout_child.lock());
+                            break;
+                        }
+                    };
+                    match serde_json::from_value::<E>(value) {
                         Ok(ev) => {
                             if events.send(ev).is_err() {
                                 return;
@@ -251,7 +312,50 @@ mod tests {
         let (tx, rx) = crossbeam_channel::bounded(QUEUE_CAPACITY);
         for n in 0..QUEUE_CAPACITY { tx.try_send(n).unwrap(); }
         assert!(tx.try_send(0).is_err());
-        assert_eq!(rx.try_iter().take(FRAME_EVENTS).count(), FRAME_EVENTS);
-        assert_eq!(rx.len(), QUEUE_CAPACITY - FRAME_EVENTS);
+        assert_eq!(rx.try_iter().take(FRAME_EVENTS).count(), QUEUE_CAPACITY.min(FRAME_EVENTS));
+        assert_eq!(rx.len(), QUEUE_CAPACITY.saturating_sub(FRAME_EVENTS));
+    }
+}
+
+#[cfg(test)]
+mod decoder_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn chunk(bytes: &[u8], last: bool) -> String {
+        json!({"chunk": base64::engine::general_purpose::STANDARD.encode(bytes), "last": last}).to_string()
+    }
+
+    #[test]
+    fn chunked_messages_preserve_unicode_segments_and_images() {
+        let mut decoder = MessageDecoder::default();
+        let bytes = br#"{"ev":"value","segments":[{"text":"\u03bb"},{"png":"image","width":1,"height":1}]}"#;
+        assert!(decoder.decode(&chunk(&bytes[..31], false)).unwrap().is_none());
+        let value = decoder.decode(&chunk(&bytes[31..], true)).unwrap().unwrap();
+        assert_eq!(value["text"], "λ");
+        assert_eq!(value["segments"][1]["png"], "image");
+        assert!(decoder.assembled.is_empty());
+    }
+
+    #[test]
+    fn chunk_sequences_reject_interleaving_invalid_base64_and_oversize() {
+        let mut decoder = MessageDecoder::default();
+        decoder.decode(&chunk(b"{", false)).unwrap();
+        assert!(decoder.decode("{}").is_err());
+        assert!(MessageDecoder::default().decode(r#"{"chunk":"!", "last":true}"#).is_err());
+        decoder.assembled.resize(MAX_LOGICAL_MESSAGE - 1, b' ');
+        assert!(decoder.decode(&chunk(b"xx", true)).is_err());
+        assert!(decoder.assembled.len() < MAX_LOGICAL_MESSAGE);
+    }
+
+    #[test]
+    fn visualizer_suffixes_reconstruct_complete_snapshots_and_reset_between_runs() {
+        let mut decoder = MessageDecoder::default();
+        decoder.decode(r#"{"ev":"viz-start"}"#).unwrap();
+        decoder.decode(r#"{"ev":"viz-step","frame_prefix":0,"frames":[{"name":"outer"}]}"#).unwrap();
+        let value = decoder.decode(r#"{"ev":"viz-step","frame_prefix":1,"frames":[{"name":"inner"}]}"#).unwrap().unwrap();
+        assert_eq!(value["frames"], json!([{"name":"outer"},{"name":"inner"}]));
+        decoder.decode(r#"{"ev":"viz-start"}"#).unwrap();
+        assert!(decoder.decode(r#"{"ev":"viz-step","frame_prefix":1,"frames":[]}"#).is_err());
     }
 }
