@@ -7,6 +7,10 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/MoizDev/Dr.-Rocket"
 homepage = "https://doctorocket.com"
 
+[features]
+# Scratch-only updater assurance builds. build.rs refuses this feature in release profiles.
+updater-e2e = []
+
 [dependencies]
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "persistence", "clipboard", "links", "system_fonts", "x11", "wayland"] }
 egui = "0.37"

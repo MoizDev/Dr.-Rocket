@@ -5,6 +5,7 @@ use std::fmt::Write;
 use std::path::Path;
 
 fn main() {
+    updater_test_config();
     let dir = Path::new("assets/icons/files");
     println!("cargo:rerun-if-changed=assets/icons");
     let mut names: Vec<String> = std::fs::read_dir(dir)
@@ -51,4 +52,35 @@ fn main() {
             println!("cargo:warning=could not embed the Windows icon: {e}");
         }
     }
+}
+
+/// Test trust is opt-in at compile time, never selected by a runtime environment variable.
+/// Release profiles refuse it even if someone accidentally enables all features.
+fn updater_test_config() {
+    if std::env::var_os("CARGO_FEATURE_UPDATER_E2E").is_none() { return; }
+    assert_ne!(std::env::var("PROFILE").as_deref(), Ok("release"), "updater-e2e is forbidden in release profiles");
+    assert_eq!(std::env::var("DEBUG").as_deref(), Ok("true"), "updater-e2e is forbidden in release builds");
+    let mut generated = String::new();
+    for name in ["ROOT", "ORIGIN", "PUBLIC_KEY", "CA", "VERSION"] {
+        let var = format!("DRROCKET_E2E_{name}");
+        println!("cargo:rerun-if-env-changed={var}");
+        let mut value = std::env::var(&var).unwrap_or_else(|_| panic!("{var} is required for scratch-only updater-e2e builds"));
+        if name == "ROOT" {
+            let root = std::fs::canonicalize(&value).expect("E2E scratch root");
+            let temp = std::fs::canonicalize(std::env::temp_dir()).expect("temporary directory");
+            assert!(root.starts_with(&temp) && root != temp, "E2E root must be a child of the OS temporary directory");
+            value = root.to_string_lossy().into_owned();
+        }
+        if name == "ORIGIN" {
+            let port = value.strip_prefix("https://localhost:").and_then(|s| s.parse::<u16>().ok());
+            assert!(port.is_some_and(|p| p > 0), "E2E requires a loopback HTTPS origin");
+        }
+        if name == "VERSION" { assert!(["98.0.0", "99.0.0"].contains(&value.as_str()), "E2E versions only"); }
+        if name == "CA" {
+            println!("cargo:rerun-if-changed={value}");
+            value = std::fs::read_to_string(value).expect("E2E TLS certificate");
+        }
+        writeln!(generated, "const TEST_{name}: &str = {value:?};").unwrap();
+    }
+    std::fs::write(Path::new(&std::env::var("OUT_DIR").unwrap()).join("update_test_config.rs"), generated).unwrap();
 }
