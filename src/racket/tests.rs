@@ -156,7 +156,11 @@ fn a_check_expect_that_errors_counts_as_failed() {
     // A function called with the wrong number of arguments: DrRacket reports each test as
     // failed with the error, never as passed.
     let b = need_racket!();
-    let path = scratch_dir().join("bsl-error-test.rkt");
+    // In a folder with `~` in its name, like Windows short paths (C:\Users\RUNNER~1\...):
+    // Racket's own error display failed on those and stopped the run.
+    let dir = scratch_dir().join("RUN~1");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("bsl-error-test.rkt");
     let body = "(define (f a b) (+ a b))\n(check-expect (f 1 2) 3)\n(check-expect (f 1 2 3) 6)\n(check-expect (g 1) 1)\n(define (g x) (/ x 0))\n";
     for lang in [Language::Beginner, Language::BeginnerAbbr] {
         let settings = lang.default_settings();

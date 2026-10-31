@@ -1088,6 +1088,7 @@
                             [current-load-relative-directory dir]
                             [current-command-line-arguments (vector)]
                             [error-print-source-location #f]
+                            [error-display-handler (safe-error-display-handler (error-display-handler))]
                             [exit-handler (λ (code)
                                             (flush-output user-out)
                                             (flush-output user-err)
@@ -1165,6 +1166,14 @@
   (define threads memory-paused)
   (set! memory-paused '())
   (for-each thread-resume threads))
+
+;; Racket's default handler fails ("fprintf: ill-formed pattern string") on some errors whose
+;; message holds a `~`, as a file path can (C:\Users\RUNNER~1\...). The teaching languages'
+;; test engine displays a failed check's error through it, so one such path stopped the whole
+;; run. Wrapped, such an error shows as its plain message. Teaching languages wrap this in turn.
+(define ((safe-error-display-handler display) msg exn)
+  (with-handlers ([exn:fail? (λ (_) (write-string msg (current-error-port)) (newline (current-error-port)))])
+    (display msg exn)))
 
 ;; Runs in the user thread.
 (define trace? #f)
