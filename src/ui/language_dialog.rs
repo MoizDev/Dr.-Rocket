@@ -417,7 +417,7 @@ mod rename_prompt_tests {
         for reload in [false,true] {
             let mut doc = Document::new("(f x x)");
             let prompt = Prompt::rename(42,doc.version(),vec![(3,4),(5,6)],"x".into());
-            if reload { doc.buffer.set_text("(f y y)"); } else { doc.type_text("prefix",false); }
+            if reload { doc.buffer.set_text("(f y y)"); } else { doc.type_text("prefix", crate::editor::document::Typing::LITERAL); }
             let before = doc.text();
             let PromptKind::Rename {tab,expected_version,old_name,ranges} = prompt.kind else { panic!("wrong prompt"); };
             assert_eq!(tab,42); assert_eq!(old_name,"x");

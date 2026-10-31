@@ -97,6 +97,9 @@ impl Snapshot {
         if tab.language == self.language && tab.lang_settings == self.settings {
             tab.lang_changed = false;
         }
+        if tab.path.as_ref() != Some(&self.target) {
+            tab.file_ref = crate::file_track::FileRef::new(Some(&self.target));
+        }
         tab.path = Some(self.target.clone());
         tab.disk_hash = Some(hash);
         tab.disk_version = self.version;
@@ -332,6 +335,7 @@ impl App {
         ) == SaveOutcome::Saved
     }
     pub(crate) fn save_tab_for(&mut self, idx: usize, save_as: bool, purpose: SavePurpose) -> SaveOutcome {
+        self.follow_moved_file(idx);
         let Some(tab) = self.tabs.get(idx) else {
             return SaveOutcome::Failed;
         };
@@ -348,8 +352,23 @@ impl App {
             .map(|s| (s.target.clone(), s.expected));
         let path = match (&tab.path, save_as, &planned) {
             (_, false, Some((target, _))) => target.clone(),
-            (Some(path), false, _) => path.clone(),
-            _ => {
+            (Some(path), false, _) if super::folder_exists(path) => path.clone(),
+            (old, _, _) => {
+                if old.is_some() && !save_as {
+                    // Its folder was moved or deleted and the file couldn't be followed.
+                    let title = tab.title();
+                    if purpose == SavePurpose::Autosave {
+                        // Don't pop up a save dialog unasked.
+                        self.tabs[idx].save_failed = true;
+                        self.toast(
+                            format!("Couldn't autosave {title}: it was moved or deleted. Save it to choose a new place."),
+                            ToastKind::Error,
+                        );
+                        return SaveOutcome::Failed;
+                    }
+                    self.toast(format!("{title} was moved or deleted. Choose where to save it."), ToastKind::Info);
+                }
+                let tab = &self.tabs[idx];
                 let mut dialog = rfd::FileDialog::new()
                     .add_filter("Racket", &["rkt", "rktl", "rktd", "scrbl", "ss", "scm"])
                     .set_file_name(format!("{}.rkt", tab.title().trim_end_matches(".rkt")));
@@ -443,7 +462,7 @@ impl App {
         let (temporary, mut file) = match temporary(&snapshot.target) {
             Ok(value) => value,
             Err(e) => {
-                self.save_error(&snapshot, format!("Could not prepare save: {e}"));
+                self.save_error(&snapshot, format!("Could not prepare save: {}", super::describe_write_error(&e)));
                 return SaveOutcome::Failed;
             }
         };
@@ -476,7 +495,7 @@ impl App {
             drop(file);
             if let Err(e) = result {
                 let _ = std::fs::remove_file(temporary);
-                self.save_error(&snapshot, format!("Save failed: {e}"));
+                self.save_error(&snapshot, format!("Save failed: {}", super::describe_write_error(&e)));
                 return SaveOutcome::Failed;
             }
             self.finish_save(snapshot, temporary, Ok(()))
@@ -755,6 +774,7 @@ mod tests {
             original_header: String::new(),
             wxme: true,
             save_failed: false,
+            file_ref: Default::default(),
             rk: RacketTab::new(1),
             zoom: 1.0,
             edit_seen: (0, 0.0),

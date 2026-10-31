@@ -152,6 +152,28 @@ fn teaching_language_prints_tests_and_errors_like_drracket() {
 }
 
 #[test]
+fn a_check_expect_that_errors_counts_as_failed() {
+    // A function called with the wrong number of arguments: DrRacket reports each test as
+    // failed with the error, never as passed.
+    let b = need_racket!();
+    let path = scratch_dir().join("bsl-error-test.rkt");
+    let body = "(define (f a b) (+ a b))\n(check-expect (f 1 2) 3)\n(check-expect (f 1 2 3) 6)\n(check-expect (g 1) 1)\n(define (g x) (/ x 0))\n";
+    for lang in [Language::Beginner, Language::BeginnerAbbr] {
+        let settings = lang.default_settings();
+        let (source, offset) = lang::program_text(lang, &settings, Some(&path), body);
+        let config = RunConfig { path: Some(path.clone()), source, offset, language: lang.run_language(), options: RunOptions::default() };
+        let s = RunSession::start(b, &config).unwrap();
+        let events = run_until(&s, ready(None));
+        let tests = events.iter().find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None }).expect("tests");
+        assert_eq!((tests.passed, tests.total), (1, 3), "{lang:?}: {}", tests.text);
+        assert_eq!(tests.failures.len(), 2, "{lang:?}: {}", tests.text);
+        assert!(tests.failures[0].message.contains("expects only 2 arguments, but found 3"), "{}", tests.failures[0].message);
+        assert_eq!(tests.failures[0].srcloc.line, Some(3));
+        assert_eq!(tests.failures[1].message, "check-expect encountered the following error instead of the expected value, 1.\n:: /: division by zero");
+    }
+}
+
+#[test]
 fn image_values_arrive_as_png_segments() {
     let b = need_racket!();
     let src = "#lang racket\n(require 2htdp/image)\n(circle 5 \"solid\" \"red\")\n(list 1 (square 3 \"solid\" \"blue\"))\n";

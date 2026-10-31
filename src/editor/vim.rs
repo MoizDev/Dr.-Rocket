@@ -15,7 +15,7 @@
 //! that also offers the app's commands (`:Run`, `:Visualize`).
 
 use super::buffer::{EditKind, Replace, Selection, Selections};
-use super::document::{Document, Motion as DocMotion};
+use super::document::{Document, Motion as DocMotion, Typing};
 use super::lexer::{self, Kind};
 use std::collections::HashMap;
 
@@ -56,7 +56,7 @@ pub const fn ctrl(c: char) -> char {
 pub struct View<'a> {
     pub first_line: usize,
     pub last_line: usize,
-    pub auto_close: bool,
+    pub typing: Typing,
     pub clipboard: &'a dyn Fn() -> Option<String>,
 }
 
@@ -568,7 +568,7 @@ impl Vim {
             // ^R{register}: type its contents.
             let reg = if k == ctrl('w') { Some('"') } else { Some(k) };
             if let Some(r) = self.fetch(reg, view).filter(|_| !k.is_control() || k == ctrl('w')) {
-                doc.type_text(&r.text, false);
+                doc.type_text(&r.text, Typing::LITERAL);
             }
             return;
         }
@@ -629,7 +629,7 @@ impl Vim {
                     let col = p - ls;
                     if os + col < line_end(doc, other) {
                         let ch: String = doc.buffer.slice(os + col..os + col + 1);
-                        doc.type_text(&ch, false);
+                        doc.type_text(&ch, Typing::LITERAL);
                     }
                 }
             }
@@ -654,7 +654,7 @@ impl Vim {
                 if self.mode == Mode::Replace {
                     self.overwrite_next(doc);
                 }
-                doc.type_text(&c.to_string(), view.auto_close);
+                doc.type_text(&c.to_string(), view.typing);
             }
             _ => {}
         }
@@ -1840,7 +1840,7 @@ impl Vim {
                         self.search = Some((text, fwd));
                     }
                     let pos = doc.buffer.selections.primary().head;
-                    let view = View { first_line: 0, last_line: 0, auto_close: false, clipboard: &|| None };
+                    let view = View { first_line: 0, last_line: 0, typing: Typing::LITERAL, clipboard: &|| None };
                     if let Some((p, _)) = self.motion(doc, &view, pos, 'n', None, None, false, fx) {
                         doc.buffer.selections = Selections::single(Selection::caret(p));
                     }
@@ -2145,7 +2145,7 @@ mod tests {
 
     fn feed(vim: &mut Vim, doc: &mut Document, keys: &str) {
         let clip = || None;
-        let view = View { first_line: 0, last_line: 40, auto_close: false, clipboard: &clip };
+        let view = View { first_line: 0, last_line: 40, typing: Typing::LITERAL, clipboard: &clip };
         let mut keys = keys.replace("<Esc>", "\x1b").replace("<CR>", "\r").replace("<BS>", "\x08");
         for c in 'a'..='z' {
             keys = keys.replace(&format!("<C-{c}>"), &ctrl(c).to_string());
@@ -2282,7 +2282,7 @@ mod tests {
         let mut vim = Vim::default();
         doc.buffer.selections = Selections::single(Selection::new(0, 7));
         let clip = || None;
-        let view = View { first_line: 0, last_line: 10, auto_close: false, clipboard: &clip };
+        let view = View { first_line: 0, last_line: 10, typing: Typing::LITERAL, clipboard: &clip };
         assert_eq!(vim.feed(&mut doc, &view, 'y'), vec![Effect::Clipboard("(a)\n(b)".into())]);
         assert_eq!(vim.mode, Mode::Normal);
         doc.buffer.selections = Selections::single(Selection::new(0, 3));
@@ -2325,7 +2325,7 @@ mod tests {
         let mut doc = Document::new("x");
         let mut vim = Vim::new();
         let clip = || None;
-        let view = View { first_line: 0, last_line: 10, auto_close: false, clipboard: &clip };
+        let view = View { first_line: 0, last_line: 10, typing: Typing::LITERAL, clipboard: &clip };
         let mut fx = Vec::new();
         for k in ":wq\r".chars() {
             fx.extend(vim.feed(&mut doc, &view, k));
@@ -2338,7 +2338,7 @@ mod tests {
         let mut doc = Document::new("(f x)\n(g y)");
         let mut vim = Vim::new();
         let clip = || None;
-        let view = View { first_line: 0, last_line: 10, auto_close: false, clipboard: &clip };
+        let view = View { first_line: 0, last_line: 10, typing: Typing::LITERAL, clipboard: &clip };
         assert!(vim.feed(&mut doc, &view, ' ').is_empty());
         let (typed, items) = vim.which_key().unwrap();
         assert_eq!(typed, "");
@@ -2373,7 +2373,7 @@ mod tests {
         let mut doc = Document::new("hello world");
         let mut vim = Vim::new();
         let clip = || None;
-        let view = View { first_line: 0, last_line: 10, auto_close: false, clipboard: &clip };
+        let view = View { first_line: 0, last_line: 10, typing: Typing::LITERAL, clipboard: &clip };
         let mut fx = Vec::new();
         for k in "yw".chars() {
             fx.extend(vim.feed(&mut doc, &view, k));
@@ -2381,7 +2381,7 @@ mod tests {
         assert_eq!(fx, vec![Effect::Clipboard("hello ".into())]);
         // A clipboard changed elsewhere is what p puts.
         let other = || Some("X".to_string());
-        let view = View { first_line: 0, last_line: 10, auto_close: false, clipboard: &other };
+        let view = View { first_line: 0, last_line: 10, typing: Typing::LITERAL, clipboard: &other };
         vim.feed(&mut doc, &view, 'p');
         assert_eq!(doc.buffer.text(), "hXello world");
     }

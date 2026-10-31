@@ -44,6 +44,28 @@ impl Lines for Buffer {
     }
 }
 
+/// How typing treats brackets and quotes (Settings > Editor).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Typing {
+    /// An opening bracket or quote also types its closer (or wraps the selection), and typing a
+    /// closer over the same closer steps past it.
+    pub auto_close: bool,
+    /// A typed closing bracket becomes the one that matches the innermost open bracket, as in
+    /// DrRacket: `)` after `[` types `]`.
+    pub match_closers: bool,
+}
+
+impl Typing {
+    /// Types exactly the given text.
+    pub const LITERAL: Typing = Typing { auto_close: false, match_closers: false };
+}
+
+impl Default for Typing {
+    fn default() -> Self {
+        Typing { auto_close: true, match_closers: true }
+    }
+}
+
 impl Document {
     pub fn new(text: &str) -> Self {
         let mut d = Self { buffer: Buffer::new(text), tokens: Default::default(), chars: Vec::new(), synced_version: u64::MAX, expand_stack: Vec::new(), edit_log: Vec::new(), outline_cache: None, outline_headers: Vec::new(), images: Default::default() };
@@ -300,7 +322,8 @@ impl Document {
     // ------------------------------------------------------------------ editing
 
     /// Type text at every cursor, with Racket-aware bracket handling.
-    pub fn type_text(&mut self, text: &str, auto_close: bool) {
+    pub fn type_text(&mut self, text: &str, typing: Typing) {
+        let auto_close = typing.auto_close;
         self.sync();
         self.expand_stack.clear();
         let mut chars = text.chars();
@@ -314,63 +337,66 @@ impl Document {
         };
         let sels = self.buffer.selections.clone();
         let mut edits = Vec::new();
-        let mut carets = Vec::new();
+        // What's selected afterwards: a caret, or the wrapped text (still selected, so typing
+        // again replaces it or wraps it once more).
+        let mut after = Vec::new();
         // Track how positions shift as we build edits front-to-back.
         let mut shift: isize = 0;
         for s in &sels.list {
             let (start, end) = (s.start(), s.end());
             let in_str = self.in_string_or_comment(start);
             let next = self.buffer.char_at(end);
-            let (repl, caret_off): (String, usize) = match c {
+            let (repl, select): (String, Range<usize>) = match c {
                 '(' | '[' | '{' if auto_close && !in_str && !s.is_empty() => {
                     // Wrap the selection.
                     let inner = self.buffer.slice(start..end);
                     let n = inner.chars().count();
-                    (format!("{c}{inner}{}", closer_for(c)), n + 2)
+                    (format!("{c}{inner}{}", closer_for(c)), 1..n + 1)
                 }
                 '(' | '[' | '{' if auto_close && !in_str && next.is_none_or(|n| n.is_whitespace() || matches!(n, ')' | ']' | '}')) => {
-                    (format!("{c}{}", closer_for(c)), 1)
+                    (format!("{c}{}", closer_for(c)), 1..1)
                 }
-                ')' | ']' | '}' if !in_str && s.is_empty() => {
+                ')' | ']' | '}' if !in_str && s.is_empty() && (auto_close || typing.match_closers) => {
                     // DrRacket: insert the closer that matches the innermost open bracket, and
-                    // step over an existing identical closer.
-                    let want = sexp::enclosing_open(&self.tokens, start)
-                        .map(|o| closer_for(self.chars[self.tokens[o].end - 1]))
-                        .unwrap_or(c);
-                    if next == Some(want) {
+                    // step over an existing identical closer, unless a list around the caret
+                    // still needs one: in `(a (b|)` the `)` belongs to `(b`, and `(a` needs
+                    // the new one.
+                    let opener = sexp::enclosing_open(&self.tokens, start).filter(|_| typing.match_closers);
+                    let want = opener.map_or(c, |o| closer_for(self.chars[self.tokens[o].end - 1]));
+                    if next == Some(want) && !sexp::missing_closer(&self.tokens, &self.chars, start) {
                         edits.push(Replace { range: start..start, text: String::new() });
-                        carets.push(((start as isize + shift) as usize) + 1);
+                        after.push(Selection::caret(((start as isize + shift) as usize) + 1));
                         continue;
                     }
-                    (want.to_string(), 1)
+                    (want.to_string(), 1..1)
                 }
                 '"' if auto_close && s.is_empty() => {
                     if next == Some('"') && self.string_ends_at(start + 1) {
                         edits.push(Replace { range: start..start, text: String::new() });
-                        carets.push(((start as isize + shift) as usize) + 1);
+                        after.push(Selection::caret(((start as isize + shift) as usize) + 1));
                         continue;
                     }
                     if in_str {
-                        ("\"".to_string(), 1)
+                        ("\"".to_string(), 1..1)
                     } else if next.is_none_or(is_delimiter) && self.prev_char(start) != Some('\\') {
-                        ("\"\"".to_string(), 1)
+                        ("\"\"".to_string(), 1..1)
                     } else {
-                        ("\"".to_string(), 1)
+                        ("\"".to_string(), 1..1)
                     }
                 }
                 '"' if auto_close && !s.is_empty() && !in_str => {
                     let inner = self.buffer.slice(start..end);
                     let n = inner.chars().count();
-                    (format!("\"{inner}\""), n + 2)
+                    (format!("\"{inner}\""), 1..n + 1)
                 }
-                _ => (c.to_string(), 1),
+                _ => (c.to_string(), 1..1),
             };
             let new_start = (start as isize + shift) as usize;
-            carets.push(new_start + caret_off);
+            after.push(Selection::new(new_start + select.start, new_start + select.end));
             shift += repl.chars().count() as isize - (end - start) as isize;
             edits.push(Replace { range: start..end, text: repl });
         }
-        let after = Selections { list: carets.into_iter().map(Selection::caret).collect(), primary: sels.primary };
+        let after = Selections { list: after, primary: sels.primary };
         let kind = if c.is_whitespace() { EditKind::Other } else { EditKind::Insert };
         self.buffer.apply(edits, Some(after), kind);
     }
@@ -639,6 +665,50 @@ impl Document {
         let n = self.buffer.line_count();
         let lines: Vec<usize> = (0..n).collect();
         self.indent_lines(&lines, false);
+    }
+
+    /// Reindent with Style Guide: lay out each top-level form to fit in `width` columns (see
+    /// `format`), then Reindent All, as one undo step. Returns how many forms were left alone
+    /// because their brackets don't match.
+    pub fn reformat(&mut self, width: usize) -> usize {
+        self.sync();
+        let out = super::format::reformat(&self.chars, &self.tokens, width);
+        self.buffer.begin_group();
+        if !out.edits.is_empty() {
+            // Only whitespace changes, so a cursor keeps its place among the other characters.
+            let mut new = String::new();
+            let mut at = 0;
+            for (r, text) in &out.edits {
+                new.extend(&self.chars[at..r.start]);
+                new.push_str(text);
+                at = r.end;
+            }
+            new.extend(&self.chars[at..]);
+            let new: Vec<char> = new.chars().collect();
+            let old = &self.chars;
+            let map = |p: usize| {
+                // Count the non-space characters before the cursor; the cursor stays glued to
+                // the one on its left (or, after a space, to the one on its right).
+                let n = old[..p].iter().filter(|c| !c.is_whitespace()).count();
+                let glued_left = p > 0 && !old[p - 1].is_whitespace();
+                let mut nth = new.iter().enumerate().filter(|(_, c)| !c.is_whitespace()).map(|(i, _)| i);
+                if glued_left {
+                    nth.nth(n - 1).map_or(new.len(), |i| i + 1)
+                } else {
+                    nth.nth(n).unwrap_or(new.len())
+                }
+            };
+            let mut after = self.buffer.selections.clone();
+            for s in after.list.iter_mut() {
+                *s = Selection::new(map(s.anchor), map(s.head));
+            }
+            let edits = out.edits.into_iter().map(|(range, text)| Replace { range, text }).collect();
+            self.buffer.apply(edits, Some(after), EditKind::Other);
+            self.sync();
+        }
+        self.reindent_all();
+        self.buffer.end_group();
+        out.skipped
     }
 
     /// Toggle `;` line comments on the selected lines.
@@ -1093,11 +1163,11 @@ mod tests {
         let mut d = Document::new(r#"[display "a\n"]"#);
         d.buffer.selections = Selections::single(Selection::caret(13));
         assert!(d.in_string_or_comment(13));
-        d.type_text(")", true);
+        d.type_text(")", Typing::default());
         assert_eq!(d.text(), r#"[display "a\n)"]"#);
         let mut d = Document::new(r#""C:\\""#);
         d.buffer.selections = Selections::single(Selection::caret(5));
-        d.type_text("\"", true);
+        d.type_text("\"", Typing::default());
         assert_eq!(d.text(), r#""C:\\""#);
         assert_eq!(d.buffer.selections.primary().head, 6);
         for src in [r#""abc"#, r#""a\n"#, r#"#"abc"#, "#<<END\nabc", "#|abc", ";abc"] {
@@ -1105,7 +1175,7 @@ mod tests {
             let end = d.buffer.len();
             d.buffer.selections = Selections::single(Selection::caret(end));
             assert!(d.in_string_or_comment(end), "{src}");
-            d.type_text("(", true);
+            d.type_text("(", Typing::default());
             assert_eq!(d.text(), format!("{src}("));
         }
     }
@@ -1146,7 +1216,7 @@ mod tests {
         d.outline();
         for (at, text) in [(21, "\n"), (1, "x"), (10, "z")] {
             d.buffer.selections = Selections::single(Selection::caret(at));
-            d.type_text(text, false);
+            d.type_text(text, Typing::LITERAL);
             let actual = d.outline();
             let mut fresh = Document::new(&d.text());
             assert_eq!(format!("{actual:?}"), format!("{:?}", fresh.outline()));
@@ -1211,38 +1281,123 @@ mod tests {
     }
 
     #[test]
+    fn reformat_is_one_undo_step_and_keeps_the_cursor() {
+        let src = "(define (set=? set1 set2) (cond [(empty? set1) (cond [(empty? set2) true] [else false])] [(empty? set2) (cond [(empty? set1) true] [else false])]))\n";
+        // Caret just after "else" in the last clause.
+        let caret = src.rfind("else").unwrap() + 4;
+        let mut d = doc(src, caret);
+        assert_eq!(d.reformat(102), 0);
+        assert_eq!(
+            d.text(),
+            "(define (set=? set1 set2)\n  (cond [(empty? set1)\n         (cond [(empty? set2) true]\n               [else false])]\n        [(empty? set2)\n         (cond [(empty? set1) true]\n               [else false])]))\n"
+        );
+        let at = d.buffer.selections.primary().head;
+        assert_eq!(&d.text()[at - 5..at + 1], "[else ");
+        d.buffer.undo();
+        assert_eq!(d.text(), src);
+    }
+
+    #[test]
     fn auto_pairs_and_skips_closers() {
         let mut d = doc("", 0);
-        d.type_text("(", true);
+        d.type_text("(", Typing::default());
         assert_eq!(d.text(), "()");
-        d.type_text("a", true);
-        d.type_text(")", true);
+        d.type_text("a", Typing::default());
+        d.type_text(")", Typing::default());
         assert_eq!(d.text(), "(a)");
         assert_eq!(d.buffer.selections.primary().head, 3);
     }
 
     #[test]
+    fn closer_is_inserted_when_an_outer_list_still_needs_one() {
+        // `(a (b|)`: the `)` belongs to `(b`, so typing `)` adds the one `(a` needs.
+        let mut d = doc("(a (b)", 5);
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), "(a (b))");
+        assert_eq!(d.buffer.selections.primary().head, 6);
+        // Once everything is closed, typing `)` again steps over.
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), "(a (b))");
+        assert_eq!(d.buffer.selections.primary().head, 7);
+
+        // `(` typed before `x` doesn't auto-close; closing it after `2` keeps `(define` closed.
+        let src = "(define (f x)\n  (+ (* x 2))\n";
+        let mut d = doc(src, src.find("2)").unwrap() + 1);
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), "(define (f x)\n  (+ (* x 2)))\n");
+
+        // Also with bracket matching off.
+        let typing = Typing { match_closers: false, ..Typing::default() };
+        let mut d = doc("(a (b)", 5);
+        d.type_text(")", typing);
+        assert_eq!(d.text(), "(a (b))");
+    }
+
+    #[test]
+    fn a_broken_form_further_up_doesnt_stop_stepping_over() {
+        let src = "(define x\n\n(define (f y)\n  (g y))\n";
+        let at = src.find("y))").unwrap() + 1;
+        let mut d = doc(src, at);
+        d.type_text(")", Typing::default());
+        assert_eq!(d.text(), src);
+        assert_eq!(d.buffer.selections.primary().head, at + 1);
+    }
+
+    #[test]
     fn close_bracket_matches_opener() {
         let mut d = doc("[a", 2);
-        d.type_text(")", true);
+        d.type_text(")", Typing::default());
         assert_eq!(d.text(), "[a]");
+    }
+
+    #[test]
+    fn close_bracket_as_typed_when_matching_is_off() {
+        let typing = Typing { match_closers: false, ..Typing::default() };
+        // [empty? set false] -> typing ) after "set" keeps the ).
+        let mut d = doc("[empty? set false]", 11);
+        d.type_text(")", typing);
+        assert_eq!(d.text(), "[empty? set) false]");
+        // Typing over the same closer still steps past it.
+        let mut d = doc("(a)", 2);
+        d.type_text(")", typing);
+        assert_eq!(d.text(), "(a)");
+        assert_eq!(d.buffer.selections.primary().head, 3);
+    }
+
+    #[test]
+    fn literal_typing_inserts_closers_as_given() {
+        let mut d = doc("(a)", 2);
+        d.type_text(")", Typing::LITERAL);
+        assert_eq!(d.text(), "(a))");
     }
 
     #[test]
     fn wraps_selection() {
         let mut d = doc("abc", 0);
         d.buffer.selections = Selections::single(Selection::new(0, 3));
-        d.type_text("(", true);
+        d.type_text("(", Typing::default());
         assert_eq!(d.text(), "(abc)");
+        // The wrapped text stays selected, caret at its end, whichever way it was selected.
+        assert_eq!(d.buffer.selections.primary(), Selection::new(1, 4));
+        d.buffer.selections = Selections::single(Selection::new(4, 1));
+        d.type_text("[", Typing::default());
+        assert_eq!(d.text(), "([abc])");
+        assert_eq!(d.buffer.selections.primary(), Selection::new(2, 5));
+        d.type_text("\"", Typing::default());
+        assert_eq!(d.text(), "([\"abc\"])");
+        assert_eq!(d.buffer.selections.primary(), Selection::new(3, 6));
+        // Typing replaces it.
+        d.type_text("x", Typing::default());
+        assert_eq!(d.text(), "([\"x\"])");
     }
 
     #[test]
     fn string_quotes_pair_and_skip() {
         let mut d = doc("", 0);
-        d.type_text("\"", true);
+        d.type_text("\"", Typing::default());
         assert_eq!(d.text(), "\"\"");
-        d.type_text("x", true);
-        d.type_text("\"", true);
+        d.type_text("x", Typing::default());
+        d.type_text("\"", Typing::default());
         assert_eq!(d.text(), "\"x\"");
         assert_eq!(d.buffer.selections.primary().head, 3);
     }
@@ -1298,7 +1453,7 @@ mod tests {
         d.select_next_occurrence();
         d.select_next_occurrence();
         assert_eq!(d.buffer.selections.list.len(), 2);
-        d.type_text("x", true);
+        d.type_text("x", Typing::default());
         assert_eq!(d.text(), "x bar x");
     }
 
@@ -1340,7 +1495,7 @@ mod tests {
         let mut d = doc("(define (f x)\n  (+ x 1))", 0);
         d.buffer.selections = Selections { list: vec![Selection::caret(1), Selection::caret(16)], primary: 0 };
         for t in ["'", "(", "\"", "x", ";"] {
-            d.type_text(t, true);
+            d.type_text(t, Typing::default());
             d.sync();
             assert_eq!(d.tokens_cached(), &lexer::lex(&d.text())[..]);
         }
@@ -1421,7 +1576,7 @@ mod checked_rename_tests {
         for reload in [false,true] {
             let mut doc = Document::new("(f x x)");
             let version = doc.version();
-            if reload { doc.buffer.set_text("(f y y)"); } else { doc.type_text("prefix",false); }
+            if reload { doc.buffer.set_text("(f y y)"); } else { doc.type_text("prefix", Typing::LITERAL); }
             let text = doc.text(); let changed_version = doc.version(); let selections = doc.buffer.selections.clone();
             assert_eq!(doc.rename_checked(version,"x",&[3..4,5..6],"long"),Err(RenameError::StaleDocument));
             assert_eq!(doc.text(),text); assert_eq!(doc.version(),changed_version);
@@ -1445,7 +1600,7 @@ mod checked_rename_tests {
             for _ in 0..depth {
                 doc.buffer.begin_group();
             }
-            doc.type_text(" ", false);
+            doc.type_text(" ", Typing::LITERAL);
             let before = doc.text();
             let version = doc.version();
             doc.rename_checked(version, "x", &[6..7, 4..5], "λ-long").unwrap();

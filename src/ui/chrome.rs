@@ -372,15 +372,12 @@ impl App {
                 None => self.run_command(Command::NewTerminal),
             }
         }
-        let (errors, warnings) = self
-            .active_tab()
-            .map(|t| {
-                let d = &t.editor.deco;
-                (d.shown_diagnostics().filter(|x| x.severity == crate::editor::view::Severity::Error).count(), d.shown_diagnostics().filter(|x| x.severity == crate::editor::view::Severity::Warning).count())
-            })
-            .unwrap_or((0, 0));
-        let problems_color = if errors > 0 { Some(theme.error) } else { None };
-        if icon_button_sized(&mut bar, &theme, if errors > 0 { ic::ERROR } else { ic::CHECK_CIRCLE }, &format!("{errors} errors, {warnings} warnings"), 26.0, 17.0, problems_color, false).clicked() {
+        // The same problems as the Problems panel it opens, failed tests included.
+        let list = self.active_tab().map(|t| crate::ui::problems::problems(&t.editor)).unwrap_or_default();
+        let tip = if list.is_empty() { "No problems".to_string() } else { crate::ui::problems::summary(&list) };
+        let failing = list.iter().any(|p| p.kind != crate::ui::problems::ProblemKind::Warning);
+        let problems_color = failing.then_some(theme.error);
+        if icon_button_sized(&mut bar, &theme, if failing { ic::ERROR } else { ic::CHECK_CIRCLE }, &tip, 26.0, 17.0, problems_color, false).clicked() {
             self.layout.show(PanelItem::Problems, Dock::Bottom);
         }
         if icon_button_sized(&mut bar, &theme, ic::TOC, "Outline", 26.0, 17.0, None, self.layout.is_visible(PanelItem::Outline)).clicked() {

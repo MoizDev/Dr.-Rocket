@@ -27,6 +27,22 @@ pub fn enclosing_open(toks: &[Token], pos: usize) -> Option<usize> {
     None
 }
 
+/// Whether a list around `pos` is still missing its close bracket, so a closer typed at
+/// `pos` should be inserted rather than step over the next one. An unclosed bracket swallows
+/// everything after it, so one counts only up to the next form that starts at column 0
+/// (where a new top-level form begins): a broken form further up doesn't change typing here.
+pub fn missing_closer(toks: &[Token], chars: &[char], pos: usize) -> bool {
+    let mut open = enclosing_open(toks, pos);
+    while let Some(o) = open {
+        if toks[o].partner.is_none() {
+            let at_col0 = |t: &Token| t.start == 0 || chars[t.start - 1] == '\n';
+            return !toks[o + 1..].iter().take_while(|t| t.start < pos).any(|t| at_col0(t) && !t.is_trivia() && t.kind != Kind::Close);
+        }
+        open = enclosing_open(toks, toks[o].start);
+    }
+    false
+}
+
 /// The outermost list containing `pos` (strictly after its open bracket, at or before its
 /// close), from its open bracket to after its close (or `usize::MAX` while it is unclosed).
 pub fn top_level_form(toks: &[Token], pos: usize) -> Option<std::ops::Range<usize>> {
@@ -218,7 +234,7 @@ pub fn expand_selection(toks: &[Token], start: usize, end: usize) -> Option<(usi
 
 /// How DrRacket indents the body of a form, by the form's head.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum HeadType {
+pub(crate) enum HeadType {
     /// `begin`, `cond`, `require`...: a first argument on its own line indents 2, later
     /// lines align with the line above.
     Begin,
@@ -231,7 +247,7 @@ enum HeadType {
 }
 
 /// DrRacket's default table, then its regexps: `^begin`, `^def`, `^(for\*?(/|$)|with-)`.
-fn head_type(head: &str) -> Option<HeadType> {
+pub(crate) fn head_type(head: &str) -> Option<HeadType> {
     use HeadType::*;
     let t = match head {
         "for/fold" | "for/fold:" | "for*/fold" | "for*/fold:" | "for/lists" | "for/lists:" | "for*/lists"

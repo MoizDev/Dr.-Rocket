@@ -1,6 +1,6 @@
 [package]
 name = "drrocket"
-version = "1.0.0-beta.13"
+version = "1.0.0-beta.15"
 edition = "2024"
 description = "Dr. Rocket: a fast, beautiful IDE for Racket"
 license = "MIT OR Apache-2.0"
@@ -43,7 +43,7 @@ ed25519-dalek = { version = "2", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-foundation = { version = "0.3", features = ["NSArray", "NSURL", "NSString", "NSNotification", "NSObject"] }
+objc2-foundation = { version = "0.3", features = ["NSArray", "NSData", "NSError", "NSURL", "NSString", "NSNotification", "NSObject"] }
 objc2-app-kit = { version = "0.3", features = ["NSWindow", "NSToolbar", "NSView", "NSResponder", "NSGraphics", "NSApplication", "NSRunningApplication", "NSButton", "NSControl", "NSMenu", "NSMenuItem", "NSEvent"] }
 winit = { version = "0.30", default-features = false }
 

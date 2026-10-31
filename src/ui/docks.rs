@@ -3,8 +3,8 @@
 
 use crate::app::{App, Dock, PanelItem};
 use crate::commands::Command;
-use crate::ui::widgets::{self, TabIcon, empty_state, icon_button_sized, truncated_label};
-use crate::ui::{self, TAB_BAR_H, ic};
+use crate::ui::widgets::{self, TabIcon, empty_state, icon_button_sized};
+use crate::ui::{self, TAB_BAR_H, ic, problems};
 use egui::{Rect, Stroke, Ui, UiBuilder, pos2, vec2};
 
 impl App {
@@ -167,46 +167,32 @@ impl App {
     fn problems_view(&mut self, ui: &mut Ui) {
         let theme = self.theme.clone();
         let tk = self.tokens();
-        // (tab index, diagnostic index, file title, severity, line, message)
-        let mut items: Vec<(usize, usize, String, crate::editor::view::Severity, usize, String)> = Vec::new();
-        for (ti, t) in self.tabs.iter().enumerate() {
-            for (di, d) in t.editor.deco.diagnostics.iter().enumerate().filter(|(_, d)| t.editor.deco.shown(d)) {
-                let line = t.editor.doc.buffer.line_of(d.range.start);
-                items.push((ti, di, t.title(), d.severity, line, d.message.clone()));
-            }
-        }
+        // Every open file's problems, as (tab index, file title, problem).
+        let items: Vec<(usize, String, problems::Problem)> =
+            self.tabs.iter().enumerate().flat_map(|(ti, t)| problems::problems(&t.editor).into_iter().map(move |p| (ti, t.title(), p))).collect();
         if items.is_empty() {
             empty_state(ui, &theme, ic::CHECK_CIRCLE, "No problems", "Errors from Run and Check Syntax appear here");
             return;
         }
         let mut jump = None;
         egui::ScrollArea::vertical().id_salt("problems").auto_shrink([false, false]).show(ui, |ui| {
-            for (ti, di, title, sev, line, msg) in items.iter() {
+            for (k, (_, title, p)) in items.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 28.0), egui::Sense::click());
                 if resp.hovered() {
                     ui.painter().rect_filled(r, egui::CornerRadius::same(6), tk.hover);
                 }
-                let (glyph, c) = match sev {
-                    crate::editor::view::Severity::Error => (ic::ERROR, theme.error),
-                    crate::editor::view::Severity::Warning => (ic::WARNING, theme.warning),
-                };
-                ui.painter().text(pos2(r.left() + 14.0, r.center().y), egui::Align2::CENTER_CENTER, glyph, ui::icon_font_filled(16.0), c);
-                let loc = format!("{title}:{}", line + 1);
-                let lw = ui.painter().layout_no_wrap(loc.clone(), ui::ui_font(12.5), theme.text_muted).size().x;
-                truncated_label(ui, pos2(r.left() + 30.0, r.center().y), msg.lines().next().unwrap_or(""), ui::ui_font(13.5), theme.text, r.width() - lw - 50.0);
-                ui.painter().text(pos2(r.right() - 10.0, r.center().y), egui::Align2::RIGHT_CENTER, loc, ui::ui_font(12.5), theme.text_muted);
+                problems::paint_row(ui, &theme, r, p, &format!("{title}:{}", p.line + 1));
                 if resp.clicked() {
-                    jump = Some((*ti, *di));
+                    jump = Some(k);
                 }
             }
         });
-        if let Some((ti, k)) = jump {
-            self.active = ti;
-            let t = &mut self.tabs[ti];
-            if let Some(d) = t.editor.deco.diagnostics.get(k).cloned() {
-                t.editor.reveal(d.range);
-                t.editor.request_focus();
-            }
+        if let Some(k) = jump {
+            let (ti, _, p) = &items[k];
+            self.active = *ti;
+            let t = &mut self.tabs[*ti];
+            t.editor.reveal(p.range.clone());
+            t.editor.request_focus();
         }
     }
 }

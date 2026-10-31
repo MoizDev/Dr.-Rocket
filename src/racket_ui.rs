@@ -762,7 +762,8 @@ fn start_run(app: &mut App, i: usize, instrument: Instrument) {
                 app.layout.show(PanelItem::Debugger, Dock::Right);
                 app.layout.show(PanelItem::Interactions, Dock::Bottom);
             }
-            app.tabs[i].rk.input.request_focus();
+            // Keep typing in the code, even when Run was clicked; ⌘2 goes to Interactions.
+            app.tabs[i].editor.request_focus();
         }
         Err(e) => app.toast(format!("Could not run: {e}"), ToastKind::Error),
     }
@@ -1031,6 +1032,10 @@ fn short_test_message(msg: &str) -> String {
     let re = regex::Regex::new(r"^Actual value (.+?) differs from (.+?), the expected value\.?$").expect("valid regex");
     if let Some(c) = re.captures(&one_line) {
         return format!("got {}, expected {}", &c[1], &c[2]);
+    }
+    // A check whose expression raised an error: the error says what went wrong.
+    if let Some((_, err)) = msg.split_once("\n:: ") {
+        return short_test_message(err);
     }
     let re = regex::Regex::new(r"^Actual value (.+?) is not within (.+?) of expected value (.+?)\.?$").expect("valid regex");
     if let Some(c) = re.captures(&one_line) {
@@ -1506,6 +1511,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
             tab.rk.input.set_text(&text);
             submit(app, i);
         }
+        EditorAction::Reformat => app.run_command(Command::ReindentWithStyleGuide),
         EditorAction::Submit | EditorAction::HistoryPrev | EditorAction::HistoryNext => {}
     }
 }
@@ -1658,10 +1664,12 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let font_size = (app.font_size() * 0.85).round().max(11.0);
     let mono = ui::mono(font_size);
     let line_h = (font_size * settings.line_height).round();
+    let style = EditorStyle { theme: &theme, settings: &settings, font_size, mode: EditorMode::Repl };
 
     // Input box at the bottom, sized to its content.
-    let lines = app.tabs[i].rk.input.doc.buffer.line_count().clamp(1, 10) as f32;
-    let input_h = lines * line_h + 16.0;
+    let height = app.tabs[i].rk.input.repl_height(ui, rect.width() - 48.0, &style);
+    let max_height = (line_h * 10.0).min((rect.height() - 90.0).max(line_h));
+    let input_h = height.clamp(line_h, max_height) + 16.0;
     let box_h = input_h + 40.0;
     let pad = 10.0;
     let box_rect = Rect::from_min_max(pos2(rect.left() + pad, rect.bottom() - box_h - pad), pos2(rect.right() - pad, rect.bottom() - pad));
@@ -1733,11 +1741,14 @@ fn interactions_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
     let border = if waiting { theme.info } else if focused { with_alpha(theme.border_focused, 170) } else { tk.island_border };
     ui.painter().rect(box_rect, CornerRadius::same(12), mix(tk.island, theme.text, if theme.dark { 0.035 } else { 0.02 }), Stroke::new(1.0, border), StrokeKind::Inside);
     let ed_rect = Rect::from_min_max(box_rect.min + vec2(14.0, 10.0), pos2(box_rect.right() - 14.0, box_rect.top() + 10.0 + input_h - 16.0));
-    let style = EditorStyle { theme: &theme, settings: &settings, font_size, mode: EditorMode::Repl };
     {
         let mut c = ui.new_child(UiBuilder::new().max_rect(ed_rect));
         c.set_clip_rect(ed_rect.expand(2.0));
         tab.rk.input.show(&mut c, ed_rect, &style);
+    }
+    // Typing can add wrapped rows after the box was measured this frame.
+    if tab.rk.input.repl_height(ui, ed_rect.width(), &style).clamp(line_h, max_height) != input_h - 16.0 {
+        ui.ctx().request_repaint();
     }
     if tab.rk.input.doc.buffer.is_empty() {
         let hint = if tab.rk.memory_pause.is_some() {
@@ -2288,9 +2299,12 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         let v = app.tabs[i].rk.viz.as_mut().unwrap();
         let n = v.trace.steps.len();
         let bar = Rect::from_min_size(rect.min + vec2(6.0, 4.0), vec2(rect.width() - 12.0, 34.0));
+        let show_ends = bar.width() >= 340.0;
+        let show_step_calls = bar.width() >= 520.0;
         let mut b = ui.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        b.set_clip_rect(bar.intersect(ui.clip_rect()));
         b.spacing_mut().item_spacing.x = 2.0;
-        if icon_button_sized(&mut b, &theme, ic::FIRST_PAGE, "First step", 30.0, 20.0, None, false).clicked() {
+        if show_ends && icon_button_sized(&mut b, &theme, ic::FIRST_PAGE, "First step", 30.0, 20.0, None, false).clicked() {
             nav = Some(isize::MIN);
         }
         if icon_button_sized(&mut b, &theme, ic::CHEVRON_LEFT, "Previous step (←)", 30.0, 20.0, None, false).clicked() {
@@ -2306,27 +2320,31 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
         if icon_button_sized(&mut b, &theme, ic::CHEVRON_RIGHT, "Next step (→)", 30.0, 20.0, None, false).clicked() {
             nav = Some(1);
         }
-        if icon_button_sized(&mut b, &theme, ic::LAST_PAGE, "Last step", 30.0, 20.0, None, false).clicked() {
+        if show_ends && icon_button_sized(&mut b, &theme, ic::LAST_PAGE, "Last step", 30.0, 20.0, None, false).clicked() {
             nav = Some(isize::MAX);
         }
-        b.add_space(4.0);
-        if icon_button_sized(&mut b, &theme, ic::STEP_OVER, "Step over: skip what this call does, to where it returns (⇧→)", 30.0, 20.0, None, false).clicked() {
+        if show_step_calls {
+            b.add_space(4.0);
+        }
+        if show_step_calls && icon_button_sized(&mut b, &theme, ic::STEP_OVER, "Step over: skip what this call does, to where it returns (⇧→)", 30.0, 20.0, None, false).clicked() {
             goto = Some(v.trace.step_over(v.current));
         }
-        if icon_button_sized(&mut b, &theme, ic::STEP_OUT, "Step out: to where the running call returns (⇧↑)", 30.0, 20.0, None, false).clicked() {
+        if show_step_calls && icon_button_sized(&mut b, &theme, ic::STEP_OUT, "Step out: to where the running call returns (⇧↑)", 30.0, 20.0, None, false).clicked() {
             goto = Some(v.trace.step_out(v.current));
         }
         b.add_space(8.0);
         let label_x = b.cursor().min.x;
-        let mut rb = b.new_child(UiBuilder::new().max_rect(bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        let right_bar = Rect::from_min_max(pos2(label_x, bar.top()), bar.max);
+        let mut rb = b.new_child(UiBuilder::new().max_rect(right_bar).layout(egui::Layout::right_to_left(egui::Align::Center)));
+        rb.set_clip_rect(right_bar.intersect(ui.clip_rect()));
         rb.spacing_mut().item_spacing.x = 2.0;
-        if icon_button_sized(&mut rb, &theme, ic::REPLAY, "Record again", 30.0, 19.0, None, false).clicked() {
+        if rb.available_width() >= 32.0 && icon_button_sized(&mut rb, &theme, ic::REPLAY, "Record again", 30.0, 19.0, None, false).clicked() {
             rerun = true;
         }
-        if icon_button_sized(&mut rb, &theme, ic::OPEN_IN_FULL, "Fit diagram", 30.0, 18.0, None, v.auto_fit).clicked() {
+        if rb.available_width() >= 32.0 && icon_button_sized(&mut rb, &theme, ic::OPEN_IN_FULL, "Fit diagram", 30.0, 18.0, None, v.auto_fit).clicked() {
             v.auto_fit = true;
         }
-        if icon_button_sized(&mut rb, &theme, ic::MY_LOCATION, "Jump to the next step on the cursor's line", 30.0, 18.0, None, false).clicked() {
+        if rb.available_width() >= 80.0 && icon_button_sized(&mut rb, &theme, ic::MY_LOCATION, "Jump to the next step on the cursor's line", 30.0, 18.0, None, false).clicked() {
             to_cursor_line = true;
         }
         let speed_label = match v.speed {
@@ -2335,7 +2353,8 @@ fn visualizer_panel(app: &mut App, ui: &mut Ui, rect: Rect) {
             s if s < 6.0 => "4×",
             _ => "8×",
         };
-        if crate::ui::widgets::pill_button(&mut rb, &theme, Some((ic::SPEED, theme.text_muted)), speed_label, false, false).on_hover_text("Playback speed").clicked() {
+        let speed_width = rb.painter().layout_no_wrap(speed_label.into(), ui::medium(rb.style().text_styles[&egui::TextStyle::Body].size), theme.text).size().x + 42.0;
+        if rb.available_width() >= speed_width + 48.0 && crate::ui::widgets::pill_button(&mut rb, &theme, Some((ic::SPEED, theme.text_muted)), speed_label, false, false).on_hover_text("Playback speed").clicked() {
             v.speed = match speed_label {
                 "1×" => 2.5,
                 "2×" => 5.0,
@@ -3250,6 +3269,7 @@ mod tests {
         assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
         assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
         assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
+        assert_eq!(short_test_message("check-expect encountered the following error instead of the expected value, 6.\n:: f: expects only 2 arguments, but found 3"), "f: expects only 2 arguments, but found 3");
     }
 
     #[test]
