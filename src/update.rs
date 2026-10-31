@@ -41,8 +41,16 @@ include!(concat!(env!("OUT_DIR"), "/update_test_config.rs"));
 #[cfg(feature = "updater-e2e")]
 pub const CURRENT: &str = TEST_VERSION;
 
+/// Checked once, at startup: after a Linux install replaces the running executable, its own
+/// path names a deleted file, and the old process still cleans up before relaunching.
 #[cfg(feature = "updater-e2e")]
 fn test_sandbox() -> Result<(), String> {
+    static CHECKED: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+    CHECKED.get_or_init(check_test_sandbox).clone()
+}
+
+#[cfg(feature = "updater-e2e")]
+fn check_test_sandbox() -> Result<(), String> {
     let root = Path::new(TEST_ROOT);
     let config = std::env::var_os("DRROCKET_CONFIG_DIR").ok_or("E2E config directory is required")?;
     let config = Path::new(&config).canonicalize().map_err(|e| e.to_string())?;
