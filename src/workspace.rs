@@ -82,7 +82,7 @@ impl Workspace {
                         match notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
                             match result {
                                 Ok(mut ev) => {
-                                    if matches!(ev.kind, notify::EventKind::Access(_) | notify::EventKind::Other) { return; }
+                                    if matches!(ev.kind, notify::EventKind::Access(_) | notify::EventKind::Other) && !ev.need_rescan() { return; }
                                     ev.paths.retain(|p| relevant_path(&root2,p));
                                     if ev.paths.is_empty() && !ev.need_rescan() && !matches!(ev.kind,notify::EventKind::Any) { return; }
                                     if tx.try_send(ev).is_err() { overflow.store(true,Ordering::Relaxed); }
