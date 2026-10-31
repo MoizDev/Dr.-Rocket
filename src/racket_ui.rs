@@ -32,6 +32,8 @@ enum Pending {
     Completions { key: String },
     MacroSteps { tab: u64 },
     Modules { tab: u64 },
+    // P6b compatibility hunk: identical task/response contract to the frozen backend branch.
+    WxmeWrite { reply: std::sync::mpsc::Sender<Result<(), String>> },
 }
 
 /// App-wide Racket state.
@@ -341,9 +343,40 @@ pub fn read_wxme(app: &mut App, path: &Path) -> Result<proto::WxmeFile, String> 
     }
 }
 
-/// Write program text with images in DrRacket's editor format.
-pub fn write_wxme(app: &mut App, path: &Path, text: &str, images: proto::SourceImages) -> Result<(), String> {
-    server_call(app, ServerRequest::WxmeWrite { path: path.to_string_lossy().into_owned(), text: text.to_string(), images }).map(|_| ())
+// P6b integration overlap: task API/routing match backend 0c98bb72 (beta.13 request helpers).
+// All app save callers now use this API; the synchronous write_wxme adapter is retired.
+fn wxme_write_result(result: Result<ServerResponse, String>) -> Result<(), String> {
+    match result {
+        Ok(ServerResponse::WxmeWrite) => Ok(()),
+        Ok(_) => Err("Unexpected Racket save response".into()),
+        Err(e) => Err(e),
+    }
+}
+
+/// A nonblocking WXME write. The caller must retain its captured tab, path,
+/// version and save purpose; only a successful completion may mark that version
+/// saved. Dropping this handle does not cancel a disk write already in progress.
+pub struct WxmeWriteTask {
+    #[allow(dead_code)] // Public backend contract; app callers retain/poll the task itself.
+    pub id: RequestId,
+    reply: Receiver<Result<(), String>>,
+}
+impl WxmeWriteTask {
+    pub(crate) fn new(id:RequestId,reply:Receiver<Result<(),String>>) -> Self { Self {id,reply} }
+    pub fn try_result(&self) -> Option<Result<(), String>> {
+        match self.reply.try_recv() {
+            Ok(result) => Some(result),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Some(Err("Racket save task disconnected".into())),
+        }
+    }
+}
+
+pub fn begin_write_wxme(app: &mut App, path: &Path, text: &str, images: proto::SourceImages) -> Result<WxmeWriteTask, String> {
+    let (reply, rx) = std::sync::mpsc::channel();
+    let req = ServerRequest::WxmeWrite { path: path.to_string_lossy().into_owned(), text: text.into(), images };
+    let id = request(app, req, Pending::WxmeWrite { reply }).ok_or("The Racket server is not running.")?;
+    Ok(WxmeWriteTask::new(id,rx))
 }
 
 /// Does this file start with DrRacket's editor-format (WXME) header?
@@ -410,6 +443,7 @@ fn poll_server(app: &mut App) {
     for (id, res) in results {
         let Some(p) = app.racket.pending.remove(&id) else { continue };
         match (p, res) {
+            (Pending::WxmeWrite { reply }, res) => { let _ = reply.send(wxme_write_result(res)); }
             (Pending::CheckSyntax { tab, version, explicit }, Ok(ServerResponse::CheckSyntax(r))) => apply_check(app, tab, version, explicit, r),
             (Pending::CheckSyntax { explicit: true, .. }, Err(e)) => app.toast(format!("Check Syntax failed: {e}"), ToastKind::Error),
             (Pending::Hover { tab, pos, version }, Ok(ServerResponse::Bluebox(b))) => {
@@ -1363,6 +1397,12 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
             }
         }
         EditorAction::Rename(pos) => {
+            // R8 integration: this hunk overlaps the backend branch's current_semantics guard.
+            if app.tabs[i].rk.checked_version != app.tabs[i].editor.doc.version() {
+                start_check(app,i,false);
+                app.toast("Checking the current buffer; retry Rename when Check Syntax finishes.",ToastKind::Info);
+                return;
+            }
             let tab = &mut app.tabs[i];
             let Some(check) = tab.rk.check.as_ref() else {
                 app.toast(crate::platform::keys("Rename needs Check Syntax information; it runs automatically after edits (or ⇧⌘C)."), ToastKind::Info);
@@ -1375,8 +1415,12 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
                 app.toast(msg, ToastKind::Info);
                 return;
             }
-            let name = tab.editor.doc.buffer.slice(occ[0].0..occ[0].1);
-            app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::rename(tab.id, occ, name));
+            let (start,end) = occ[0];
+            if start >= end || end > tab.editor.doc.buffer.len() {
+                app.toast("Rename locations are invalid; run Check Syntax again.",ToastKind::Error); return;
+            }
+            let name = tab.editor.doc.buffer.slice(start..end);
+            app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::rename(tab.id, tab.editor.doc.version(), occ, name));
         }
         EditorAction::ToggleBreakpoint(line) => {
             let tab = &mut app.tabs[i];
@@ -3087,5 +3131,17 @@ mod tests {
         assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
         assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
         assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
+    }
+
+    #[test]
+    fn wxme_save_task_is_nonblocking_and_response_mapping_rejects_wrong_answers() {
+        use super::{WxmeWriteTask,wxme_write_result,ServerResponse};
+        let (tx,rx) = std::sync::mpsc::channel(); let task = WxmeWriteTask::new(7,rx);
+        assert_eq!(task.id,7); assert!(task.try_result().is_none());
+        tx.send(wxme_write_result(Ok(ServerResponse::WxmeWrite))).unwrap();
+        assert_eq!(task.try_result(),Some(Ok(())));
+        assert!(wxme_write_result(Ok(ServerResponse::Completions(Vec::new()))).is_err());
+        assert_eq!(wxme_write_result(Err("backend failure".into())),Err("backend failure".into()));
+        drop(tx); assert!(task.try_result().unwrap().is_err());
     }
 }

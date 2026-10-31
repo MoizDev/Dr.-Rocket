@@ -814,6 +814,28 @@ impl Document {
         self.buffer.break_undo_group();
     }
 
+    /// Apply a rename only to the exact document snapshot and identifier the user reviewed.
+    /// Every check precedes selection, history, and text mutation.
+    pub fn rename_checked(&mut self, expected_version:u64, old_name:&str, ranges:&[Range<usize>], new_name:&str) -> Result<(),RenameError> {
+        if self.version() != expected_version { return Err(RenameError::StaleDocument); }
+        if old_name.is_empty() || new_name.is_empty() || new_name.chars().any(super::lexer::is_delimiter) {
+            return Err(RenameError::InvalidIdentifier);
+        }
+        if ranges.is_empty() { return Err(RenameError::InvalidRanges); }
+        let mut ordered = ranges.to_vec();
+        ordered.sort_unstable_by_key(|r| (r.start,r.end));
+        let mut end = 0;
+        for range in &ordered {
+            if range.start < end || range.start >= range.end || range.end > self.buffer.len() { return Err(RenameError::InvalidRanges); }
+            if self.buffer.slice(range.clone()) != old_name { return Err(RenameError::ChangedIdentifier); }
+            end = range.end;
+        }
+        // App commands finish a Vim insert group before starting their own transaction.
+        self.buffer.end_group();
+        self.rename(&ordered,new_name);
+        Ok(())
+    }
+
     /// Text of the selections (joined with newlines) or, with no selection, the full lines.
     pub fn copy_text(&self) -> (String, bool) {
         let sels = &self.buffer.selections;
@@ -969,6 +991,21 @@ pub struct OutlineItem {
     pub name_pos: usize,
     pub level: usize,
 }
+
+/// Why a reviewed rename could not be applied. No mutation occurs on any error.
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum RenameError { StaleDocument, InvalidIdentifier, InvalidRanges, ChangedIdentifier }
+impl std::fmt::Display for RenameError {
+    fn fmt(&self,f:&mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            Self::StaleDocument => "The document changed while Rename was open. Run Rename again.",
+            Self::InvalidIdentifier => "The replacement is not a valid identifier.",
+            Self::InvalidRanges => "Rename locations are invalid or overlap. Run Check Syntax again.",
+            Self::ChangedIdentifier => "An identifier at a rename location changed. Run Check Syntax again.",
+        })
+    }
+}
+impl std::error::Error for RenameError {}
 
 #[cfg(test)]
 mod tests {
@@ -1180,5 +1217,42 @@ mod drracket_indentation {
             }
         }
         assert!(files >= 2);
+    }
+}
+
+#[cfg(test)]
+mod checked_rename_tests {
+    use super::*;
+    #[test]
+    fn edits_or_reloads_while_prompt_is_open_refuse_without_mutation() {
+        for reload in [false,true] {
+            let mut doc = Document::new("(f x x)");
+            let version = doc.version();
+            if reload { doc.buffer.set_text("(f y y)"); } else { doc.type_text("prefix",false); }
+            let text = doc.text(); let changed_version = doc.version(); let selections = doc.buffer.selections.clone();
+            assert_eq!(doc.rename_checked(version,"x",&[3..4,5..6],"long"),Err(RenameError::StaleDocument));
+            assert_eq!(doc.text(),text); assert_eq!(doc.version(),changed_version);
+            assert_eq!(doc.buffer.selections,selections);
+        }
+    }
+    #[test]
+    fn invalid_ranges_or_old_text_do_not_touch_history_text_or_selection() {
+        for ranges in [vec![],vec![3..4,3..4],vec![3..6,5..6],vec![Range {start:5,end:3}],vec![Range {start:3,end:100}],vec![3..4,0..1]] {
+            let mut doc = Document::new("(f x x)");
+            let before = doc.buffer.selections.clone();
+            assert!(doc.rename_checked(doc.version(),"x",&ranges,"new").is_err());
+            assert_eq!(doc.text(),"(f x x)"); assert_eq!(doc.version(),0); assert_eq!(doc.buffer.selections,before);
+            assert!(!doc.buffer.undo());
+        }
+    }
+    #[test]
+    fn checked_rename_is_one_separate_undo_step_even_after_vim_insert() {
+        let mut doc = Document::new("(f x x)");
+        doc.buffer.begin_group(); doc.type_text(" ",false);
+        let before = doc.text(); let version = doc.version();
+        doc.rename_checked(version,"x",&[6..7,4..5],"λ-long").unwrap();
+        assert_eq!(doc.text()," (f λ-long λ-long)");
+        assert!(doc.buffer.undo()); assert_eq!(doc.text(),before);
+        assert!(doc.buffer.undo()); assert_eq!(doc.text(),"(f x x)");
     }
 }

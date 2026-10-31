@@ -3,6 +3,8 @@
 pub(crate) mod file_safety;
 mod file_monitor;
 mod reload_images;
+mod saves;
+pub(crate) use saves::{AfterSave, ReviewStamp, SavePurpose};
 
 use crate::commands::{COMMANDS, Command};
 use crate::config::{Recents, Settings};
@@ -254,6 +256,8 @@ pub struct Tab {
     pub lang_changed: bool,
     pub disk_mtime: Option<SystemTime>,
     disk_hash: Option<[u8; 32]>,
+    /// Buffer version represented by the disk baseline, independent of later Revert/undo.
+    disk_version: u64,
     text_format: file_safety::TextFormat,
     original_header: String,
     wxme: bool,
@@ -281,7 +285,7 @@ impl Tab {
         }
     }
     pub fn dirty(&self) -> bool {
-        self.editor.doc.buffer.is_dirty() || self.lang_changed
+        self.editor.doc.buffer.is_dirty() || self.lang_changed || self.editor.doc.version() != self.disk_version
     }
 
     /// Remaining delay for a pending autosave; failures/read-only tabs do not schedule work.
@@ -383,6 +387,7 @@ pub struct App {
     session_write_failed: bool,
     pending_settings: Option<f64>,
     file_monitor: file_monitor::FileMonitor,
+    saves: saves::SaveState,
 
 }
 
@@ -546,6 +551,7 @@ impl App {
             session_write_failed: false,
             pending_settings: None,
             file_monitor: file_monitor::FileMonitor::new(&cc.egui_ctx),
+            saves: Default::default(),
 
         };
         app.apply_theme_overrides();
@@ -698,7 +704,7 @@ impl App {
             rk.input.completion_words = words.clone();
         }
         let zoom = path.as_ref().and_then(|p| self.file_zooms.get(p)).copied().unwrap_or(1.0);
-        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0), disk_hash: None, text_format: Default::default(), original_header: crate::racket::lang::load(text).header, wxme: false, save_failed: false });
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0), disk_hash: None, disk_version:0, text_format: Default::default(), original_header: crate::racket::lang::load(text).header, wxme: false, save_failed: false });
         self.tabs.len() - 1
     }
 
@@ -722,6 +728,7 @@ impl App {
         let n = tab.editor.doc.buffer.len();
         tab.editor.doc.buffer.selections = crate::editor::buffer::Selections::single(crate::editor::buffer::Selection::caret(n));
         tab.editor.doc.buffer.mark_saved();
+        tab.disk_version = tab.editor.doc.version();
         tab.editor.request_focus();
         self.active = i;
     }
@@ -729,6 +736,10 @@ impl App {
     pub fn open_file(&mut self, path: &Path) {
         self.whats_new.front = false;
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Some(id) = self.saving_tab_for_path(&path) {
+            if let Some(k) = self.project_for_tab(id) { self.switch_project(k); }
+            if let Some(i) = self.tabs.iter().position(|t| t.id == id) { self.active = i; self.tabs[i].editor.request_focus(); return; }
+        }
         if let Some(i) = self.tabs.iter().position(|t| t.path.as_deref() == Some(&path)) {
             self.active = i;
             self.tabs[i].editor.request_focus();
@@ -779,8 +790,8 @@ impl App {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
         let hash = file_safety::fingerprint(&bytes);
         if crate::racket_ui::is_wxme(&bytes) {
-            // Backend integration boundary: replace this synchronous helper with request/poll
-            // once the backend agent supplies the nonblocking WXME interface.
+            // WXME reads retain the backend's synchronous interface. Save serialization uses
+            // a separate task API; automatic reconciliation waits until writes finish.
             let w = crate::racket_ui::read_wxme(self, path)?;
             return Ok(Source { text: w.text.replace("\r\n", "\n"), read_only: !w.unsupported.is_empty(), wxme: Some(w), hash, format: Default::default() });
         }
@@ -794,88 +805,9 @@ impl App {
         self.layout.show(PanelItem::Files, Dock::Left);
     }
 
-    pub fn save_tab(&mut self, idx: usize, save_as: bool) -> bool {
-        let Some(tab) = self.tabs.get(idx) else { return false };
-        if let Err(message) = tab.check_writable() {
-            self.tabs[idx].save_failed = true;
-            self.toast(message, ToastKind::Error);
-            return false;
-        }
-        let path = match (&tab.path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => {
-                let mut dlg = rfd::FileDialog::new().add_filter("Racket", &["rkt", "rktl", "rktd", "scrbl", "ss", "scm"]).set_file_name(format!("{}.rkt", tab.title().trim_end_matches(".rkt")));
-                if let Some(ws) = &self.workspace {
-                    dlg = dlg.set_directory(&ws.root);
-                }
-                match dlg.save_file() {
-                    Some(p) => p,
-                    None => return false,
-                }
-            }
-        };
-        let path = path.canonicalize().unwrap_or(path);
-        if self.all_file_paths().iter().any(|(id,p)| *id != self.tabs[idx].id && p == &path) {
-            self.tabs[idx].save_failed = true;
-            self.toast("Save cancelled: this path is already open in another tab.", ToastKind::Error);
-            return false;
-        }
-        let tab = &self.tabs[idx];
-        if tab.path.as_ref() == Some(&path) {
-            let current = file_safety::fingerprint_path(&path);
-            if current.as_ref().ok().copied() != tab.disk_hash {
-                // Preserve the editor version beside the original, without ever replacing it.
-                // Autosave uses this path too: there is no modal, and retries stop.
-                let recovery = self.preserve_conflict(idx, &path);
-                self.tabs[idx].save_failed = true;
-                self.toast(match recovery {
-                    Ok(p) => format!("File changed on disk. Disk version kept; your edits are preserved at {}. Use Revert to load disk, or Save As to choose a new path.", p.display()),
-                    Err(e) => format!("File changed on disk; save stopped. Your edits remain in this tab. Could not create a recovery copy: {e}. Use Save As or Revert."),
-                }, ToastKind::Error);
-                return false;
-            }
-        }
-        let text = self.tabs[idx].save_text(&path);
-        // Text with pasted images is saved in DrRacket's editor format; everything else as text.
-        let images = self.tabs[idx].editor.doc.images.for_text(&text);
-        let saving_wxme = self.tabs[idx].wxme || !images.is_empty();
-        let expected = if self.tabs[idx].path.as_ref() == Some(&path) { self.tabs[idx].disk_hash }
-            else { file_safety::fingerprint_path(&path).ok() };
-        let written = if images.is_empty() && !self.tabs[idx].wxme {
-            crate::config::atomic_write_checked(&path, &self.tabs[idx].text_format.encode(&text), || {
-                let actual = file_safety::fingerprint_path(&path).ok();
-                if actual != expected { Err(std::io::Error::other("File changed while preparing save; use Save As or Revert")) } else { Ok(()) }
-            }).map_err(|e| e.to_string())
-        } else {
-            crate::racket_ui::write_wxme(self, &path, &text, images)
-        };
-        match written {
-            Ok(()) => {
-                self.tabs[idx].path = Some(path.clone());
-                let language = self.tabs[idx].language;
-                crate::racket_ui::remember_language(self, &path, language);
-                let tab = &mut self.tabs[idx];
-                tab.editor.doc.buffer.mark_saved();
-                tab.lang_changed = false;
-                tab.save_failed = false;
-                tab.original_header = crate::racket::lang::load(&text).header;
-                tab.wxme = saving_wxme;
-                tab.disk_hash = if saving_wxme { file_safety::fingerprint_path(&path).ok() }
-                    else { Some(file_safety::fingerprint(&tab.text_format.encode(&text))) };
-                tab.disk_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-                self.recents.add_file(&path);
-                true
-            }
-            Err(e) => {
-                self.tabs[idx].save_failed = true;
-                self.toast(format!("Save failed: {e}"), ToastKind::Error);
-                false
-            }
-        }
-    }
-
     pub fn close_tab(&mut self, id: u64, force: bool) {
         let Some(idx) = self.tabs.iter().position(|t| t.id == id) else { return };
+        if self.saves.has_tab(id) { self.await_save_then(AfterSave::Tab {id,then_quit:false,discard:force}); return; }
         if !force && self.tabs[idx].dirty() {
             self.modal = Modal::ConfirmClose { tab: id, then_quit: false };
             return;
@@ -893,38 +825,15 @@ impl App {
         }
     }
 
-    fn preserve_conflict(&mut self, idx: usize, path: &Path) -> Result<PathBuf, String> {
-        use std::io::Write;
-        let text = self.tabs[idx].save_text(path);
-        let images = self.tabs[idx].editor.doc.images.for_text(&text);
-        for n in 0..10_000 {
-            let copy = path.with_file_name(format!("{}.drrocket-conflict-{n}.rkt", path.file_name().unwrap_or_default().to_string_lossy()));
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-            match options.open(&copy) {
-                Ok(mut f) => {
-                    if images.is_empty() && !self.tabs[idx].wxme {
-                        f.write_all(&self.tabs[idx].text_format.encode(&text)).and_then(|_| f.sync_all()).map_err(|e| e.to_string())?;
-                    } else {
-                        drop(f);
-                        crate::racket_ui::write_wxme(self, &copy, &text, images)?;
-                    }
-                    return Ok(copy);
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        Err("Too many conflict copies".into())
-    }
-
     /// Reconcile ALL open files, independent of workspace watchers. Parked projects are
     /// reconciled on activation; their dirty tabs are always checked before any save.
     /// A periodic check also catches dropped watch events, deletion and atomic replacement.
     fn reload_changed_files(&mut self) {
         let paths = self.all_file_paths();
         self.file_monitor.sync_paths(paths);
+        // Retain monitor results until serialization finishes: a synchronous WXME read
+        // must not queue behind an in-flight write on the shared Racket loader.
+        if self.saves.busy() { return; }
         while let Ok((changes,warnings)) = self.file_monitor.changes.try_recv() {
             for warning in warnings { self.toast(warning,ToastKind::Error); }
             for change in changes {
@@ -933,7 +842,13 @@ impl App {
                 if let Some(k) = parked { self.swap_parked_tabs(k); }
                 if let Some(i) = self.tabs.iter().position(|t| t.id == change.id && t.path.as_ref() == Some(&change.path))
                     && self.tabs[i].disk_hash != change.hash {
-                        if self.tabs[i].dirty() || change.hash.is_none() {
+                        // A queued monitor result can predate our just-completed save.
+                        let current = file_safety::fingerprint_path(&change.path).ok();
+                        if current == self.tabs[i].disk_hash {
+                            if let Some(k) = parked { self.swap_parked_tabs(k); }
+                            continue;
+                        }
+                        if self.tabs[i].dirty() || current.is_none() {
                             if !self.tabs[i].save_failed {
                                 self.tabs[i].save_failed = true;
                                 self.toast(format!("{} changed or disappeared on disk. Autosave paused; Save preserves a conflict copy, or use Save As / Revert.", change.path.display()),ToastKind::Error);
@@ -974,6 +889,7 @@ impl App {
                 t.lang_settings = settings;
                 t.lang_changed = false;
                 t.disk_hash = Some(source.hash);
+                t.disk_version = t.editor.doc.version();
                 t.text_format = source.format;
                 t.disk_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
                 t.save_failed = false;
@@ -990,13 +906,14 @@ impl App {
         let delay = self.settings.autosave_delay_ms as f64 / 1000.0;
         let mut due = Vec::new();
         for (i, t) in self.tabs.iter_mut().enumerate() {
+            if self.saves.has_tab(t.id) { continue; }
             if let Some(wait) = t.autosave_wait(now,delay) {
                 if wait == 0.0 { due.push(i); }
                 else { self.ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait+0.01)); }
             }
         }
         for i in due {
-            self.save_tab(i, false);
+            self.save_tab_for(i, false, SavePurpose::Autosave);
         }
     }
 
@@ -1128,11 +1045,8 @@ impl App {
                 self.save_tab(self.active, true);
             }
             Command::SaveAll => {
-                for i in 0..self.tabs.len() {
-                    if self.tabs[i].dirty() && self.tabs[i].path.is_some() {
-                        self.save_tab(i, false);
-                    }
-                }
+                if self.projects.len() == 1 { self.save_all_projects(); }
+                else { self.save_then(AfterSave::SaveAll {project:Some(self.projects[self.current_project].id)}); }
             }
             Command::CloseTab => {
                 if let Some(id) = self.active_tab().map(|t| t.id) {
@@ -1378,9 +1292,8 @@ impl App {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if !matches!(self.modal, Modal::None) {
-            return;
-        }
+        if self.saves.has_intent() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.cancel_close_intent(); }
+        if !matches!(self.modal, Modal::None) { return; }
         let terminal_focus = self.terminals.iter().any(|t| t.view.has_focus(ctx));
         let vim_focus = self.settings.vim_mode && self.active_tab().is_some_and(|t| t.editor.has_focus(ctx));
         // Terminal owns all keys; Vim owns control keys on platforms where command = Ctrl.
@@ -1578,6 +1491,8 @@ impl App {
     pub fn quit(&mut self) {
         if !self.all_dirty_titles().is_empty() {
             self.modal = Modal::ConfirmQuit;
+        } else if self.saves.busy() {
+            self.await_save_then(AfterSave::Quit {discard:false});
         } else {
             self.quit_confirmed = true;
             self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1683,9 +1598,9 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         // Close requests: confirm unsaved changes.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && !self.all_dirty_titles().is_empty() {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && (!self.all_dirty_titles().is_empty() || self.saves.busy()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.modal = Modal::ConfirmQuit;
+            if !self.saves.closing() { self.quit(); }
         }
         for action in crate::platform::take_menu_actions() {
             match action {
@@ -1718,6 +1633,7 @@ impl eframe::App for App {
         self.autosave(now);
         self.save_session_if_changed(now);
         crate::racket_ui::poll(self, ctx);
+        self.poll_saves();
         self.poll_updates();
     }
 
@@ -1811,7 +1727,7 @@ mod save_tests {
             editor: EditorView::new("partial WXME text", Id::unique("save-test")),
             language, lang_settings: language.default_settings(), lang_changed: false,
             disk_mtime: None, rk: crate::racket_ui::RacketTab::new(1), zoom: 1.0,
-            edit_seen: (0, 0.0), disk_hash: None, text_format: Default::default(), original_header: String::new(), wxme: false, save_failed: false,
+            edit_seen: (0, 0.0), disk_hash: None, disk_version:0, text_format: Default::default(), original_header: String::new(), wxme: false, save_failed: false,
         };
         assert!(tab.check_writable().is_ok());
         tab.editor.read_only = true;
@@ -1868,7 +1784,7 @@ mod format_regression_tests {
         let path = PathBuf::from("current-name.rkt");
         let mut tab = Tab {
             id:1,path:Some(path.clone()),untitled:0,editor:EditorView::new(&loaded.body,Id::unique("format-test")),
-            language,lang_settings:settings,lang_changed:false,disk_mtime:None,disk_hash:Some(file_safety::fingerprint(&bytes)),
+            language,lang_settings:settings,lang_changed:false,disk_mtime:None,disk_hash:Some(file_safety::fingerprint(&bytes)),disk_version:0,
             text_format:format,original_header:loaded.header,wxme:false,save_failed:false,rk:crate::racket_ui::RacketTab::new(1),zoom:1.0,edit_seen:(0,0.0),
         };
         assert!(!tab.dirty());
