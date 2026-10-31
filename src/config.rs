@@ -4,6 +4,9 @@
 //! from Zed's `settings.json` (fonts, cursor, rainbow brackets...) so the editor feels the
 //! same as the user's Zed setup.
 
+mod recovery;
+pub use recovery::{load_recovering, take_recovery_notices, write_preserving_unknown};
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -171,14 +174,7 @@ impl Settings {
     /// Load settings, seeding from Zed on first launch.
     pub fn load() -> Self {
         let path = Self::path();
-        if let Ok(text) = std::fs::read_to_string(&path) {
-            let cleaned = crate::theme::strip_json_comments(&text);
-            match serde_json::from_str(&cleaned) {
-                Ok(s) => return s,
-                Err(e) => eprintln!("drrocket: ignoring invalid {}: {e}", path.display()),
-            }
-            return Settings::default();
-        }
+        if path.exists() { return load_recovering(&path); }
         let s = Self::seed_from_zed().unwrap_or_default();
         let _ = s.save();
         s
@@ -190,7 +186,7 @@ impl Settings {
             std::fs::create_dir_all(dir)?;
         }
         let text = serde_json::to_string_pretty(self).expect("settings serialize");
-        atomic_write(&path, text.as_bytes())
+        write_preserving_unknown::<Self>(&path, &text)
     }
 
     fn seed_from_zed() -> Option<Settings> {
@@ -232,6 +228,10 @@ impl Settings {
 
 /// Write a file atomically (temp file + rename) so a crash never leaves a truncated file.
 pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    atomic_write_checked(path, bytes, || Ok(()))
+}
+
+pub fn atomic_write_checked(path: &Path, bytes: &[u8], check: impl FnOnce() -> std::io::Result<()>) -> std::io::Result<()> {
     use std::io::Write;
     use std::sync::atomic::{AtomicU64, Ordering};
     static NEXT: AtomicU64 = AtomicU64::new(0);
@@ -259,6 +259,7 @@ pub fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         }
         file.sync_all()?;
         drop(file);
+        check()?;
         std::fs::rename(&tmp, path)
     })();
     if result.is_err() {
