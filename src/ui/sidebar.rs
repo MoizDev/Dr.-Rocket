@@ -1,5 +1,8 @@
 //! The left island: Files (Material icons), Outline (definitions), and project Search.
 
+mod search;
+use search::SearchWorker;
+
 use crate::app::App;
 use crate::commands::Command;
 use crate::editor::document::OutlineKind;
@@ -14,6 +17,8 @@ pub struct SidebarState {
     pub search_query: String,
     pub search_results: Vec<SearchHit>,
     search_key: String,
+    search_due: f64,
+    search_worker: SearchWorker,
     pub focus_search: bool,
     /// The closed folder a drag is resting on, and since when: it opens after a moment.
     drag_hover: Option<(PathBuf, f64)>,
@@ -124,9 +129,8 @@ impl App {
             self.toast(format!("There's already a “{}” in “{}”", shown(from), shown(dir)), crate::app::ToastKind::Error);
             return;
         }
-        match std::fs::rename(from, &to) {
+        match self.rename_path(from, &to) {
             Ok(()) => {
-                self.path_moved(from, &to);
                 if let Some(ws) = &mut self.workspace {
                     ws.expand_to(&to);
                 }
@@ -462,10 +466,24 @@ impl App {
             self.sidebar.focus_search = false;
         }
         ui.add_space(8.0);
-        if self.sidebar.search_query != self.sidebar.search_key {
-            self.sidebar.search_key = self.sidebar.search_query.clone();
-            self.sidebar.search_results = self.project_search(&self.sidebar.search_query.clone());
+        let root = self.workspace.as_ref().map(|w| w.root.clone());
+        let revision = self.workspace.as_ref().map(|w| w.index_revision.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(0);
+        let key = format!("{:?}:{revision}:{}:{:?}",root,self.sidebar.search_query,self.tabs.iter().map(|t| (t.id,t.editor.doc.version())).collect::<Vec<_>>());
+        let now = ui.input(|i| i.time);
+        if key != self.sidebar.search_key {
+            self.sidebar.search_key = key;
+            self.sidebar.search_due = now + 0.15;
+            self.sidebar.search_worker.cancel();
+            self.sidebar.search_results.clear();
         }
+        if now >= self.sidebar.search_due && self.sidebar.search_worker.needs_request {
+            let index = self.workspace.as_ref().map(|w| w.index.lock().clone()).unwrap_or_default();
+            let open = self.tabs.iter().filter_map(|t| t.path.clone().map(|p| (p,t.editor.doc.text()))).collect();
+            self.sidebar.search_worker.request(self.sidebar.search_query.clone(),root,index,open,ui.ctx().clone());
+        } else if self.sidebar.search_worker.needs_request {
+            ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64((self.sidebar.search_due-now).max(0.01)));
+        }
+        if let Some(results) = self.sidebar.search_worker.poll() { self.sidebar.search_results = results; }
         let results = self.sidebar.search_results.clone();
         if self.sidebar.search_query.len() >= 2 && results.is_empty() {
             ui.label(egui::RichText::new("No results").color(theme.text_muted));
@@ -520,49 +538,7 @@ impl App {
         }
     }
 
-    /// Literal, case-insensitive search over the project's files (and open buffers).
-    fn project_search(&self, q: &str) -> Vec<SearchHit> {
-        if q.chars().count() < 2 {
-            return Vec::new();
-        }
-        let ql = q.to_lowercase();
-        let mut out = Vec::new();
-        let mut paths: Vec<PathBuf> = match &self.workspace {
-            Some(ws) => ws.index.lock().iter().map(|p| ws.root.join(p)).collect(),
-            None => Vec::new(),
-        };
-        for t in &self.tabs {
-            if let Some(p) = &t.path
-                && !paths.contains(p)
-            {
-                paths.push(p.clone());
-            }
-        }
-        for p in paths {
-            let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("");
-            if !matches!(ext, "rkt" | "rktl" | "rktd" | "scrbl" | "ss" | "scm" | "md" | "txt" | "json" | "toml") {
-                continue;
-            }
-            let text = match self.tabs.iter().find(|t| t.path.as_ref() == Some(&p)) {
-                Some(t) => t.editor.doc.text(),
-                None => match std::fs::read_to_string(&p) {
-                    Ok(s) if s.len() < 2_000_000 => s,
-                    _ => continue,
-                },
-            };
-            for (line, l) in text.lines().enumerate() {
-                let lower = l.to_lowercase();
-                if let Some(bi) = lower.find(&ql) {
-                    let col = lower[..bi].chars().count();
-                    out.push(SearchHit { path: p.clone(), line, col, len: q.chars().count(), text: l.to_string() });
-                    if out.len() >= 2000 {
-                        return out;
-                    }
-                }
-            }
-        }
-        out
-    }
+
 }
 
 #[cfg(test)]

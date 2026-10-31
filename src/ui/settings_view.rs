@@ -279,7 +279,7 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if toggle(ui, &theme, &mut auto).changed() {
                         app.settings.check_for_updates = auto;
-                        let _ = app.settings.save();
+                        app.schedule_settings_save();
                     }
                 });
             });
@@ -385,7 +385,7 @@ impl App {
             });
         });
         if self.settings != before {
-            let _ = self.settings.save();
+            self.schedule_settings_save();
             if self.settings.cursor_color != before.cursor_color || self.settings.rainbow_colors != before.rainbow_colors {
                 self.apply_theme_overrides();
             }

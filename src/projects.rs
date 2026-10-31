@@ -63,12 +63,14 @@ impl App {
             return;
         }
         let cur = &mut self.projects[self.current_project];
+        if let Some(ws) = &mut self.workspace { ws.set_active(false); }
         cur.workspace = self.workspace.take();
         cur.tabs = std::mem::take(&mut self.tabs);
         cur.active = self.active;
         self.current_project = k;
         let next = &mut self.projects[k];
         self.workspace = next.workspace.take();
+        if let Some(ws) = &mut self.workspace { ws.set_active(true); }
         self.tabs = std::mem::take(&mut next.tabs);
         self.active = next.active.min(self.tabs.len().saturating_sub(1));
         if let Some(root) = self.projects[k].root.clone() {
@@ -100,6 +102,8 @@ impl App {
     /// Show `path` as a project: switch to its tab if it is open, use the current tab if it is
     /// empty, otherwise open a new tab.
     pub fn open_project(&mut self, path: &Path) {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path = path.as_path();
         self.whats_new.front = false;
         if let Some(k) = self.projects.iter().enumerate().position(|(k, p)| {
             let root = if k == self.current_project { self.workspace.as_ref().map(|w| w.root.as_path()) } else { p.root.as_deref() };
@@ -182,5 +186,31 @@ impl App {
             })
             .collect();
         (list, self.current_project)
+    }
+}
+
+impl App {
+    pub(crate) fn all_file_paths(&self) -> Vec<(u64,PathBuf)> {
+        self.tabs.iter().chain(self.projects.iter().enumerate().filter(|(k,_)| *k != self.current_project).flat_map(|(_,p)| p.tabs.iter()))
+            .filter_map(|t| t.path.clone().map(|p| (t.id,p))).collect()
+    }
+    pub(crate) fn parked_project_for_tab(&self, id:u64) -> Option<usize> {
+        self.projects.iter().enumerate().position(|(k,p)| k != self.current_project && p.tabs.iter().any(|t| t.id == id))
+    }
+    pub(crate) fn swap_parked_tabs(&mut self, k:usize) { std::mem::swap(&mut self.tabs,&mut self.projects[k].tabs); }
+    pub(crate) fn follow_parked_paths(&mut self, from:&Path,to:&Path) {
+        for (k,p) in self.projects.iter_mut().enumerate() {
+            if k == self.current_project { continue; }
+            for t in &mut p.tabs {
+                if let Some(path) = &t.path && let Ok(rest) = path.strip_prefix(from) { t.path = Some(to.join(rest)); }
+            }
+            if let Some(root) = &p.root && let Ok(rest) = root.strip_prefix(from) {
+                let root = to.join(rest);
+                let mut workspace = Workspace::open(&root,&self.ctx);
+                workspace.set_active(false);
+                p.root = Some(root);
+                p.workspace = Some(workspace);
+            }
+        }
     }
 }

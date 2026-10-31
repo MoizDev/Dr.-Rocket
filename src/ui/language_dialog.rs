@@ -117,7 +117,7 @@ impl App {
                         self.toast("Not a valid identifier", crate::app::ToastKind::Error);
                         return;
                     }
-                    if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab) {
+                    if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab && !t.editor.read_only) {
                         let rs: Vec<std::ops::Range<usize>> = ranges.iter().map(|r| r.0..r.1).collect();
                         t.editor.doc.rename(&rs, &name);
                     }
@@ -141,7 +141,7 @@ impl App {
                 }
                 PromptKind::NewFile { dir } => {
                     let name = p.text.trim();
-                    if name.is_empty() || name.contains('/') {
+                    if name.is_empty() || name.contains(['/', '\\']) || matches!(name, "." | "..") {
                         return;
                     }
                     // `foo` means `foo.rkt`.
@@ -191,13 +191,13 @@ impl App {
                 }
                 PromptKind::RenamePath { path } => {
                     let name = p.text.trim();
-                    if name.is_empty() || name.contains('/') {
+                    if name.is_empty() || name.contains(['/', '\\']) || matches!(name, "." | "..") {
                         return;
                     }
                     let Some(parent) = path.parent() else { return };
                     let to = parent.join(name);
-                    match std::fs::rename(&path, &to) {
-                        Ok(()) => self.path_moved(&path, &to),
+                    match self.rename_path(&path, &to) {
+                        Ok(()) => {},
                         Err(e) => self.toast(format!("Rename failed: {e}"), crate::app::ToastKind::Error),
                     }
                 }
@@ -312,10 +312,11 @@ impl App {
             None => self.modal = Modal::Language(d),
             Some(false) => {}
             Some(true) => {
+                if self.active_tab().is_some_and(|t| t.editor.read_only) { return; }
                 // New files start in the language last chosen.
                 self.settings.default_language = d.language.id().to_string();
                 self.settings.default_language_settings = Some(d.settings.clone());
-                let _ = self.settings.save();
+                self.schedule_settings_save();
                 crate::racket_ui::set_language(self, d.language, d.settings);
             }
         }
