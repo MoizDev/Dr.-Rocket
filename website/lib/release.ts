@@ -1,10 +1,10 @@
 // The release the site offers. The version and file names live in release.json (also read by
 // scripts/fetch-downloads.sh and next.config.ts); this module only derives what pages need.
-import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import release from "../release.json";
 import signedRelease from "../update-signatures.json";
+import { verifiedDownloads } from "./download-provenance.mjs";
 
 export type Os = "mac" | "windows" | "linux";
 export const OSES: Os[] = ["mac", "windows", "linux"];
@@ -34,14 +34,13 @@ const NAMES: Record<Os, { name: string; kind: string }> = {
   linux: { name: "Linux", kind: "x64 tarball with a desktop entry" },
 };
 
-function sizeOf(file: string): string | null {
-  try {
-    const mb = fs.statSync(path.join(process.cwd(), "public", "downloads", file)).size / 1e6;
-    return `${mb < 20 ? Number(mb.toFixed(1)) : Math.round(mb)} MB`;
-  } catch {
-    return null;
-  }
+function sizeOf(file: string): string {
+  const mb = fs.statSync(path.join(process.cwd(), "public", "downloads", file)).size / 1e6;
+  return `${mb < 20 ? Number(mb.toFixed(1)) : Math.round(mb)} MB`;
 }
+
+// Fail the build before offering any platform unless all files, provenance and signatures agree.
+const verified = verifiedDownloads(process.cwd(), release, signedRelease);
 
 export const DOWNLOADS: Record<Os, Download> = Object.fromEntries(
   OSES.map((os) => {
@@ -60,34 +59,7 @@ export const DOWNLOADS: Record<Os, Download> = Object.fromEntries(
   }),
 ) as Record<Os, Download>;
 
-const SITE = "https://doctorocket.com";
-
-/** What the app's updater reads (app/version.json): each file present at build time, with its
- * checksum. The file URLs stay the same across releases (purge the CDN after a release, see
- * CLAUDE.md); a stale copy fails the app's checksum and is never installed. */
+/** All offered platforms have authenticated provenance, matching bytes and valid signatures. */
 export function updateFeed() {
-  const downloads: Partial<Record<Os, { url: string; sha256: string; size: number; signature?: string }>> = {};
-  for (const os of OSES) {
-    const file = release.downloads[os].file;
-    let data: Buffer;
-    try {
-      data = fs.readFileSync(path.join(process.cwd(), "public", "downloads", file));
-    } catch {
-      continue;
-    }
-    downloads[os] = {
-      url: `${SITE}/downloads/${file}`,
-      sha256: crypto.createHash("sha256").update(data).digest("hex"),
-      size: data.length,
-    };
-  }
-  const signed = signedRelease.downloads as Partial<Record<Os, { url: string; sha256: string; signature: string }>>;
-  for (const os of OSES) {
-    const asset = downloads[os];
-    const signature = signed[os];
-    if (asset && signature && signedRelease.version === VERSION && signature.url === asset.url && signature.sha256 === asset.sha256) {
-      asset.signature = signature.signature;
-    }
-  }
-  return { version: VERSION, downloads };
+  return { version: VERSION, downloads: verified };
 }

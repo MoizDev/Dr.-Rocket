@@ -34,7 +34,24 @@ const FEED_VAR: &str = "DRROCKET_UPDATE_FEED";
 const INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 /// The first check waits for startup to settle.
 const FIRST_CHECK: Duration = Duration::from_secs(5);
+#[cfg(not(feature = "updater-e2e"))]
 pub const CURRENT: &str = env!("CARGO_PKG_VERSION");
+#[cfg(feature = "updater-e2e")]
+include!(concat!(env!("OUT_DIR"), "/update_test_config.rs"));
+#[cfg(feature = "updater-e2e")]
+pub const CURRENT: &str = TEST_VERSION;
+
+#[cfg(feature = "updater-e2e")]
+fn test_sandbox() -> Result<(), String> {
+    let root = Path::new(TEST_ROOT);
+    let config = std::env::var_os("DRROCKET_CONFIG_DIR").ok_or("E2E config directory is required")?;
+    let config = Path::new(&config).canonicalize().map_err(|e| e.to_string())?;
+    let exe = std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| e.to_string())?;
+    if !config.starts_with(root) || config == root || !exe.starts_with(root) {
+        return Err("E2E executable and config must stay inside the compiled scratch root".into());
+    }
+    Ok(())
+}
 
 #[cfg(target_os = "macos")]
 const OS: &str = "mac";
@@ -99,7 +116,6 @@ impl Updater {
     /// Starts background checks (every few hours, when `enabled`), and picks up an update
     /// downloaded by an earlier run.
     pub fn start(ctx: &egui::Context, enabled: bool) -> Updater {
-        cleanup_old_exe();
         let shared = Arc::new(Shared {
             status: Mutex::new(Status::Idle),
             changed: Mutex::new(None),
@@ -107,6 +123,12 @@ impl Updater {
             enabled: AtomicBool::new(enabled),
             ctx: ctx.clone(),
         });
+        #[cfg(feature = "updater-e2e")]
+        if let Err(why) = test_sandbox() {
+            *shared.status.lock() = Status::Failed(why);
+            return Updater { shared, wake: None };
+        }
+        cleanup_old_exe();
         let overridden = std::env::var_os(FEED_VAR).is_some();
         // Scripted runs don't touch the network unless a test feed asks them to.
         if std::env::var_os("DRROCKET_AUTOMATION").is_some() && !overridden {
@@ -283,6 +305,8 @@ fn parse(v: &str) -> Option<semver::Version> {
 
 /// What to replace, or why this copy can't update itself.
 fn target() -> Result<Target, String> {
+    #[cfg(feature = "updater-e2e")]
+    test_sandbox()?;
     let exe = std::env::current_exe().and_then(|p| p.canonicalize()).map_err(|e| format!("Couldn't find the app on disk ({e})."))?;
     if std::env::var_os(FEED_VAR).is_none() && is_dev_build(&exe) {
         return Err("This is a development build.".into());
@@ -325,6 +349,8 @@ fn writable(dir: &Path) -> bool {
 }
 
 fn update_dir() -> PathBuf {
+    #[cfg(feature = "updater-e2e")]
+    test_sandbox().expect("scratch-only updater test build used outside its compiled sandbox");
     // A test config (DRROCKET_CONFIG_DIR) gets its own, so a test download is never what the
     // real app finds and installs.
     match std::env::var_os("DRROCKET_CONFIG_DIR") {
@@ -366,11 +392,19 @@ fn verify_with_key(version: &str, os: &str, asset: &Asset, key: &str) -> Result<
 }
 
 fn verify_asset(version: &str, asset: &Asset) -> Result<(), String> {
-    verify_with_key(version, OS, asset, RELEASE_KEY.trim())
+    #[cfg(not(feature = "updater-e2e"))]
+    { verify_with_key(version, OS, asset, RELEASE_KEY.trim()) }
+    #[cfg(feature = "updater-e2e")]
+    {
+        test_sandbox()?;
+        if !asset.url.starts_with(&format!("{TEST_ORIGIN}/")) { return Err("E2E assets must use the compiled loopback HTTPS origin".into()); }
+        verify_with_key(version, OS, asset, TEST_PUBLIC_KEY)
+    }
 }
 
 /// The public half of the release signing key (`release-key.pub`, base64 of the raw 32 bytes).
 /// Every build has it, so no release can ship without the ability to verify its updates.
+#[cfg_attr(feature = "updater-e2e", allow(dead_code))]
 const RELEASE_KEY: &str = include_str!("../release-key.pub");
 
 fn archive_name() -> &'static str {
@@ -489,6 +523,20 @@ fn fetch(url: &str, dest: &Path, timeout: Duration) -> Result<(), String> {
     let secs = timeout.as_secs().to_string();
     let curl = if cfg!(windows) { system_tool("curl.exe") } else { PathBuf::from("curl") };
     let mut c = tool(&curl);
+    // A feed override can be a local JSON fixture; signed assets always require HTTPS.
+    // HTTPS requests may never redirect to HTTP/file, including test builds.
+    if url.starts_with("https://") {
+        c.args(["--proto", "=https", "--proto-redir", "=https"]);
+    }
+    #[cfg(feature = "updater-e2e")]
+    {
+        test_sandbox()?;
+        if !url.starts_with(&format!("{TEST_ORIGIN}/")) { return Err("E2E fetch outside loopback origin".into()); }
+        let ca = update_dir().join("test-ca.pem");
+        std::fs::create_dir_all(update_dir()).map_err(|e| e.to_string())?;
+        std::fs::write(&ca, TEST_CA).map_err(|e| e.to_string())?;
+        c.arg("--cacert").arg(ca);
+    }
     c.args(["-fsSL", "--retry", "2", "--connect-timeout", "20", "--max-time", &secs, "-A", &agent, "-o"]).arg(dest).arg(url);
     if cfg!(windows) {
         // Behind proxies that block certificate revocation lookups, check when possible only.
@@ -497,8 +545,8 @@ fn fetch(url: &str, dest: &Path, timeout: Duration) -> Result<(), String> {
     match c.stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::piped()).output() {
         Ok(o) if o.status.success() => Ok(()),
         Ok(o) => Err(first_line(&o.stderr).unwrap_or_else(|| format!("curl exited with {}", o.status))),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !cfg!(windows) => {
-            let o = tool(Path::new("wget")).args(["-q", "-T", "20", "-U", &agent, "-O"]).arg(dest).arg(url).stdin(Stdio::null()).output().map_err(|_| "neither curl nor wget is installed".to_string())?;
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound && !cfg!(windows) && !cfg!(feature = "updater-e2e") => {
+            let o = tool(Path::new("wget")).args(["--https-only", "-q", "-T", "20", "-U", &agent, "-O"]).arg(dest).arg(url).stdin(Stdio::null()).output().map_err(|_| "neither curl nor wget is installed".to_string())?;
             if o.status.success() { Ok(()) } else { Err(format!("wget exited with {}", o.status)) }
         }
         Err(e) => Err(e.to_string()),
@@ -626,13 +674,26 @@ fn move_or_copy(from: &Path, to: &Path) -> Result<(), String> {
 
 /// Start the newly installed version.
 fn launch(t: &Target) -> bool {
-    // Scripted runs start the binary directly so the new copy inherits their environment
-    // (an invisible window, a test config); otherwise macOS apps open through Launch Services.
+    // Scripted runs start directly so the new copy inherits the automation/config sandbox.
     let automated = std::env::var_os("DRROCKET_AUTOMATION").is_some();
-    match t {
-        Target::Bundle(app) if !automated => Command::new("open").arg("-n").arg(app).spawn().is_ok(),
-        Target::Bundle(app) => Command::new(app.join("Contents/MacOS/drrocket")).spawn().is_ok(),
-        Target::Exe(exe) => Command::new(exe).spawn().is_ok(),
+    let mut command = match t {
+        Target::Bundle(app) if !automated => {
+            let mut c = Command::new("open");
+            c.arg("-n").arg(app);
+            c
+        }
+        Target::Bundle(app) => Command::new(app.join("Contents/MacOS/drrocket")),
+        Target::Exe(exe) => Command::new(exe),
+    };
+    match command.spawn() {
+        Ok(child) => {
+            // Lets the scratch harness reap a relaunched app even if its assertion fails.
+            #[cfg(feature = "updater-e2e")]
+            let _ = std::fs::write(Path::new(TEST_ROOT).join("child.pid"), child.id().to_string());
+            let _ = child;
+            true
+        }
+        Err(_) => false,
     }
 }
 
@@ -661,9 +722,58 @@ mod tests {
         changed = asset.clone();
         changed.url.push_str("?tampered");
         assert!(super::verify_with_key("1.2.3", "windows", &changed, &public).is_err());
+        assert!(super::verify_with_key("1.2.3", "windows", &asset, super::RELEASE_KEY.trim()).is_err());
+        #[cfg(not(feature = "updater-e2e"))]
+        {
+            let mut native = asset.clone();
+            native.signature = encode(&key.sign(super::signature_message("1.2.3", super::OS, &native).as_bytes()).to_bytes());
+            assert!(super::verify_asset("1.2.3", &native).is_err(), "production must reject test keys, including with feed overrides");
+        }
+        for url in ["file:///tmp/test.zip", "http://localhost/test.zip"] {
+            let mut insecure = asset.clone();
+            insecure.url = url.into();
+            insecure.signature = encode(&key.sign(super::signature_message("1.2.3", "windows", &insecure).as_bytes()).to_bytes());
+            assert!(super::verify_with_key("1.2.3", "windows", &insecure, &public).is_err());
+        }
         changed = asset;
         changed.signature.clear();
         assert!(super::verify_with_key("1.2.3", "windows", &changed, &public).is_err());
+    }
+
+    /// Transport/staging/receipt regression using the HTTPS fixture orchestrator. On macOS this
+    /// stops before native extraction; the harness also runs the real app for native installs.
+    #[cfg(feature = "updater-e2e")]
+    #[test]
+    #[ignore = "requires tools/update-e2e.py scratch HTTPS fixture"]
+    fn signed_https_staging() {
+        use super::*;
+        let feed = fetch_feed().expect("local HTTPS feed");
+        let asset = &feed.downloads[OS];
+        download(&feed.version, asset).expect("signed HTTPS download");
+        let archive = verified_archive(&feed.version).expect("reverified receipt and bytes");
+        assert_eq!(staged_version().as_deref(), Some("99.0.0"));
+        let receipt = staged_dir(&feed.version).unwrap().join("receipt.json");
+        let good = std::fs::read(&receipt).unwrap();
+        let mut bad: Receipt = serde_json::from_slice(&good).unwrap();
+        bad.version = "99.0.1".into();
+        std::fs::write(&receipt, serde_json::to_vec(&bad).unwrap()).unwrap();
+        assert!(verified_archive(&feed.version).is_err());
+        std::fs::write(&receipt, good).unwrap();
+        std::fs::write(&archive, b"corrupted after download").unwrap();
+        assert!(verified_archive(&feed.version).is_err());
+        assert!(staged_payload(&feed.version).is_err());
+        let mut mismatched = asset.clone();
+        mismatched.sha256 = "0".repeat(64);
+        assert!(download(&feed.version, &mismatched).is_err());
+        assert!(download("99.0.1", asset).is_err());
+        assert!(download(&feed.version, &Asset { signature: String::new(), ..asset.clone() }).is_err());
+        for name in ["mismatch", "wrong-key"] {
+            let path = Path::new(TEST_ROOT).join(format!("{name}.json"));
+            let bad: Feed = serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+            assert!(download(&bad.version, &bad.downloads[OS]).is_err());
+        }
+        download(&feed.version, asset).unwrap();
+        assert!(verified_archive(&feed.version).is_ok());
     }
 
     #[test]

@@ -10,19 +10,57 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
+
+env:
+  CARGO_BUILD_JOBS: 2
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.identity.outputs.sha }}
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Bind the release tag to this version and immutable commit
+        id: identity
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          # shellcheck disable=SC2016
+          node -e 'const fs=require("fs"); const v=fs.readFileSync("Cargo.toml","utf8").match(/^version = "([^"]+)"/m)[1]; if (process.env.RELEASE_TAG !== `v${v}`) throw Error("Tag/Cargo version mismatch");'
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  assurance:
+    needs: resolve
+    uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  updater:
+    needs: resolve
+    uses: ./.github/workflows/update-test.yml
+    with:
+      ref: ${{ needs.resolve.outputs.sha }}
+
+  windows:
+    needs: [resolve, assurance, updater]
+    permissions:
+      contents: write
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --release
+        run: cargo build --locked --release
       - name: Package
         shell: pwsh
         run: |
@@ -33,27 +71,35 @@ jobs:
           Copy-Item BETA.md "$dir/README.md"
           Copy-Item LICENSE-MIT, LICENSE-APACHE, NOTICE.md "$dir/"
           Copy-Item -Recurse licenses "$dir/licenses"
-          $zip = "Dr. Rocket-$version-windows-x64.zip"
+          $zip = "Dr.Rocket-$version-windows-x64.zip"
           Compress-Archive -Path $dir -DestinationPath $zip
           "ZIP=$zip" | Out-File -FilePath $env:GITHUB_ENV -Append
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.tag }}" "${{ env.ZIP }}" --clobber
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+        shell: bash
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_SHA"
+          gh release upload "$RELEASE_TAG" "$ZIP" --clobber
 
   linux:
+    needs: [resolve, assurance, updater]
+    permissions:
+      contents: write
     # Built on the oldest supported Ubuntu so the binary runs on older glibc versions too.
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ needs.resolve.outputs.sha }}
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: System libraries
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev
       - name: Build
-        run: cargo build --release
+        run: cargo build --locked --release
       - name: Package
         run: |
           version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
@@ -79,4 +125,8 @@ jobs:
       - name: Upload to the release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "${{ inputs.tag }}" "${{ env.TARBALL }}" --clobber
+          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          test "$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)" = "$RELEASE_SHA"
+          gh release upload "$RELEASE_TAG" "$TARBALL" --clobber
