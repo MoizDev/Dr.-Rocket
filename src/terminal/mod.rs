@@ -182,7 +182,7 @@ pub struct TerminalView {
     blink_reset: Instant,
     scroll_accum: f32,
     ctrl_v_translated: bool,
-    paste_requested_at: Option<f64>,
+    paste_requested_frame: Option<u64>,
     keyboard_modifiers: Modifiers,
     v_press_seen: bool,
     last_click: Option<Click>,
@@ -279,7 +279,7 @@ impl TerminalView {
             blink_reset: Instant::now(),
             scroll_accum: 0.0,
             ctrl_v_translated: false,
-            paste_requested_at: None,
+            paste_requested_frame: None,
             keyboard_modifiers: Modifiers::NONE,
             v_press_seen: false,
             last_click: None,
@@ -596,7 +596,7 @@ impl TerminalView {
     }
 
     fn request_paste(&mut self, ui:&egui::Ui) {
-        self.paste_requested_at = Some(ui.input(|i| i.time));
+        self.paste_requested_frame = Some(ui.ctx().cumulative_frame_nr());
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
     }
 
@@ -952,8 +952,13 @@ impl TerminalView {
         let mode = *self.term.lock().mode();
         let modes = KeyModes { app_cursor: mode.contains(TermMode::APP_CURSOR), app_keypad: mode.contains(TermMode::APP_KEYPAD) };
 
-        let explicit_paste = self.paste_requested_at.is_some_and(|t| ui.input(|i| i.time)-t < 1.0);
+        // eframe appends RequestPaste's response after painting, for the next frame.
+        // Consume the allowance in that frame even when the clipboard was empty.
+        let frame = ui.ctx().cumulative_frame_nr();
+        let mut explicit_paste = self.paste_requested_frame.is_some_and(|requested| frame == requested.saturating_add(1));
+        if self.paste_requested_frame.is_some_and(|requested| frame > requested) { self.paste_requested_frame = None; }
         for event in keys::terminal_events(events) {
+            if matches!(event, egui::Event::Key {..} | egui::Event::ModifiersChanged(_) | egui::Event::Text(_) | egui::Event::Ime(_) | egui::Event::Copy | egui::Event::Cut) { explicit_paste = false; }
             if let egui::Event::ModifiersChanged(modifiers) = &event { self.keyboard_modifiers = *modifiers; }
             let modifiers = self.keyboard_modifiers;
             let ctrl_clipboard = !modifiers.mac_cmd && !modifiers.shift && !modifiers.alt && (modifiers.ctrl || !cfg!(target_os = "macos"));
@@ -978,10 +983,11 @@ impl TerminalView {
                     }
                 }
                 egui::Event::Paste(text) => {
-                    self.paste_requested_at = None;
+                    explicit_paste = false;
                     self.on_user_input();
                     self.write(encode_paste(&text, mode.contains(TermMode::BRACKETED_PASTE)));
                 }
+                egui::Event::PasteImage(_) => { explicit_paste = false; }
                 egui::Event::MiddleClickPaste { text, .. } => {
                     self.on_user_input(); self.write(encode_paste(&text,mode.contains(TermMode::BRACKETED_PASTE)));
                 }
@@ -1145,7 +1151,7 @@ mod input_regression_tests {
         feed(&mut terminal,&ctx,vec![egui::Event::Text("later".into())]);
         assert_eq!(terminal.pending_input,b"\x1bblater");
         terminal.pending_input.clear();
-        terminal.paste_requested_at = Some(ctx.input(|i| i.time));
+        terminal.paste_requested_frame = Some(ctx.cumulative_frame_nr().saturating_sub(1));
         feed(&mut terminal,&ctx,vec![egui::Event::Paste("a\tb\nλ".into())]);
         assert_eq!(terminal.pending_input,"a\tb\rλ".as_bytes());
     }
@@ -1160,5 +1166,18 @@ mod input_regression_tests {
         terminal.pending_input.clear();
         feed(&mut terminal,&ctx,vec![key(Key::V,true,Modifiers::NONE),egui::Event::Text("v".into()),key(Key::V,false,Modifiers::NONE)]);
         assert_eq!(terminal.pending_input,b"v");
+    }
+
+    #[test]
+    fn an_empty_explicit_paste_request_cannot_capture_a_later_control_v() {
+        let ctx = egui::Context::default();
+        let mut terminal = TerminalView::spawn(&std::env::temp_dir(),None,&ctx).unwrap();
+        feed(&mut terminal,&ctx,Vec::new());
+        terminal.paste_requested_frame = Some(ctx.cumulative_frame_nr()-1);
+        feed(&mut terminal,&ctx,Vec::new());
+        assert!(terminal.paste_requested_frame.is_none());
+        let ctrl = Modifiers {ctrl:true,command:true,..Default::default()};
+        feed(&mut terminal,&ctx,vec![egui::Event::ModifiersChanged(ctrl),egui::Event::Paste("unrelated clipboard".into())]);
+        assert_eq!(terminal.pending_input,b"\x16");
     }
 }
