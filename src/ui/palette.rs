@@ -23,8 +23,12 @@ pub struct Palette {
     matcher: FuzzyMatcher,
     /// Theme to restore if the theme picker is cancelled.
     original_theme: Option<String>,
+    file_cache: Option<FileCache>,
 }
 
+type FileCache = (Option<std::path::PathBuf>, u64, String, Vec<std::path::PathBuf>, Vec<Item>);
+
+#[derive(Clone)]
 enum Item {
     Command(usize),
     File(std::path::PathBuf, Vec<u32>),
@@ -35,7 +39,7 @@ enum Item {
 
 impl Palette {
     pub fn new(mode: Mode, query: &str) -> Self {
-        Self { mode, query: query.into(), selected: 0, focus: true, matcher: FuzzyMatcher::default(), original_theme: None }
+        Self { mode, query: query.into(), selected: 0, focus: true, matcher: FuzzyMatcher::default(), original_theme: None, file_cache: None }
     }
 
     pub fn themes(current: &str) -> Self {
@@ -77,10 +81,13 @@ impl App {
                 }
             }
             Mode::Files => {
-                let (root, files) = match &self.workspace {
-                    Some(ws) => (Some(ws.root.clone()), ws.index.lock().clone()),
-                    None => (None, Vec::new()),
-                };
+                let root = self.workspace.as_ref().map(|ws| ws.root.clone());
+                let revision = self.workspace.as_ref().map(|ws| ws.index_revision.load(std::sync::atomic::Ordering::Relaxed)).unwrap_or(0);
+                let recent: Vec<_> = self.recents.files.iter().map(|f| f.path.clone()).collect();
+                if let Some((r,v,query,recents,items)) = &p.file_cache
+                    && r == &root && *v == revision && query == &q && recents == &recent {
+                    return (mode,items.clone());
+                }
                 let mut out: Vec<Item> = Vec::new();
                 if q.is_empty() {
                     // Recent files first.
@@ -95,12 +102,14 @@ impl App {
                         out.push(Item::File(recent[i].clone(), idx));
                     }
                 } else {
+                    let files = self.workspace.as_ref().unwrap().index.lock().clone();
                     let strs: Vec<String> = files.iter().map(|f| f.display().to_string()).collect();
                     for (i, _, idx) in p.matcher.rank(&q, strs.iter().map(|s| s.as_str())).into_iter().take(80) {
                         let full = root.as_ref().map(|r| r.join(&files[i])).unwrap_or_else(|| files[i].clone());
                         out.push(Item::File(full, idx));
                     }
                 }
+                p.file_cache = Some((root,revision,q,recent,out.clone()));
                 out
             }
             Mode::Symbols => {

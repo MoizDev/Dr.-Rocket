@@ -1,6 +1,6 @@
 //! Settings sheet and the other modal dialogs.
 
-use crate::app::{App, Modal};
+use crate::app::{AfterSave, App, Modal};
 use crate::commands::Command;
 use crate::config::{CursorShape, IndentStyle};
 use crate::theme::{Theme, with_alpha};
@@ -150,16 +150,12 @@ impl App {
         }
         match choice {
             Some(0) => {
-                self.close_tab(tab, true);
-                if then_quit {
-                    self.modal = Modal::ConfirmQuit;
-                }
+                if then_quit { self.await_save_then(AfterSave::Tab {id:tab,then_quit:true,discard:true}); }
+                else { self.close_tab(tab,true); }
             }
             Some(1) => {}
             Some(2) => {
-                if self.save_tab(idx, false) {
-                    self.close_tab(tab, true);
-                }
+                self.save_then(AfterSave::Tab {id:tab,then_quit,discard:false});
             }
             _ => self.modal = Modal::ConfirmClose { tab, then_quit },
         }
@@ -198,12 +194,7 @@ impl App {
             Some(0) => self.close_project(project, true),
             Some(1) => {}
             Some(2) => {
-                for i in 0..self.tabs.len() {
-                    if self.tabs[i].dirty() && !self.save_tab(i, false) {
-                        return;
-                    }
-                }
-                self.close_project(project, true);
+                self.save_then(AfterSave::Project {id:self.projects[project].id,discard:false});
             }
             _ => self.modal = Modal::ConfirmCloseProject,
         }
@@ -211,11 +202,7 @@ impl App {
 
     fn confirm_quit_ui(&mut self, ctx: &egui::Context) {
         let dirty = self.all_dirty_titles();
-        if dirty.is_empty() {
-            self.quit_confirmed = true;
-            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-            return;
-        }
+        if dirty.is_empty() { self.quit(); return; }
         let mut choice = None;
         self.dialog(ctx, "Quit with unsaved changes?", 420.0, |app, ui| {
             ui.label(egui::RichText::new(format!("Unsaved: {}", dirty.join(", "))).color(app.theme.text_muted));
@@ -236,17 +223,12 @@ impl App {
         });
         match choice {
             Some(0) => {
-                self.quit_confirmed = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.await_save_then(AfterSave::Quit {discard:true});
             }
             // Cancelling a Restart to Update (or a renderer restart) cancels the restart too.
-            Some(1) => self.restart_on_exit = false,
+            Some(1) => { self.restart_on_exit = false; self.cancel_close_intent(); },
             Some(2) => {
-                if !self.save_all_projects() {
-                    return;
-                }
-                self.quit_confirmed = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.save_then(AfterSave::Quit {discard:false});
             }
             _ => self.modal = Modal::ConfirmQuit,
         }
@@ -279,7 +261,7 @@ impl App {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if toggle(ui, &theme, &mut auto).changed() {
                         app.settings.check_for_updates = auto;
-                        let _ = app.settings.save();
+                        app.schedule_settings_save();
                     }
                 });
             });
@@ -385,7 +367,7 @@ impl App {
             });
         });
         if self.settings != before {
-            let _ = self.settings.save();
+            self.schedule_settings_save();
             if self.settings.cursor_color != before.cursor_color || self.settings.rainbow_colors != before.rainbow_colors {
                 self.apply_theme_overrides();
             }

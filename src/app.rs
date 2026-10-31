@@ -1,5 +1,11 @@
 //! The application: workspace state, the islands layout, commands, files and sessions.
 
+pub(crate) mod file_safety;
+mod file_monitor;
+mod reload_images;
+mod saves;
+pub(crate) use saves::{AfterSave, ReviewStamp, SavePurpose};
+
 use crate::commands::{COMMANDS, Command};
 use crate::config::{Recents, Settings};
 use crate::editor::view::{EditorMode, EditorStyle, EditorView};
@@ -221,12 +227,20 @@ impl Session {
         crate::config::config_dir().join("session.json")
     }
     pub fn load() -> Self {
-        std::fs::read_to_string(Self::path()).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default()
+        crate::config::load_recovering(&Self::path())
     }
-    fn write(json: &str) {
-        let _ = std::fs::create_dir_all(crate::config::config_dir());
-        let _ = crate::config::atomic_write(&Self::path(), json.as_bytes());
+    fn write(json: &str) -> std::io::Result<()> {
+        std::fs::create_dir_all(crate::config::config_dir())?;
+        crate::config::write_preserving_unknown::<Self>(&Self::path(), json)
     }
+}
+
+struct Source {
+    text: String,
+    wxme: Option<crate::racket::protocol::WxmeFile>,
+    hash: [u8; 32],
+    format: file_safety::TextFormat,
+    read_only: bool,
 }
 
 pub struct Tab {
@@ -241,6 +255,15 @@ pub struct Tab {
     /// The language changed since the last save (the header must be rewritten).
     pub lang_changed: bool,
     pub disk_mtime: Option<SystemTime>,
+    disk_hash: Option<[u8; 32]>,
+    /// Buffer version represented by the disk baseline, independent of later Revert/undo.
+    disk_version: u64,
+    text_format: file_safety::TextFormat,
+    original_header: String,
+    wxme: bool,
+    /// Autosave stops after any failed attempt until an explicit save/revert succeeds.
+    save_failed: bool,
+
     pub rk: crate::racket_ui::RacketTab,
     /// The editor's zoom (⌘+ / ⌘-), separate for each file; panels don't zoom.
     pub zoom: f32,
@@ -262,12 +285,27 @@ impl Tab {
         }
     }
     pub fn dirty(&self) -> bool {
-        self.editor.doc.buffer.is_dirty() || self.lang_changed
+        self.editor.doc.buffer.is_dirty() || self.lang_changed || self.editor.doc.version() != self.disk_version
+    }
+
+    /// Remaining delay for a pending autosave; failures/read-only tabs do not schedule work.
+    fn autosave_wait(&mut self, now:f64, delay:f64) -> Option<f64> {
+        let version = self.editor.doc.version();
+        if self.edit_seen.0 != version { self.edit_seen = (version,now); }
+        if self.path.is_none() || !self.dirty() || self.save_failed || self.editor.read_only { return None; }
+        Some((delay - (now-self.edit_seen.1)).max(0.0))
+    }
+
+    fn save_text(&self, path: &Path) -> String {
+        if !self.lang_changed && self.path.as_deref() == Some(path) && !self.original_header.is_empty() {
+            return self.original_header.clone() + &self.editor.doc.text();
+        }
+        crate::racket_ui::save_text(self,path)
     }
 
     fn check_writable(&self) -> Result<(), &'static str> {
         if self.editor.read_only {
-            Err("This file contains unsupported content and is read-only. Open it in DrRacket to save changes.")
+            Err("This file is read-only because its encoding or content cannot be edited safely. The original file is preserved.")
         } else {
             Ok(())
         }
@@ -345,6 +383,12 @@ pub struct App {
     /// The session.json contents last written, and when it was last compared.
     saved_session: String,
     session_checked: f64,
+    pending_session: Option<(String, f64)>,
+    session_write_failed: bool,
+    pending_settings: Option<f64>,
+    file_monitor: file_monitor::FileMonitor,
+    saves: saves::SaveState,
+
 }
 
 /// Frame timing for `DRROCKET_FRAME_STATS`: our UI time, eframe's whole-frame CPU time
@@ -453,12 +497,17 @@ impl App {
             eprintln!("renderer: {} ({:?}, {:?}, driver {} {}), surface {:?}", info.name, info.backend, info.device_type, info.driver, info.driver_info, rs.target_format);
         }
         crate::platform::set_repaint_context(&cc.egui_ctx);
-        crate::platform::install_menu(crate::ui::brand::APP_NAME, &crate::commands::menu_specs());
+        // Native key equivalents bypass egui and cannot inspect terminal/Vim focus. Keep
+        // menus clickable; route command accelerators through handle_shortcuts instead.
+        let mut menus = crate::commands::menu_specs();
+        for entry in menus.iter_mut().flat_map(|m| m.entries.iter_mut().flatten()) { entry.shortcut = None; }
+        crate::platform::install_menu(crate::ui::brand::APP_NAME, &menus);
         egui_extras::install_image_loaders(&cc.egui_ctx);
         ui::install_fonts(&cc.egui_ctx);
         // (Before anything writes the settings file.)
         let updated = crate::ui::whats_new::first_run_after_update();
         let settings = Settings::load();
+        let session = Session::load();
         let updater = crate::update::Updater::start(&cc.egui_ctx, settings.check_for_updates);
         let themes = ThemeRegistry::load();
         let theme = themes.get_or_default(&settings.theme);
@@ -480,7 +529,7 @@ impl App {
             modal: Modal::None,
             toasts: Vec::new(),
             next_id: 1,
-            file_zooms: Session::load().zooms,
+            file_zooms: session.zooms.clone(),
             sidebar: Default::default(),
             ctx: cc.egui_ctx.clone(),
             styled_for: None,
@@ -498,8 +547,15 @@ impl App {
             frame_stats: std::env::var("DRROCKET_FRAME_STATS").ok().map(|_| FrameStats::default()),
             saved_session: String::new(),
             session_checked: 0.0,
+            pending_session: None,
+            session_write_failed: false,
+            pending_settings: None,
+            file_monitor: file_monitor::FileMonitor::new(&cc.egui_ctx),
+            saves: Default::default(),
+
         };
         app.apply_theme_overrides();
+        for notice in crate::config::take_recovery_notices() { app.toast(notice, ToastKind::Error); }
         if !crate::crash::unseen().is_empty() && app.automation.is_none() {
             app.toast(crate::platform::keys("Dr. Rocket quit unexpectedly last time. A report was saved: choose Report a Problem… (☰ menu or ⇧⌘P) to copy it and send it to us."), ToastKind::Error);
         }
@@ -508,7 +564,7 @@ impl App {
         }
         let restore = app.settings.restore_session && open.is_empty() && app.automation.is_none();
         if restore {
-            let s = Session::load();
+            let s = session;
             app.layout = s.layout.clone();
             // Docs has no permanent tab button; it opens on demand (F1, Search Documentation).
             app.layout.remove(PanelItem::Docs);
@@ -608,7 +664,7 @@ impl App {
         self.apply_theme_overrides();
         if persist {
             self.settings.theme = self.theme.name.clone();
-            let _ = self.settings.save();
+            self.schedule_settings_save();
         }
     }
 
@@ -648,7 +704,7 @@ impl App {
             rk.input.completion_words = words.clone();
         }
         let zoom = path.as_ref().and_then(|p| self.file_zooms.get(p)).copied().unwrap_or(1.0);
-        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0) });
+        self.tabs.push(Tab { id, path, untitled, editor, language, lang_settings, lang_changed: false, disk_mtime, rk, zoom, edit_seen: (0, 0.0), disk_hash: None, disk_version:0, text_format: Default::default(), original_header: crate::racket::lang::load(text).header, wxme: false, save_failed: false });
         self.tabs.len() - 1
     }
 
@@ -672,6 +728,7 @@ impl App {
         let n = tab.editor.doc.buffer.len();
         tab.editor.doc.buffer.selections = crate::editor::buffer::Selections::single(crate::editor::buffer::Selection::caret(n));
         tab.editor.doc.buffer.mark_saved();
+        tab.disk_version = tab.editor.doc.version();
         tab.editor.request_focus();
         self.active = i;
     }
@@ -679,12 +736,16 @@ impl App {
     pub fn open_file(&mut self, path: &Path) {
         self.whats_new.front = false;
         let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if let Some(id) = self.saving_tab_for_path(&path) {
+            if let Some(k) = self.project_for_tab(id) { self.switch_project(k); }
+            if let Some(i) = self.tabs.iter().position(|t| t.id == id) { self.active = i; self.tabs[i].editor.request_focus(); return; }
+        }
         if let Some(i) = self.tabs.iter().position(|t| t.path.as_deref() == Some(&path)) {
             self.active = i;
             self.tabs[i].editor.request_focus();
             return;
         }
-        let (text, wxme) = match self.read_source(&path) {
+        let source = match self.read_source(&path) {
             Ok(x) => x,
             Err(e) => {
                 self.toast(format!("Could not open {}: {e}", path.display()), ToastKind::Error);
@@ -699,8 +760,13 @@ impl App {
         {
             self.tabs.clear();
         }
-        let i = self.new_tab(Some(path.clone()), &text);
-        if let Some(w) = wxme {
+        let i = self.new_tab(Some(path.clone()), &source.text);
+        self.tabs[i].disk_hash = Some(source.hash);
+        self.tabs[i].text_format = source.format;
+        self.tabs[i].editor.read_only = source.read_only;
+        if source.read_only { self.toast("Opened read-only: this file is binary or is not valid UTF-8. Original bytes will be preserved.", ToastKind::Info); }
+        self.tabs[i].wxme = source.wxme.is_some();
+        if let Some(w) = source.wxme {
             self.tabs[i].editor.doc.images.load(&w.images);
             if !w.unsupported.is_empty() {
                 // Saving would drop these boxes: keep DrRacket's file intact.
@@ -720,13 +786,17 @@ impl App {
 
     /// A file's program text. Files DrRacket saved in its editor format (with images or boxes)
     /// are read through Racket; their images come back alongside the text.
-    fn read_source(&mut self, path: &Path) -> Result<(String, Option<crate::racket::protocol::WxmeFile>), String> {
+    fn read_source(&mut self, path: &Path) -> Result<Source, String> {
         let bytes = std::fs::read(path).map_err(|e| e.to_string())?;
+        let hash = file_safety::fingerprint(&bytes);
         if crate::racket_ui::is_wxme(&bytes) {
+            // WXME reads retain the backend's synchronous interface. Save serialization uses
+            // a separate task API; automatic reconciliation waits until writes finish.
             let w = crate::racket_ui::read_wxme(self, path)?;
-            return Ok((w.text.replace("\r\n", "\n"), Some(w)));
+            return Ok(Source { text: w.text.replace("\r\n", "\n"), read_only: !w.unsupported.is_empty(), wxme: Some(w), hash, format: Default::default() });
         }
-        Ok((String::from_utf8_lossy(&bytes).replace("\r\n", "\n"), None))
+        let (text, format, read_only) = file_safety::TextFormat::decode(&bytes);
+        Ok(Source { text, format, read_only, wxme: None, hash })
     }
 
     /// Open a folder as a project tab (or switch to it if it is already open).
@@ -735,54 +805,9 @@ impl App {
         self.layout.show(PanelItem::Files, Dock::Left);
     }
 
-    pub fn save_tab(&mut self, idx: usize, save_as: bool) -> bool {
-        let Some(tab) = self.tabs.get(idx) else { return false };
-        if let Err(message) = tab.check_writable() {
-            self.toast(message, ToastKind::Error);
-            return false;
-        }
-        let path = match (&tab.path, save_as) {
-            (Some(p), false) => p.clone(),
-            _ => {
-                let mut dlg = rfd::FileDialog::new().add_filter("Racket", &["rkt", "rktl", "rktd", "scrbl", "ss", "scm"]).set_file_name(format!("{}.rkt", tab.title().trim_end_matches(".rkt")));
-                if let Some(ws) = &self.workspace {
-                    dlg = dlg.set_directory(&ws.root);
-                }
-                match dlg.save_file() {
-                    Some(p) => p,
-                    None => return false,
-                }
-            }
-        };
-        let text = crate::racket_ui::save_text(&self.tabs[idx], &path);
-        // Text with pasted images is saved in DrRacket's editor format; everything else as text.
-        let images = self.tabs[idx].editor.doc.images.for_text(&text);
-        let written = if images.is_empty() {
-            crate::config::atomic_write(&path, text.as_bytes()).map_err(|e| e.to_string())
-        } else {
-            crate::racket_ui::write_wxme(self, &path, &text, images)
-        };
-        match written {
-            Ok(()) => {
-                self.tabs[idx].path = Some(path.clone());
-                let language = self.tabs[idx].language;
-                crate::racket_ui::remember_language(self, &path, language);
-                let tab = &mut self.tabs[idx];
-                tab.editor.doc.buffer.mark_saved();
-                tab.lang_changed = false;
-                tab.disk_mtime = std::fs::metadata(&path).ok().and_then(|m| m.modified().ok());
-                self.recents.add_file(&path);
-                true
-            }
-            Err(e) => {
-                self.toast(format!("Save failed: {e}"), ToastKind::Error);
-                false
-            }
-        }
-    }
-
     pub fn close_tab(&mut self, id: u64, force: bool) {
         let Some(idx) = self.tabs.iter().position(|t| t.id == id) else { return };
+        if self.saves.has_tab(id) { self.await_save_then(AfterSave::Tab {id,then_quit:false,discard:force}); return; }
         if !force && self.tabs[idx].dirty() {
             self.modal = Modal::ConfirmClose { tab: id, then_quit: false };
             return;
@@ -800,47 +825,76 @@ impl App {
         }
     }
 
-    /// Reload buffers whose files changed on disk (when they have no unsaved edits).
+    /// Reconcile ALL open files, independent of workspace watchers. Parked projects are
+    /// reconciled on activation; their dirty tabs are always checked before any save.
+    /// A periodic check also catches dropped watch events, deletion and atomic replacement.
     fn reload_changed_files(&mut self) {
-        let changed: Vec<PathBuf> = match &mut self.workspace {
-            Some(ws) => std::mem::take(&mut ws.changed_files),
-            None => return,
-        };
-        if changed.is_empty() {
-            return;
-        }
-        let stale: Vec<(usize, PathBuf)> = self
-            .tabs
-            .iter()
-            .enumerate()
-            .filter_map(|(i, tab)| {
-                let p = tab.path.as_ref()?;
-                let mtime = std::fs::metadata(p).ok().and_then(|m| m.modified().ok());
-                (changed.contains(p) && mtime != tab.disk_mtime && !tab.dirty()).then(|| (i, p.clone()))
-            })
-            .collect();
-        for (i, p) in stale {
-            let mtime = std::fs::metadata(&p).ok().and_then(|m| m.modified().ok());
-            if let Ok((text, wxme)) = self.read_source(&p) {
-                // The editor shows the program without DrRacket's hidden header.
-                let (_, _, body) = crate::racket_ui::load_text(self, Some(&p), &text);
-                let tab = &mut self.tabs[i];
-                if let Some(w) = wxme {
-                    tab.editor.read_only |= !w.unsupported.is_empty();
-                    tab.editor.doc.images.load(&w.images);
+        let paths = self.all_file_paths();
+        self.file_monitor.sync_paths(paths);
+        // Retain monitor results until serialization finishes: a synchronous WXME read
+        // must not queue behind an in-flight write on the shared Racket loader.
+        if self.saves.busy() { return; }
+        while let Ok((changes,warnings)) = self.file_monitor.changes.try_recv() {
+            for warning in warnings { self.toast(warning,ToastKind::Error); }
+            for change in changes {
+                // Temporarily borrow the parked tabs without activating the project or its backend.
+                let parked = self.parked_project_for_tab(change.id);
+                if let Some(k) = parked { self.swap_parked_tabs(k); }
+                if let Some(i) = self.tabs.iter().position(|t| t.id == change.id && t.path.as_ref() == Some(&change.path))
+                    && self.tabs[i].disk_hash != change.hash {
+                        // A queued monitor result can predate our just-completed save.
+                        let current = file_safety::fingerprint_path(&change.path).ok();
+                        if current == self.tabs[i].disk_hash {
+                            if let Some(k) = parked { self.swap_parked_tabs(k); }
+                            continue;
+                        }
+                        if self.tabs[i].dirty() || current.is_none() {
+                            if !self.tabs[i].save_failed {
+                                self.tabs[i].save_failed = true;
+                                self.toast(format!("{} changed or disappeared on disk. Autosave paused; Save preserves a conflict copy, or use Save As / Revert.", change.path.display()),ToastKind::Error);
+                            }
+                        } else { self.reload_tab(i,&change.path); }
                 }
-                let text = body;
-                let sel = tab.editor.doc.buffer.selections.clone();
-                tab.editor.doc.buffer.set_text(&text);
-                tab.editor.doc.buffer.mark_saved();
-                let n = tab.editor.doc.buffer.len();
-                let mut sel = sel;
-                for s in sel.list.iter_mut() {
-                    *s = crate::editor::buffer::Selection::new(s.anchor.min(n), s.head.min(n));
-                }
-                tab.editor.doc.buffer.selections = sel;
-                tab.disk_mtime = mtime;
+                if let Some(k) = parked { self.swap_parked_tabs(k); }
             }
+        }
+        if let Some(ws) = &mut self.workspace { ws.changed_files.clear(); }
+    }
+
+    fn reload_tab(&mut self, i: usize, path: &Path) {
+        match self.read_source(path) {
+            Ok(source) => {
+                let (language, settings, body) = crate::racket_ui::load_text(self, Some(path), &source.text);
+                let images = source.wxme.as_ref().map(|w| w.images.clone()).unwrap_or_default();
+                let (body, merged_images) = match reload_images::merge(&self.tabs[i].editor.doc.images,&body,&images) {
+                    Ok(result) => result,
+                    Err(e) => { self.toast(format!("Could not reload {}: {e}",path.display()),ToastKind::Error); return; }
+                };
+                let t = &mut self.tabs[i];
+                t.original_header = crate::racket::lang::load(&source.text).header;
+                t.wxme = source.wxme.is_some();
+                t.editor.read_only = source.read_only;
+                t.editor.doc.images = merged_images;
+                // One undoable reload, retaining the previous content for explicit undo.
+                let b = &mut t.editor.doc.buffer;
+                let len = b.len();
+                b.end_group();
+                b.break_undo_group();
+                let mut selections = b.selections.clone();
+                let new_len = body.chars().count();
+                for s in &mut selections.list { *s = crate::editor::buffer::Selection::new(s.anchor.min(new_len),s.head.min(new_len)); }
+                b.apply(vec![crate::editor::buffer::Replace { range: 0..len, text: body }], Some(selections), crate::editor::buffer::EditKind::Other);
+                b.mark_saved();
+                t.language = language;
+                t.lang_settings = settings;
+                t.lang_changed = false;
+                t.disk_hash = Some(source.hash);
+                t.disk_version = t.editor.doc.version();
+                t.text_format = source.format;
+                t.disk_mtime = std::fs::metadata(path).ok().and_then(|m| m.modified().ok());
+                t.save_failed = false;
+            }
+            Err(e) => self.toast(format!("Could not reload {}: {e}", path.display()), ToastKind::Error),
         }
     }
 
@@ -852,20 +906,14 @@ impl App {
         let delay = self.settings.autosave_delay_ms as f64 / 1000.0;
         let mut due = Vec::new();
         for (i, t) in self.tabs.iter_mut().enumerate() {
-            let v = t.editor.doc.version();
-            if t.edit_seen.0 != v {
-                t.edit_seen = (v, now);
-            }
-            if t.path.is_some() && t.dirty() {
-                if now - t.edit_seen.1 >= delay {
-                    due.push(i);
-                } else {
-                    self.ctx.request_repaint_after(std::time::Duration::from_secs_f64(delay - (now - t.edit_seen.1) + 0.01));
-                }
+            if self.saves.has_tab(t.id) { continue; }
+            if let Some(wait) = t.autosave_wait(now,delay) {
+                if wait == 0.0 { due.push(i); }
+                else { self.ctx.request_repaint_after(std::time::Duration::from_secs_f64(wait+0.01)); }
             }
         }
         for i in due {
-            self.save_tab(i, false);
+            self.save_tab_for(i, false, SavePurpose::Autosave);
         }
     }
 
@@ -910,7 +958,8 @@ impl App {
 
     pub fn save_session(&mut self) {
         if let Ok(json) = serde_json::to_string_pretty(&self.session()) {
-            Session::write(&json);
+            if let Err(e) = Session::write(&json) { self.session_write_failed = true; self.toast(format!("Could not save session: {e}"), ToastKind::Error); return; }
+            self.session_write_failed = false;
             self.saved_session = json;
         }
     }
@@ -918,16 +967,28 @@ impl App {
     /// Keep session.json current as files and panels change (cheap: writes only on change),
     /// so a crash or a dev-loop restart reopens the same workspace.
     fn save_session_if_changed(&mut self, now: f64) {
-        if self.automation.is_some() || now - self.session_checked < 1.0 {
-            return;
+        if let Some(due) = self.pending_settings {
+            if now >= due {
+                self.pending_settings = None;
+                if let Err(e) = self.settings.save() { self.toast(format!("Could not save settings: {e}"), ToastKind::Error); }
+            } else { self.ctx.request_repaint_after(std::time::Duration::from_secs_f64(due-now)); }
         }
+        if self.session_write_failed || self.automation.is_some() || now - self.session_checked < 0.25 { return; }
         self.session_checked = now;
-        if let Ok(json) = serde_json::to_string_pretty(&self.session())
-            && json != self.saved_session
-        {
-            Session::write(&json);
-            self.saved_session = json;
+        if let Ok(json) = serde_json::to_string_pretty(&self.session()) {
+            if json == self.saved_session { self.pending_session = None; return; }
+            match &self.pending_session {
+                Some((pending, since)) if pending == &json && now - since >= 0.75 => self.save_session(),
+                Some((pending, _)) if pending == &json => {},
+                _ => self.pending_session = Some((json, now)),
+            }
+            self.ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
+    }
+
+    pub(crate) fn schedule_settings_save(&mut self) {
+        self.pending_settings = Some(self.ctx.input(|i| i.time) + 0.4);
+        self.ctx.request_repaint_after(std::time::Duration::from_millis(400));
     }
 
     // ------------------------------------------------------------------ commands
@@ -942,6 +1003,8 @@ impl App {
         {
             self.whats_new.front = false;
         }
+        if matches!(cmd, Command::InsertLambda | Command::CommentOutWithBox | Command::CommentOutWithDatum | Command::ReindentAll | Command::ChooseLanguage)
+            && self.active_tab().is_some_and(|t| t.editor.read_only) { return; }
         match cmd {
             Command::WhatsNew => self.show_whats_new(),
             Command::CloseTab if self.whats_new.front => {
@@ -982,11 +1045,8 @@ impl App {
                 self.save_tab(self.active, true);
             }
             Command::SaveAll => {
-                for i in 0..self.tabs.len() {
-                    if self.tabs[i].dirty() && self.tabs[i].path.is_some() {
-                        self.save_tab(i, false);
-                    }
-                }
+                if self.projects.len() == 1 { self.save_all_projects(); }
+                else { self.save_then(AfterSave::SaveAll {project:Some(self.projects[self.current_project].id)}); }
             }
             Command::CloseTab => {
                 if let Some(id) = self.active_tab().map(|t| t.id) {
@@ -1052,16 +1112,16 @@ impl App {
             Command::ZoomReset => self.zoom_active(None),
             Command::ToggleVimMode => {
                 self.settings.vim_mode = !self.settings.vim_mode;
-                let _ = self.settings.save();
+                self.schedule_settings_save();
                 self.toast(if self.settings.vim_mode { "Vim mode on: Space shows the leader keys, : opens commands" } else { "Vim mode off" }, ToastKind::Info);
             }
             Command::ToggleRainbowBrackets => {
                 self.settings.rainbow_brackets = !self.settings.rainbow_brackets;
-                let _ = self.settings.save();
+                self.schedule_settings_save();
             }
             Command::ToggleBindingArrows => {
                 self.settings.show_binding_arrows = !self.settings.show_binding_arrows;
-                let _ = self.settings.save();
+                self.schedule_settings_save();
             }
             Command::InsertLambda => {
                 if let Some(t) = self.active_tab_mut() {
@@ -1086,24 +1146,7 @@ impl App {
             }
             Command::Revert => {
                 let Some(path) = self.active_tab().and_then(|t| t.path.clone()) else { return };
-                match self.read_source(&path) {
-                    Ok((text, wxme)) => {
-                        let (_, _, body) = crate::racket_ui::load_text(self, Some(&path), &text);
-                        if let Some(t) = self.active_tab_mut() {
-                            if let Some(w) = wxme {
-                                t.editor.read_only |= !w.unsupported.is_empty();
-                                t.editor.doc.images.load(&w.images);
-                            }
-                            // One undoable edit: ⌘Z brings the discarded changes back.
-                            let b = &mut t.editor.doc.buffer;
-                            let len = b.len();
-                            b.apply(vec![crate::editor::buffer::Replace { range: 0..len, text: body }], None, crate::editor::buffer::EditKind::Other);
-                            b.mark_saved();
-                            t.lang_changed = false;
-                        }
-                    }
-                    Err(e) => self.toast(format!("Could not read {}: {e}", path.display()), ToastKind::Error),
-                }
+                self.reload_tab(self.active, &path);
             }
             Command::Print => {
                 let light = self.themes.get_or_default("One Light");
@@ -1198,7 +1241,20 @@ impl App {
 
     /// A file or folder was renamed or moved on disk: open tabs, remembered zooms and open
     /// folders in the tree follow it to `to`.
+    pub(crate) fn rename_path(&mut self, from: &Path, to: &Path) -> std::io::Result<()> {
+        let symlink = std::fs::symlink_metadata(from)?.file_type().is_symlink();
+        let canonical = from.canonicalize().unwrap_or_else(|_| from.to_path_buf());
+        file_safety::rename_noreplace(from,to)?;
+        if symlink { self.refresh_tree(); }
+        else {
+            let destination = to.canonicalize().unwrap_or_else(|_| to.to_path_buf());
+            self.path_moved(&canonical,&destination);
+        }
+        Ok(())
+    }
+
     pub fn path_moved(&mut self, from: &Path, to: &Path) {
+        self.follow_parked_paths(from, to);
         let follow = |p: &Path| p.strip_prefix(from).ok().map(|rest| if rest.as_os_str().is_empty() { to.to_path_buf() } else { to.join(rest) });
         for t in self.tabs.iter_mut() {
             if let Some(np) = t.path.as_deref().and_then(follow) {
@@ -1236,28 +1292,12 @@ impl App {
     }
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if !matches!(self.modal, Modal::None) {
-            return;
-        }
-        // egui matches shortcuts ignoring extra Shift/Alt (so ⌘+ works whether "+" needs Shift),
-        // so check the most specific first: ⇧⌘S must not be taken by ⌘S, nor ⌃⇧Tab by ⌃Tab.
-        let mut shortcuts: Vec<(egui::KeyboardShortcut, Command)> = COMMANDS.iter().filter_map(|c| c.shortcut.map(|s| (s, c.cmd))).collect();
-        let weight = |m: egui::Modifiers| [m.alt, m.ctrl, m.shift, m.mac_cmd || m.command].iter().filter(|b| **b).count();
-        shortcuts.sort_by_key(|(s, _)| std::cmp::Reverse(weight(s.modifiers)));
-        let mut fired = Vec::new();
-        ctx.input_mut(|i| {
-            for (s, cmd) in &shortcuts {
-                // Except on symbol keys, Shift and Alt must match exactly: ⇧⌘L is the editor's
-                // select-all-occurrences, not ⌘L.
-                let symbol = s.logical_key.name().chars().count() == 1 && !s.logical_key.name().chars().all(char::is_alphanumeric);
-                if !symbol && (i.modifiers.shift != s.modifiers.shift || i.modifiers.alt != s.modifiers.alt) {
-                    continue;
-                }
-                if i.consume_shortcut(s) {
-                    fired.push(*cmd);
-                }
-            }
-        });
+        if self.saves.has_intent() && ctx.input(|i| i.key_pressed(egui::Key::Escape)) { self.cancel_close_intent(); }
+        if !matches!(self.modal, Modal::None) { return; }
+        let terminal_focus = self.terminals.iter().any(|t| t.view.has_focus(ctx));
+        let vim_focus = self.settings.vim_mode && self.active_tab().is_some_and(|t| t.editor.has_focus(ctx));
+        // Terminal owns all keys; Vim owns control keys on platforms where command = Ctrl.
+        let fired = app_shortcuts(ctx,terminal_focus,vim_focus);
         for c in fired {
             self.run_command(c);
         }
@@ -1451,6 +1491,8 @@ impl App {
     pub fn quit(&mut self) {
         if !self.all_dirty_titles().is_empty() {
             self.modal = Modal::ConfirmQuit;
+        } else if self.saves.busy() {
+            self.await_save_then(AfterSave::Quit {discard:false});
         } else {
             self.quit_confirmed = true;
             self.ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -1509,6 +1551,33 @@ impl App {
     }
 }
 
+/// Consume only shortcuts owned by the app at this focus location.
+fn app_shortcuts(ctx:&egui::Context,terminal_focus:bool,vim_focus:bool) -> Vec<Command> {
+    // egui matches shortcuts ignoring extra Shift/Alt (so ⌘+ works whether "+" needs Shift),
+    // so check the most specific first: ⇧⌘S must not be taken by ⌘S, nor ⌃⇧Tab by ⌃Tab.
+    let mut shortcuts: Vec<(egui::KeyboardShortcut, Command)> = COMMANDS.iter().filter_map(|c| c.shortcut.map(|s| (s, c.cmd))).collect();
+    let weight = |m: egui::Modifiers| [m.alt, m.ctrl, m.shift, m.mac_cmd || m.command].iter().filter(|b| **b).count();
+    shortcuts.sort_by_key(|(s, _)| std::cmp::Reverse(weight(s.modifiers)));
+    let mut fired = Vec::new();
+    ctx.input_mut(|i| {
+        for (s, cmd) in &shortcuts {
+            let palette = *cmd == Command::Palette;
+            if terminal_focus && !palette { continue; }
+            if vim_focus && i.modifiers.ctrl && !i.modifiers.mac_cmd && !palette { continue; }
+            // Except on symbol keys, Shift and Alt must match exactly: ⇧⌘L is the editor's
+            // select-all-occurrences, not ⌘L.
+            let symbol = s.logical_key.name().chars().count() == 1 && !s.logical_key.name().chars().all(char::is_alphanumeric);
+            if !symbol && (i.modifiers.shift != s.modifiers.shift || i.modifiers.alt != s.modifiers.alt) {
+                continue;
+            }
+            if i.consume_shortcut(s) {
+                fired.push(*cmd);
+            }
+        }
+    });
+    fired
+}
+
 impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         if let Some(mut auto) = self.automation.take() {
@@ -1529,9 +1598,9 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
         }
         // Close requests: confirm unsaved changes.
-        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && !self.all_dirty_titles().is_empty() {
+        if ctx.input(|i| i.viewport().close_requested()) && !self.quit_confirmed && (!self.all_dirty_titles().is_empty() || self.saves.busy()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-            self.modal = Modal::ConfirmQuit;
+            if !self.saves.closing() { self.quit(); }
         }
         for action in crate::platform::take_menu_actions() {
             match action {
@@ -1557,11 +1626,14 @@ impl eframe::App for App {
         if let Some(ws) = &mut self.workspace {
             ws.poll();
         }
+        let warnings = self.workspace.as_ref().map(|w| w.take_warnings()).unwrap_or_default();
+        for warning in warnings { self.toast(warning, ToastKind::Error); }
         self.reload_changed_files();
         let now = ctx.input(|i| i.time);
         self.autosave(now);
         self.save_session_if_changed(now);
         crate::racket_ui::poll(self, ctx);
+        self.poll_saves();
         self.poll_updates();
     }
 
@@ -1622,6 +1694,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        if self.pending_settings.take().is_some() { let _ = self.settings.save(); }
         // A downloaded update goes in now; with a restart, the new version is what starts.
         if self.updater.install(self.restart_on_exit) {
             return;
@@ -1654,7 +1727,7 @@ mod save_tests {
             editor: EditorView::new("partial WXME text", Id::unique("save-test")),
             language, lang_settings: language.default_settings(), lang_changed: false,
             disk_mtime: None, rk: crate::racket_ui::RacketTab::new(1), zoom: 1.0,
-            edit_seen: (0, 0.0),
+            edit_seen: (0, 0.0), disk_hash: None, disk_version:0, text_format: Default::default(), original_header: String::new(), wxme: false, save_failed: false,
         };
         assert!(tab.check_writable().is_ok());
         tab.editor.read_only = true;
@@ -1663,5 +1736,61 @@ mod save_tests {
         assert!(tab.check_writable().is_err());
         tab.path = Some(PathBuf::from("another-name.rkt"));
         assert!(tab.check_writable().is_err());
+        for now in [0.0,1.0,100.0] { assert_eq!(tab.autosave_wait(now,0.0),None); }
+        tab.editor.read_only = false;
+        assert_eq!(tab.autosave_wait(100.0,0.0),Some(0.0));
+        tab.save_failed = true;
+        for now in [101.0,102.0,1000.0] { assert_eq!(tab.autosave_wait(now,0.0),None); }
+        // Further edits retain the latch; only an explicit successful save/revert resets it.
+        tab.editor.doc.buffer.set_text("another edit");
+        assert_eq!(tab.autosave_wait(1001.0,0.0),None);
+    }
+}
+
+#[cfg(test)]
+mod shortcut_focus_tests {
+    use super::*;
+    fn press(ctx:&egui::Context,key:egui::Key,mods:egui::Modifiers) {
+        ctx.begin_pass(egui::RawInput { events:vec![egui::Event::ModifiersChanged(mods),egui::Event::Key {key,physical_key:None,pressed:true,repeat:false,modifiers:mods}],..Default::default() });
+    }
+    #[test]
+    fn terminal_and_vim_keep_control_keys_and_palette_remains_accessible() {
+        let ctrl = egui::Modifiers {ctrl:true,command:true,..Default::default()};
+        for (terminal,vim) in [(true,false),(false,true)] {
+            for key in [egui::Key::R,egui::Key::W,egui::Key::L,egui::Key::P,egui::Key::K] {
+                let ctx = egui::Context::default(); press(&ctx,key,ctrl);
+                assert!(app_shortcuts(&ctx,terminal,vim).is_empty());
+                assert!(ctx.input(|i| i.key_pressed(key))); ctx.end_pass().textures_delta.clear();
+            }
+            let ctx = egui::Context::default(); press(&ctx,egui::Key::P,egui::Modifiers {shift:true,..ctrl});
+            assert_eq!(app_shortcuts(&ctx,terminal,vim),vec![Command::Palette]); ctx.end_pass().textures_delta.clear();
+        }
+        let ctx = egui::Context::default(); press(&ctx,egui::Key::R,ctrl);
+        assert!(!app_shortcuts(&ctx,false,false).is_empty()); ctx.end_pass().textures_delta.clear();
+    }
+}
+
+#[cfg(test)]
+mod format_regression_tests {
+    use super::*;
+    #[test]
+    fn saving_keeps_drracket_header_and_crlf_after_body_edits() {
+        let language = crate::racket::lang::Language::Beginner;
+        let settings = language.default_settings();
+        let header = crate::racket::lang::header(language,"original-module-name",&settings).unwrap();
+        let bytes = (header.clone()+"(define x 1)\n").replace('\n',"\r\n").into_bytes();
+        let (text,format,bad) = file_safety::TextFormat::decode(&bytes); assert!(!bad);
+        let loaded = crate::racket::lang::load(&text);
+        let path = PathBuf::from("current-name.rkt");
+        let mut tab = Tab {
+            id:1,path:Some(path.clone()),untitled:0,editor:EditorView::new(&loaded.body,Id::unique("format-test")),
+            language,lang_settings:settings,lang_changed:false,disk_mtime:None,disk_hash:Some(file_safety::fingerprint(&bytes)),disk_version:0,
+            text_format:format,original_header:loaded.header,wxme:false,save_failed:false,rk:crate::racket_ui::RacketTab::new(1),zoom:1.0,edit_seen:(0,0.0),
+        };
+        assert!(!tab.dirty());
+        assert_eq!(tab.text_format.encode(&tab.save_text(&path)),bytes);
+        tab.editor.doc.buffer.set_text("(define x 2)\n");
+        assert_eq!(tab.save_text(&path),header+"(define x 2)\n");
+        assert!(String::from_utf8(tab.text_format.encode(&tab.save_text(&path))).unwrap().ends_with("(define x 2)\r\n"));
     }
 }

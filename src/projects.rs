@@ -63,12 +63,14 @@ impl App {
             return;
         }
         let cur = &mut self.projects[self.current_project];
+        if let Some(ws) = &mut self.workspace { ws.set_active(false); }
         cur.workspace = self.workspace.take();
         cur.tabs = std::mem::take(&mut self.tabs);
         cur.active = self.active;
         self.current_project = k;
         let next = &mut self.projects[k];
         self.workspace = next.workspace.take();
+        if let Some(ws) = &mut self.workspace { ws.set_active(true); }
         self.tabs = std::mem::take(&mut next.tabs);
         self.active = next.active.min(self.tabs.len().saturating_sub(1));
         if let Some(root) = self.projects[k].root.clone() {
@@ -100,6 +102,8 @@ impl App {
     /// Show `path` as a project: switch to its tab if it is open, use the current tab if it is
     /// empty, otherwise open a new tab.
     pub fn open_project(&mut self, path: &Path) {
+        let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let path = path.as_path();
         self.whats_new.front = false;
         if let Some(k) = self.projects.iter().enumerate().position(|(k, p)| {
             let root = if k == self.current_project { self.workspace.as_ref().map(|w| w.root.as_path()) } else { p.root.as_deref() };
@@ -120,6 +124,9 @@ impl App {
     pub fn close_project(&mut self, k: usize, force: bool) {
         if k >= self.projects.len() {
             return;
+        }
+        if self.project_tab_ids(self.projects[k].id).iter().any(|id| self.tab_has_pending_save(*id)) {
+            self.await_save_then(crate::app::AfterSave::Project {id:self.projects[k].id,discard:force}); return;
         }
         if !force {
             let dirty = if k == self.current_project { self.tabs.iter().any(|t| t.dirty()) } else { self.projects[k].tabs.iter().any(|t| t.dirty()) };
@@ -151,19 +158,11 @@ impl App {
         self.tabs.iter().chain(parked).filter(|t| t.dirty()).map(|t| t.title()).collect()
     }
 
-    /// Save every unsaved file in every project. False if a save failed or was cancelled.
+    /// Schedule a bounded save of every project's reviewed dirty buffers. True only
+    /// if all saves have already completed; async callers use the save-plan continuation.
     pub fn save_all_projects(&mut self) -> bool {
-        let start = self.current_project;
-        for k in 0..self.projects.len() {
-            self.switch_project(k);
-            for i in 0..self.tabs.len() {
-                if self.tabs[i].dirty() && !self.save_tab(i, false) {
-                    return false;
-                }
-            }
-        }
-        self.switch_project(start);
-        true
+        self.save_then(crate::app::AfterSave::SaveAll {project:None});
+        self.all_dirty_titles().is_empty() && self.all_tab_ids().iter().all(|id| !self.tab_has_pending_save(*id))
     }
 
     /// The saved form of every project, the current one included.
@@ -182,5 +181,64 @@ impl App {
             })
             .collect();
         (list, self.current_project)
+    }
+}
+
+impl App {
+    pub(crate) fn all_file_paths(&self) -> Vec<(u64,PathBuf)> {
+        self.tabs.iter().chain(self.projects.iter().enumerate().filter(|(k,_)| *k != self.current_project).flat_map(|(_,p)| p.tabs.iter()))
+            .filter_map(|t| t.path.clone().map(|p| (t.id,p))).collect()
+    }
+    pub(crate) fn parked_project_for_tab(&self, id:u64) -> Option<usize> {
+        self.projects.iter().enumerate().position(|(k,p)| k != self.current_project && p.tabs.iter().any(|t| t.id == id))
+    }
+    pub(crate) fn swap_parked_tabs(&mut self, k:usize) { std::mem::swap(&mut self.tabs,&mut self.projects[k].tabs); }
+    pub(crate) fn follow_parked_paths(&mut self, from:&Path,to:&Path) {
+        for (k,p) in self.projects.iter_mut().enumerate() {
+            if k == self.current_project { continue; }
+            for t in &mut p.tabs {
+                if let Some(path) = &t.path && let Ok(rest) = path.strip_prefix(from) { t.path = Some(to.join(rest)); }
+            }
+            if let Some(root) = &p.root && let Ok(rest) = root.strip_prefix(from) {
+                let root = to.join(rest);
+                let mut workspace = Workspace::open(&root,&self.ctx);
+                workspace.set_active(false);
+                p.root = Some(root);
+                p.workspace = Some(workspace);
+            }
+        }
+    }
+}
+
+impl App {
+    pub(crate) fn project_for_tab(&self,id:u64) -> Option<usize> {
+        if self.tabs.iter().any(|t| t.id == id) { Some(self.current_project) } else { self.parked_project_for_tab(id) }
+    }
+    pub(crate) fn all_tab_ids(&self) -> Vec<u64> {
+        self.projects.iter().map(|p| p.id).flat_map(|id| self.project_tab_ids(id)).collect()
+    }
+    pub(crate) fn project_tab_ids(&self,id:u64) -> Vec<u64> {
+        self.projects.iter().enumerate().find(|(_,p)| p.id == id).map(|(k,p)| {
+            if k == self.current_project { self.tabs.iter().map(|t| t.id).collect() } else { p.tabs.iter().map(|t| t.id).collect() }
+        }).unwrap_or_default()
+    }
+    pub(crate) fn tab_is_dirty(&self,id:u64) -> bool {
+        self.tabs.iter().chain(self.projects.iter().enumerate().filter(|(k,_)| *k != self.current_project).flat_map(|(_,p)| p.tabs.iter()))
+            .any(|t| t.id == id && t.dirty())
+    }
+}
+
+impl App {
+    pub(crate) fn save_review(&self) -> Vec<crate::app::ReviewStamp> {
+        let mut stamps:Vec<_> = self.tabs.iter().chain(self.projects.iter().enumerate().filter(|(k,_)| *k != self.current_project).flat_map(|(_,p)| p.tabs.iter()))
+            .map(|t| crate::app::ReviewStamp {tab:t.id,version:t.editor.doc.version(),language:t.language,settings:t.lang_settings.clone()}).collect();
+        stamps.sort_unstable_by_key(|s| s.tab); stamps
+    }
+}
+
+impl App {
+    pub(crate) fn review_for_tab(&self,id:u64) -> Option<crate::app::ReviewStamp> {
+        self.tabs.iter().chain(self.projects.iter().enumerate().filter(|(k,_)| *k != self.current_project).flat_map(|(_,p)| p.tabs.iter()))
+            .find(|t| t.id == id).map(|t| crate::app::ReviewStamp {tab:t.id,version:t.editor.doc.version(),language:t.language,settings:t.lang_settings.clone()})
     }
 }

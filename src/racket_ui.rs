@@ -34,6 +34,8 @@ enum Pending {
     Completions { key: String },
     MacroSteps { tab: u64 },
     Modules { tab: u64 },
+    // P6b compatibility hunk: identical task/response contract to the frozen backend branch.
+    WxmeWrite { reply: std::sync::mpsc::Sender<Result<(), String>> },
 }
 
 /// App-wide Racket state.
@@ -351,18 +353,6 @@ pub fn read_wxme(app: &mut App, path: &Path) -> Result<proto::WxmeFile, String> 
     }
 }
 
-/// Write program text with images in DrRacket's editor format.
-pub fn write_wxme(app: &mut App, path: &Path, text: &str, images: proto::SourceImages) -> Result<(), String> {
-    // Compatibility adapter until the file-save owner adopts begin_write_wxme.
-    let task = begin_write_wxme(app, path, text, images)?;
-    let result = app.racket.server.as_mut().and_then(|server| server.wait(task.id, std::time::Duration::from_secs(60)))
-        .unwrap_or_else(|| Err("Racket took too long to answer.".into()));
-    if let Some(Pending::WxmeWrite { reply }) = app.racket.pending.remove(&task.id) {
-        let _ = reply.send(wxme_write_result(result));
-    }
-    task.try_result().unwrap_or_else(|| Err("Racket save result was lost.".into()))
-}
-
 fn wxme_write_result(result: Result<ServerResponse, String>) -> Result<(), String> {
     match result {
         Ok(ServerResponse::WxmeWrite) => Ok(()),
@@ -375,10 +365,14 @@ fn wxme_write_result(result: Result<ServerResponse, String>) -> Result<(), Strin
 /// version and save purpose; only a successful completion may mark that version
 /// saved. Dropping this handle does not cancel a disk write already in progress.
 pub struct WxmeWriteTask {
+    #[allow(dead_code)] // Public backend contract; app callers retain/poll the task itself.
     pub id: RequestId,
     reply: Receiver<Result<(), String>>,
 }
 impl WxmeWriteTask {
+    pub(crate) fn new(id: RequestId, reply: Receiver<Result<(), String>>) -> Self {
+        Self { id, reply }
+    }
     pub fn try_result(&self) -> Option<Result<(), String>> {
         match self.reply.try_recv() {
             Ok(result) => Some(result),
@@ -392,7 +386,7 @@ pub fn begin_write_wxme(app: &mut App, path: &Path, text: &str, images: proto::S
     let (reply, rx) = std::sync::mpsc::channel();
     let req = ServerRequest::WxmeWrite { path: path.to_string_lossy().into_owned(), text: text.into(), images };
     let id = request(app, req, Pending::WxmeWrite { reply }).ok_or("The Racket server is not running.")?;
-    Ok(WxmeWriteTask { id, reply: rx })
+    Ok(WxmeWriteTask::new(id, rx))
 }
 
 /// Does this file start with DrRacket's editor-format (WXME) header?
@@ -1481,7 +1475,7 @@ fn editor_action(app: &mut App, i: usize, a: EditorAction) {
                 app.toast("Rename information no longer matches the buffer. Run Check Syntax again.", ToastKind::Info);
                 return;
             };
-            app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::rename(tab.id, occ, name));
+            app.modal = Modal::Prompt(crate::ui::language_dialog::Prompt::rename(tab.id, tab.editor.doc.version(), occ, name));
         }
         EditorAction::ToggleBreakpoint(line) => {
             let tab = &mut app.tabs[i];
@@ -3258,5 +3252,17 @@ mod tests {
         assert_eq!(short_test_message("Actual value 16 differs from 15, the expected value."), "got 16, expected 15");
         assert_eq!(short_test_message("Actual value 3.2 is not within 0.1 of expected value 3."), "got 3.2, expected 3 ± 0.1");
         assert_eq!(short_test_message("check-error: expected an error"), "check-error: expected an error");
+    }
+
+    #[test]
+    fn wxme_save_task_is_nonblocking_and_response_mapping_rejects_wrong_answers() {
+        use super::{WxmeWriteTask,wxme_write_result,ServerResponse};
+        let (tx,rx) = std::sync::mpsc::channel(); let task = WxmeWriteTask::new(7,rx);
+        assert_eq!(task.id,7); assert!(task.try_result().is_none());
+        tx.send(wxme_write_result(Ok(ServerResponse::WxmeWrite))).unwrap();
+        assert_eq!(task.try_result(),Some(Ok(())));
+        assert!(wxme_write_result(Ok(ServerResponse::Completions(Vec::new()))).is_err());
+        assert_eq!(wxme_write_result(Err("backend failure".into())),Err("backend failure".into()));
+        drop(tx); assert!(task.try_result().unwrap().is_err());
     }
 }

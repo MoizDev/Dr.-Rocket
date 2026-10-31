@@ -155,6 +155,7 @@ pub struct Theme {
 
 pub fn parse_color(s: &str) -> Option<Color32> {
     let s = s.trim().strip_prefix('#')?;
+    if !s.is_ascii() { return None; }
     let hex = |i: usize| u8::from_str_radix(s.get(i..i + 2)?, 16).ok();
     match s.len() {
         6 => Some(Color32::from_rgb(hex(0)?, hex(2)?, hex(4)?)),
@@ -653,5 +654,13 @@ mod tests {
         let s = strip_json_comments("{\"a\": \"//x\", // c\n \"b\": [1,2,],}");
         let v: Value = serde_json::from_str(&s).unwrap();
         assert_eq!(v["a"], "//x");
+    }
+}
+
+#[cfg(test)]
+mod color_safety_tests {
+    #[test] fn malformed_unicode_colors_never_panic() {
+        for s in ["#aé", "#éa", "#💥", "#abcéa", "#１２３", "#xyz"] { assert!(super::parse_color(s).is_none()); }
+        assert!(super::parse_color("#abc").is_some());
     }
 }

@@ -35,7 +35,7 @@ impl LanguageDialog {
 }
 
 pub enum PromptKind {
-    Rename { tab: u64, ranges: Vec<(usize, usize)> },
+    Rename { tab: u64, expected_version: u64, old_name: String, ranges: Vec<(usize, usize)> },
     InstallPackage,
     UpdatePackage,
     RemovePackage,
@@ -53,9 +53,9 @@ pub struct Prompt {
 }
 
 impl Prompt {
-    pub fn rename(tab: u64, ranges: Vec<(usize, usize)>, current: String) -> Self {
+    pub fn rename(tab: u64, expected_version:u64, ranges: Vec<(usize, usize)>, current: String) -> Self {
         let n = ranges.len();
-        Self { kind: PromptKind::Rename { tab, ranges }, title: format!("Rename “{current}” ({n} occurrences)"), hint: "New name".into(), text: current, focus: true }
+        Self { kind: PromptKind::Rename { tab, expected_version, old_name:current.clone(), ranges }, title: format!("Rename “{current}” ({n} occurrences)"), hint: "New name".into(), text: current, focus: true }
     }
     pub fn new_file(dir: std::path::PathBuf) -> Self {
         Self { kind: PromptKind::NewFile { dir }, title: "New File".into(), hint: "name.rkt".into(), text: String::new(), focus: true }
@@ -110,17 +110,22 @@ impl App {
             None => self.modal = Modal::Prompt(p),
             Some(false) => {}
             Some(true) => match p.kind {
-                PromptKind::Rename { tab, ranges } => {
+                PromptKind::Rename { tab, expected_version, old_name, ranges } => {
                     let name = p.text.trim().to_string();
                     let valid = !name.is_empty() && !name.chars().any(crate::editor::lexer::is_delimiter);
                     if !valid {
                         self.toast("Not a valid identifier", crate::app::ToastKind::Error);
                         return;
                     }
-                    if let Some(t) = self.tabs.iter_mut().find(|t| t.id == tab) {
-                        let rs: Vec<std::ops::Range<usize>> = ranges.iter().map(|r| r.0..r.1).collect();
-                        t.editor.doc.rename(&rs, &name);
-                    }
+                    let result = match self.tabs.iter_mut().find(|t| t.id == tab) {
+                        Some(t) if !t.editor.read_only => {
+                            let rs:Vec<_> = ranges.iter().map(|r| r.0..r.1).collect();
+                            t.editor.doc.rename_checked(expected_version,&old_name,&rs,&name).map_err(|e| e.to_string())
+                        }
+                        Some(_) => Err("Rename refused: this tab is read-only.".to_string()),
+                        None => Err("Rename refused: the original tab was closed.".to_string()),
+                    };
+                    if let Err(e) = result { self.toast(e,crate::app::ToastKind::Error); }
                 }
                 PromptKind::InstallPackage => {
                     let name = p.text.trim().to_string();
@@ -141,7 +146,7 @@ impl App {
                 }
                 PromptKind::NewFile { dir } => {
                     let name = p.text.trim();
-                    if name.is_empty() || name.contains('/') {
+                    if name.is_empty() || name.contains(['/', '\\']) || matches!(name, "." | "..") {
                         return;
                     }
                     // `foo` means `foo.rkt`.
@@ -191,13 +196,13 @@ impl App {
                 }
                 PromptKind::RenamePath { path } => {
                     let name = p.text.trim();
-                    if name.is_empty() || name.contains('/') {
+                    if name.is_empty() || name.contains(['/', '\\']) || matches!(name, "." | "..") {
                         return;
                     }
                     let Some(parent) = path.parent() else { return };
                     let to = parent.join(name);
-                    match std::fs::rename(&path, &to) {
-                        Ok(()) => self.path_moved(&path, &to),
+                    match self.rename_path(&path, &to) {
+                        Ok(()) => {},
                         Err(e) => self.toast(format!("Rename failed: {e}"), crate::app::ToastKind::Error),
                     }
                 }
@@ -312,10 +317,11 @@ impl App {
             None => self.modal = Modal::Language(d),
             Some(false) => {}
             Some(true) => {
+                if self.active_tab().is_some_and(|t| t.editor.read_only) { return; }
                 // New files start in the language last chosen.
                 self.settings.default_language = d.language.id().to_string();
                 self.settings.default_language_settings = Some(d.settings.clone());
-                let _ = self.settings.save();
+                self.schedule_settings_save();
                 crate::racket_ui::set_language(self, d.language, d.settings);
             }
         }
@@ -399,5 +405,25 @@ fn teaching_options(ui: &mut Ui, theme: &crate::theme::Theme, d: &mut LanguageDi
         ui.painter().text(pos2(card.left() + 18.0, card.center().y), Align2::CENTER_CENTER, ic::STEP, ui::icon_font(18.0), theme.success);
         ui.painter().text(pos2(card.left() + 36.0, card.center().y), Align2::LEFT_CENTER, crate::platform::keys("Supports the algebraic stepper (⇧⌘E)"), ui::ui_font(13.0), theme.text);
         ui.allocate_exact_size(card.size(), Sense::hover());
+    }
+}
+
+#[cfg(test)]
+mod rename_prompt_tests {
+    use super::*;
+    use crate::editor::document::{Document,RenameError};
+    #[test]
+    fn an_open_prompt_keeps_original_identity_text_and_version_across_edits_and_reload() {
+        for reload in [false,true] {
+            let mut doc = Document::new("(f x x)");
+            let prompt = Prompt::rename(42,doc.version(),vec![(3,4),(5,6)],"x".into());
+            if reload { doc.buffer.set_text("(f y y)"); } else { doc.type_text("prefix",false); }
+            let before = doc.text();
+            let PromptKind::Rename {tab,expected_version,old_name,ranges} = prompt.kind else { panic!("wrong prompt"); };
+            assert_eq!(tab,42); assert_eq!(old_name,"x");
+            let ranges:Vec<_> = ranges.into_iter().map(|(a,b)| a..b).collect();
+            assert_eq!(doc.rename_checked(expected_version,&old_name,&ranges,"new-name"),Err(RenameError::StaleDocument));
+            assert_eq!(doc.text(),before);
+        }
     }
 }
