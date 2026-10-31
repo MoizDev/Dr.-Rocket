@@ -3,12 +3,18 @@ name: Website
 
 on:
   workflow_dispatch:
+  push:
+    branches: [master, main, optimizations]
+    paths: ["website/**", "tools/sign-updates*", ".github/workflows/website.yml"]
   pull_request:
     paths:
       - "website/**"
       - "src/editor/keywords.rs"
       - "tests/indent/**"
       - ".github/workflows/website.yml"
+
+permissions:
+  contents: read
 
 jobs:
   website:
@@ -29,4 +35,8 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run test:node
+      - name: Signing and provenance regressions (offline fixtures)
+        run: node --test ../tools/sign-updates.test.mjs lib/download-provenance.test.mjs
+      # A production site build requires actual authenticated archives and release signatures.
+      - run: sh scripts/fetch-downloads.sh
       - run: npx next build
