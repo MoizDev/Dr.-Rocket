@@ -100,6 +100,21 @@ class Regressions(unittest.TestCase):
         self.addCleanup(backend.close)
         return backend
 
+    def test_ready_follows_logs_from_definitions_and_repeated_interactions(self):
+        b = self.backend()
+        b.run('#lang racket\n'
+              '(for ([i (in-range 40)]) (log-warning "initial ~a" i))\n'
+              '(define-logger app)\n(log-app-error "last initial")\n')
+        events = b.until(lambda e: e.get('ev') == 'ready')
+        logs = [e['message'] for e in events if e.get('ev') == 'log']
+        self.assertEqual(logs, [f'initial {i}' for i in range(40)] + ['app: last initial'])
+        for ident in range(1, 11):
+            b.send(cmd='eval', id=ident,
+                   source=f'(log-warning "first {ident}") (log-app-error "last {ident}")')
+            events = b.until(lambda e: e.get('ev') == 'ready' and e.get('id') == ident)
+            logs = [e['message'] for e in events if e.get('ev') == 'log']
+            self.assertEqual(logs, [f'first {ident}', f'app: last {ident}'])
+
     def test_exit_emits_once_and_terminates_for_all_exit_values(self):
         for value, code in [('3', 3), ('300', 0), ('-1', 0), ('#f', 0), ('"bye"', 0)]:
             with self.subTest(value=value):

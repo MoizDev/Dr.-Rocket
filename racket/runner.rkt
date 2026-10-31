@@ -63,17 +63,37 @@
 
 ;; DrRacket's "Show Log": forward the program's warnings and errors (Racket's own libraries
 ;; log constantly at `info`, so lower levels would bury them).
+(define log-flush-requests (make-async-channel 1))
+
+(define (flush-log-events!)
+  (define done (make-semaphore))
+  (async-channel-put log-flush-requests done)
+  (semaphore-wait done))
+
 (define (start-log-forwarder!)
   (define receiver (make-log-receiver (current-logger) 'warning))
   (thread
    (λ ()
-     (let loop ([sent 0])
-       (define v (sync receiver))
+     (define sent 0)
+     (define (forward! v)
        (when (< sent 5000)
          (emit* (hasheq 'ev "log" 'level (symbol->string (vector-ref v 0))
                         'topic (let ([t (vector-ref v 3)]) (if t (symbol->string t) (json-null)))
-                        'message (truncate-string (vector-ref v 1) 2000))))
-       (loop (add1 sent))))))
+                        'message (truncate-string (vector-ref v 1) 2000)))
+         (set! sent (add1 sent))))
+     (let loop ()
+       (define v (sync receiver log-flush-requests))
+       (cond
+         [(vector? v) (forward! v)]
+         [else
+          ;; Log delivery has its own thread. Queue prior logs before acknowledging
+          ;; a completed evaluation, so Ready cannot overtake them on the writer.
+          ;; The existing log budget also bounds this drain under background floods.
+          (let drain ()
+            (define pending (and (< sent 5000) (sync/timeout 0 receiver)))
+            (when pending (forward! pending) (drain)))
+          (semaphore-post v)])
+       (loop)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Values: images and number markup
@@ -1178,6 +1198,7 @@
   (current-namespace repl-namespace)
   (flush-output user-out)
   (flush-output user-err)
+  (flush-log-events!)
   (emit* (hasheq 'ev "ready" 'id (json-null)))
   (interaction-loop instrument user-out user-err))
 
@@ -1208,6 +1229,7 @@
     (when (eq? instrument 'coverage) (with-handlers ([(λ (e) #t) void]) (emit-coverage!)))
     (flush-output user-out)
     (flush-output user-err)
+    (flush-log-events!)
     (emit* (hasheq 'ev "ready" 'id id))
     (loop)))
 

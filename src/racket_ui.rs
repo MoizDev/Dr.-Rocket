@@ -34,8 +34,6 @@ enum Pending {
     Completions { key: String },
     MacroSteps { tab: u64 },
     Modules { tab: u64 },
-    // P6b compatibility hunk: identical task/response contract to the frozen backend branch.
-    WxmeWrite { reply: std::sync::mpsc::Sender<Result<(), String>> },
 }
 
 /// App-wide Racket state.

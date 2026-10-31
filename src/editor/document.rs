@@ -881,7 +881,7 @@ impl Document {
             end = range.end;
         }
         // App commands finish a Vim insert group before starting their own transaction.
-        self.buffer.end_group();
+        self.buffer.close_groups();
         self.rename(&ordered,new_name);
         Ok(())
     }
@@ -1440,12 +1440,20 @@ mod checked_rename_tests {
     }
     #[test]
     fn checked_rename_is_one_separate_undo_step_even_after_vim_insert() {
-        let mut doc = Document::new("(f x x)");
-        doc.buffer.begin_group(); doc.type_text(" ",false);
-        let before = doc.text(); let version = doc.version();
-        doc.rename_checked(version,"x",&[6..7,4..5],"λ-long").unwrap();
-        assert_eq!(doc.text()," (f λ-long λ-long)");
-        assert!(doc.buffer.undo()); assert_eq!(doc.text(),before);
-        assert!(doc.buffer.undo()); assert_eq!(doc.text(),"(f x x)");
+        for depth in [1, 2] {
+            let mut doc = Document::new("(f x x)");
+            for _ in 0..depth {
+                doc.buffer.begin_group();
+            }
+            doc.type_text(" ", false);
+            let before = doc.text();
+            let version = doc.version();
+            doc.rename_checked(version, "x", &[6..7, 4..5], "λ-long").unwrap();
+            assert_eq!(doc.text(), " (f λ-long λ-long)");
+            assert!(doc.buffer.undo());
+            assert_eq!(doc.text(), before);
+            assert!(doc.buffer.undo());
+            assert_eq!(doc.text(), "(f x x)");
+        }
     }
 }
