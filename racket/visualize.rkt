@@ -190,12 +190,14 @@
                   #:when (refers? body id))
          id))
      (list formals
-           #`(#%plain-app '#,viz-call
+           #`(if (#%plain-app '#,viz-active?)
+                 (#%plain-app '#,viz-call
                           '#,(format "~a" fname)
                           #,(getters (formals-ids formals))
                           #,(getters captured)
                           '#,(pos-of first-body) '#,(span-of first-body)
-                          (#%plain-lambda () #,@bodies)))]
+                          (#%plain-lambda () #,@bodies))
+                 (let-values () #,@bodies)))]
     [else (cons formals bodies)]))
 
 (define (annotate-bindings stx ids-list body tail?)
@@ -204,7 +206,7 @@
   (define bodies (parameterize ([scope (append shown (scope))]) (annotate-body body tail?)))
   (if (null? shown)
       bodies
-      (cons #`(#%plain-app '#,viz-bind! #,(getters shown)) bodies)))
+      (cons #`(if (#%plain-app '#,viz-active?) (#%plain-app '#,viz-bind! #,(getters shown)) (#%plain-app void)) bodies)))
 
 ;; `tail?`: e is in tail position of a user function, so a call here replaces the caller's
 ;; frame (Racket runs tail calls without growing the stack, and so does the visualizer).
@@ -340,12 +342,12 @@
 (struct frame (name args [locals #:mutable] pos span [replaced? #:mutable #:auto] [done #:mutable #:auto]) #:auto-value #f)
 ;; The most recent user-written application about to run: (list pos span tail?).
 (define current-site #f)
-(define (viz-site! pos span tail?) (set! current-site (list pos span tail?)))
+(define (viz-site! pos span tail?) (when recording? (set! current-site (list pos span tail?))))
 
 ;; The user's functions (closures of instrumented lambdas); everything else applied at a user
 ;; call site is a primitive operation.
 (define user-procs (make-weak-hasheq))
-(define (viz-register! f) (hash-set! user-procs f #t) f)
+(define (viz-register! f) (when recording? (hash-set! user-procs f #t)) f)
 (define (viz-primitive? f)
   (and recording? (procedure? f) (not (hash-ref user-procs f #f))))
 
@@ -385,10 +387,15 @@
 ;; Program output since the last step.
 (define pending-output (open-output-string))
 (define (viz-note-output! str)
-  (when recording? (write-string str pending-output)))
+  (when recording?
+    (define room (max 0 (- 32768 (string-length (get-output-string pending-output)))))
+    (when (> room 0) (write-string (truncate-string str room) pending-output))))
 (define stack '()) ; newest first
 (define globals '()) ; newest first: (name . getter)
 (define recording? #f)
+(define session-active? #f)
+(define (viz-active?) recording?)
+(define previous-frames '())
 (define step-count 0)
 (define truncated? #f)
 
@@ -402,11 +409,14 @@
   (set! top-done '())
   (set! pending-output (open-output-string))
   (set! recording? #t)
+  (set! session-active? #t)
+  (set! previous-frames '())
   (emitter (hasheq 'ev "viz-start" 'max_steps max-steps 'as_ids as-ids?)))
 
 (define (viz-finish! failed?)
-  (when recording?
-    (record! "end" #f #f #f (hasheq 'failed failed?))
+  (when session-active?
+    (when recording? (record! "end" #f #f #f (hasheq 'failed failed?)))
+    (set! session-active? #f)
     (set! recording? #f)
     (emitter (hasheq 'ev "viz-end" 'steps step-count 'truncated truncated?))))
 
@@ -424,6 +434,8 @@
      (define caller (and (pair? stack) (car stack)))
      ;; A tail call replaces the caller's frame (it returns whatever this call returns).
      (when (and (caddr site) (pair? stack))
+       ;; Keep one replaced caller for context, not the whole tail-call history.
+       (set! stack (filter (λ (f) (not (frame-replaced? f))) stack))
        (set-frame-replaced?! (car stack) #t))
      (set! stack (cons f stack))
      (record! "call" (frame-pos f) (frame-span f) name #f)
@@ -434,7 +446,7 @@
                (define vals (call-with-values thunk list))
                (unless (frame-replaced? f)
                  (record! "return" (frame-pos f) (frame-span f) name (if (= 1 (length vals)) (hasheq 'value (car vals)) #f)))
-               (when (and answers (= 1 (length vals)))
+               (when (and recording? answers (= 1 (length vals)))
                  (note-done! caller (frame-pos f) (frame-span f) (car vals)))
                vals)
              (λ () (set! stack (remq f stack)))))]))
@@ -481,17 +493,27 @@
         (hash-set! object-ids v id)
         id)))
 
+(define (stop-recording!)
+  (set! truncated? #t)
+  (set! recording? #f)
+  (set! globals '())
+  (set! pending-evals '())
+  (set! top-done '()))
+
 (define (record! kind pos span name extra)
   (cond
-    [(>= step-count max-steps)
-     (unless truncated?
-       (set! truncated? #t))]
+    [(not recording?) (void)]
+    [(or (>= step-count max-steps) (> (length stack) 64))
+     (stop-recording!)]
     [else
      (define new-objects '())
      (define seen (make-hasheq))
      (define budget object-budget)
+     (define refs-left 4096)
      (define (ref v)
+       (set! refs-left (sub1 refs-left))
        (cond
+         [(< refs-left 0) (hasheq 'v "…" 'k "more")]
          [(primitive v) => values]
          [(hash-ref seen v #f) (hasheq 'ref (object-id v))]
          [(<= budget 0) (hasheq 'v "…" 'k "more")]
@@ -505,27 +527,36 @@
             (set! new-objects (cons (hash-set content 'id id) new-objects)))
           (hasheq 'ref id)]))
      (define (vars gets)
-       (for/list ([g (in-list gets)])
-         (list (car g) (ref (with-handlers ([(λ (e) #t) (λ (e) (void))]) ((cdr g)))))))
+       (for/list ([g (in-list gets)] [_ (in-range 64)])
+         (list (truncate-string (car g) 256) (ref (with-handlers ([(λ (e) #t) (λ (e) (void))]) ((cdr g)))))))
      (define (done-json done)
        (for/list ([d (in-list (reverse done))])
          (hasheq 'pos (car d) 'span (cadr d) 'value (ref (caddr d)))))
+     (define (bounded-refs vs)
+       (define kept (for/list ([v (in-list vs)] [_ (in-range 64)]) (ref v)))
+       (if (> (length vs) 64) (append kept (list (hasheq 'v "…" 'k "more"))) kept))
      (define globals-json (vars (reverse globals)))
      (define frames-json
        ;; Frames replaced by a tail call are sent too (marked), so the IDE can show where the
        ;; running call came from without pretending the stack grew.
        (for/list ([f (in-list (reverse stack))])
-         (hasheq 'name (frame-name f)
+         (hasheq 'name (truncate-string (frame-name f) 256)
                  'replaced (frame-replaced? f)
-                 'nargs (length (frame-args f))
+                 'nargs (min 64 (length (frame-args f)))
                  'pos (or (frame-pos f) (json-null))
                  'span (or (frame-span f) 0)
                  'vars (vars (append (frame-args f) (frame-locals f)))
                  'done (done-json (done-of f)))))
+     ;; Only changed suffix frames cross the wire; the reader reconstructs full
+     ;; snapshots. This keeps traces replayable while avoiding quadratic payloads.
+     (define prefix
+       (for/sum ([a (in-list previous-frames)] [b (in-list frames-json)]
+                 #:break (not (equal? a b))) 1))
+     (set! previous-frames frames-json)
      (define evals
        (for/list ([e (in-list (reverse pending-evals))])
          (hasheq 'pos (or (car e) (json-null)) 'span (cadr e)
-                 'args (map ref (caddr e)) 'value (ref (cadddr e)))))
+                 'args (bounded-refs (caddr e)) 'value (ref (cadddr e)))))
      (set! pending-evals '())
      (define output (get-output-string pending-output))
      (set! pending-output (open-output-string))
@@ -535,33 +566,41 @@
                              'kind kind
                              'pos (or pos (json-null))
                              'span (or span 0)
-                             'name (or name (json-null))
+                             'name (if name (truncate-string name 256) (json-null))
                              'globals globals-json
-                             'frames frames-json
+                             'frame_prefix prefix
+                             'frames (drop frames-json prefix)
                              'evals evals
                              'top_done (done-json top-done)
-                             'output output)])
+                             'output (truncate-string output 32768))])
                  ([(k v) (in-hash (or extra (hasheq)))])
          (hash-set h k (if (eq? k 'value) (ref v) v))))
      (set! step-count (add1 step-count))
      (emitter (hash-set msg 'objects (reverse new-objects)))]))
 
+(define (large-rational? v)
+  (or (> (integer-length (numerator v)) 2048)
+      (> (integer-length (denominator v)) 2048)))
+
 ;; A primitive's description, or #f for heap objects.
 (define (primitive v)
   (cond
+    [(and (number? v) (exact? v)
+          (or (large-rational? (real-part v)) (large-rational? (imag-part v))))
+     (hasheq 'v "… [large exact number]" 'k "num")]
     [(and (number? v) (exact? v) (integer? v)) (hasheq 'v (number->string v) 'k "num")]
     [(and (number? v) (exact? v) (real? v)) (hasheq 'v (exact->display v) 'k "num")]
     [(number? v) (hasheq 'v (format "#i~a" v) 'k "num")]
-    [(string? v) (hasheq 'v (format "~s" v) 'k "str")]
-    [(symbol? v) (hasheq 'v (format "'~a" v) 'k "sym")]
+    [(string? v) (hasheq 'v (bounded-format v 256) 'k "str")]
+    [(symbol? v) (hasheq 'v (string-append "'" (bounded-format v 256 'display)) 'k "sym")]
     [(boolean? v) (hasheq 'v (cond [as-ids? (if v "true" "false")] [v "#true"] [else "#false"]) 'k "bool")]
-    [(char? v) (hasheq 'v (format "~s" v) 'k "char")]
+    [(char? v) (hasheq 'v (bounded-format v 256) 'k "char")]
     [(null? v) (hasheq 'v (if as-ids? "empty" "'()") 'k "empty")]
     [(void? v) (hasheq 'v "(void)" 'k "void")]
-    [(procedure? v) (hasheq 'v (format "~a" (or (object-name v) "λ")) 'k "fn")]
-    [(keyword? v) (hasheq 'v (format "~s" v) 'k "sym")]
+    [(procedure? v) (hasheq 'v (bounded-format (or (object-name v) "λ") 256 'display) 'k "fn")]
+    [(keyword? v) (hasheq 'v (bounded-format v 256) 'k "sym")]
     [(or (pair? v) (mpair? v) (vector? v) (box? v) (hash? v) (struct-object? v) (image-encoder v)) #f]
-    [else (hasheq 'v (truncate-text (format "~v" v)) 'k "other")]))
+    [else (hasheq 'v (bounded-format v 256) 'k "other")]))
 
 (define (exact->display q)
   ;; Teaching languages show terminating fractions as decimals.
@@ -600,8 +639,8 @@
      (define all (cdr (vector->list vec)))
      (define vals (if (and names (< (length names) (length all))) (take all (length names)) all))
      (hasheq 'k "struct"
-             'name name
-             'fields (for/list ([x (in-list vals)] [k (in-naturals)])
-                       (list (if (and names (< k (length names))) (list-ref names k) (format "field~a" k))
+             'name (truncate-string name 256)
+             'fields (for/list ([x (in-list vals)] [k (in-range 60)])
+                       (list (if (and names (< k (length names))) (truncate-string (list-ref names k) 256) (format "field~a" k))
                              (ref x))))]
-    [else (hasheq 'k "other" 'text (truncate-text (format "~v" v)))]))
+    [else (hasheq 'k "other" 'text (bounded-format v 256))]))

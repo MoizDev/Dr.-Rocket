@@ -112,10 +112,9 @@ impl Server {
 
     /// Cancel a pending request; it completes with `Err("cancelled")`.
     pub fn cancel(&mut self, id: RequestId) {
-        if self.pending.contains_key(&id)
-            && let Some(p) = self.process.as_mut()
-        {
-            let _ = p.send(&Cancel { cmd: "cancel", id });
+        if self.pending.remove(&id).is_some() {
+            if let Some(p) = self.process.as_mut() { let _ = p.send(&Cancel { cmd: "cancel", id }); }
+            self.results.insert(id, Err("cancelled".into()));
         }
     }
 
@@ -133,7 +132,9 @@ impl Server {
                 self.results.insert(id, Err("Racket analysis exceeded its 30-second time limit; server restarted".into()));
             }
         }
+        let start = Instant::now();
         for _ in 0..super::transport::FRAME_EVENTS {
+            if start.elapsed() > Duration::from_millis(2) { break; }
             let Ok(raw) = self.raw.try_recv() else { break };
             self.accept(raw);
         }

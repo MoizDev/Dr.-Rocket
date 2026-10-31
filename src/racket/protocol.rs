@@ -441,7 +441,8 @@ pub struct VizStep {
     pub failed: Option<bool>,
     pub globals: Vec<(String, VizRef)>,
     /// Oldest first.
-    pub frames: Vec<VizFrame>,
+    #[serde(deserialize_with = "shared_frames")]
+    pub frames: Vec<std::sync::Arc<VizFrame>>,
     pub objects: Vec<VizObject>,
     /// Primitive operations evaluated since the previous step, in order.
     pub evals: Vec<VizEval>,
@@ -464,7 +465,7 @@ pub struct VizEval {
 impl VizStep {
     /// The frames that are really on the stack (not replaced by tail calls).
     pub fn live_frames(&self) -> impl Iterator<Item = &VizFrame> {
-        self.frames.iter().filter(|f| !f.replaced)
+        self.frames.iter().map(|f| f.as_ref()).filter(|f| !f.replaced)
     }
 }
 
@@ -567,6 +568,8 @@ pub enum ServerRequest {
         pos: Option<usize>,
         name: Option<String>,
     },
+    /// Hover against an immutable check-syntax snapshot; no repeated source payload.
+    BlueboxCached { cache_id: u64, pos: usize },
     DocsSearch {
         query: String,
         limit: usize,
@@ -612,7 +615,7 @@ impl ServerRequest {
     pub fn kind(&self) -> ServerRequestKind {
         match self {
             ServerRequest::CheckSyntax { .. } => ServerRequestKind::CheckSyntax,
-            ServerRequest::Bluebox { .. } => ServerRequestKind::Bluebox,
+            ServerRequest::Bluebox { .. } | ServerRequest::BlueboxCached { .. } => ServerRequestKind::Bluebox,
             ServerRequest::DocsSearch { .. } => ServerRequestKind::DocsSearch,
             ServerRequest::Completions { .. } => ServerRequestKind::Completions,
             ServerRequest::MacroSteps { .. } => ServerRequestKind::MacroSteps,
@@ -719,6 +722,8 @@ pub struct SyntaxError {
 
 #[derive(Clone, Debug, Default, Deserialize, PartialEq, Eq)]
 pub struct CheckSyntaxResult {
+    #[serde(default)]
+    pub cache_id: Option<u64>,
     pub arrows: Vec<Arrow>,
     pub tooltips: Vec<Tooltip>,
     pub colors: Vec<ColorRange>,
@@ -885,4 +890,8 @@ pub fn doc_url(path: &str, anchor: Option<&str>) -> String {
         }
     }
     url
+}
+
+fn shared_frames<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<std::sync::Arc<VizFrame>>, D::Error> {
+    Ok(Vec::<VizFrame>::deserialize(deserializer)?.into_iter().map(std::sync::Arc::new).collect())
 }

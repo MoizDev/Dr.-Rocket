@@ -408,6 +408,8 @@ fn server_check_syntax_bluebox_docs_and_completions() {
     let map_pos = src.find("map").unwrap();
     let doc = cs.docs.iter().find(|d| d.start == map_pos).expect("docs for map");
     assert!(doc.url().unwrap().contains("pairs.html#"), "{doc:?}");
+    let cached = server_result(&mut server, ServerRequest::BlueboxCached { cache_id: cs.cache_id.expect("immutable hover snapshot"), pos: map_pos + 1 });
+    assert!(matches!(cached, ServerResponse::Bluebox(Some(_))));
     let unused = src.find("unused").unwrap();
     assert!(cs.colors.iter().any(|c| c.start == unused && c.style == "unused-identifier"));
     assert!(cs.tooltips.iter().any(|t| t.start == map_pos && t.text.contains("imported from racket")));
@@ -599,9 +601,9 @@ fn heavy_output_is_coalesced() {
 fn exit_reports_code() {
     let b = need_racket!();
     let s = RunSession::start(b, &module_config(None, "#lang racket/base\n(display \"bye\")\n(exit 3)\n", Instrument::None)).unwrap();
-    let events = run_until(&s, |e| matches!(e, RunEvent::Exit { .. }));
+    let events = run_until(&s, |e| matches!(e, RunEvent::Terminated { .. }));
     assert!(events.iter().any(|e| matches!(e, RunEvent::Output { text, .. } if text == "bye")));
-    assert!(matches!(events.last(), Some(RunEvent::Exit { code: 3 })));
+    assert_eq!(events.iter().filter(|e| matches!(e, RunEvent::Exit { code: 3 })).count(), 1);
 }
 
 #[test]
@@ -1302,4 +1304,37 @@ fn analysis_timeout_restarts_server_and_recovers() {
     let id = server.request(ServerRequest::Completions { language: "racket/base".into() });
     assert!(server.wait(id, TIMEOUT).expect("restarted response").is_ok());
     assert!(server.restarts() > 0);
+}
+
+#[test]
+fn bounded_reporting_and_expansion_recovery_keep_interactions_alive() {
+    let b = need_racket!();
+    let mut session = RunSession::start(b, &module_config(None, "#lang htdp/bsl\nunbound-name", Instrument::None)).unwrap();
+    assert!(run_until(&session, ready(None)).iter().any(|e| matches!(e, RunEvent::Error(_))));
+    let id = session.eval("(+ 1 2)");
+    assert_eq!(values(&run_until(&session, ready(Some(id)))), ["3"]);
+    let mut session = RunSession::start(b, &module_config(None, "#lang racket/base\n(build-list 250000 values)", Instrument::None)).unwrap();
+    let events = run_until(&session, ready(None));
+    let printed = values(&events).join("");
+    assert!(printed.contains("[value truncated]"));
+    assert!(printed.len() < 270_000);
+    let id = session.eval("(+ 1 2)");
+    assert_eq!(values(&run_until(&session, ready(Some(id)))), ["3"]);
+}
+
+#[test]
+fn large_syntax_response_survives_rust_transport_and_next_request() {
+    let b = need_racket!();
+    let mut server = Server::start(b).unwrap();
+    let mut source = String::from("#lang racket\n");
+    for i in 0..2500 {
+        use std::fmt::Write;
+        writeln!(source, "(define (f{i} x) (let ([a (+ x 1)]) (+ a a)))").unwrap();
+    }
+    let id = server.request(ServerRequest::CheckSyntax { path: None, source, offset: 0, images: Default::default() });
+    let result = server.wait(id, Duration::from_secs(90)).expect("analysis timeout").expect("large response");
+    assert!(matches!(result, ServerResponse::CheckSyntax(ref r) if r.arrows.len() > 2500));
+    let id = server.request(ServerRequest::CheckSyntax { path: None, source: "#lang racket/base\n(+ 1 2)".into(), offset: 0, images: Default::default() });
+    assert!(matches!(server.wait(id, TIMEOUT), Some(Ok(ServerResponse::CheckSyntax(_)))));
+    assert_eq!(server.restarts(), 0);
 }

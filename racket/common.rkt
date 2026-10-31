@@ -2,14 +2,18 @@
 ;; Shared helpers for Racketeer's backend processes: the JSON-lines protocol, source
 ;; positions, reading program text, and pretty-printing with highlighted subterms.
 
-(require json
+(require racket/async-channel
+         json
          racket/class
          net/base64
          racket/port
          racket/pretty
          racket/string)
 
-(provide protocol-out
+(provide protocol-submit
+         protocol-drain!
+         bounded-format
+         protocol-out
          emit
          read-command
          source-offset
@@ -37,18 +41,63 @@
 
 ;; The real stdout, captured at startup before user code can redirect it.
 (define protocol-out (current-output-port))
-(define emit-lock (make-semaphore 1))
+;; Only this root-custodian thread owns protocol/output state. A memory pause or
+;; request cancellation may suspend/kill producers, including ones blocked by
+;; backpressure, without suspending a lock holder needed by the writer.
+(define protocol-queue (make-async-channel 16))
+(define protocol-writer
+  (thread (λ () (let loop () ((async-channel-get protocol-queue)) (loop)))))
+(define (protocol-submit thunk)
+  (if (eq? (current-thread) protocol-writer)
+      (thunk)
+      (async-channel-put protocol-queue thunk)))
+(define (protocol-drain!)
+  (define done (make-semaphore))
+  (protocol-submit (λ () (semaphore-post done)))
+  (semaphore-wait done))
 
-;; emit : jsexpr -> void
-;; Write one protocol message. Thread-safe and atomic with respect to breaks.
-(define (emit msg)
-  (parameterize-break #f
-    (call-with-semaphore
-     emit-lock
-     (λ ()
-       (write-string (jsexpr->string msg) protocol-out)
+;; Individual wire lines remain below 4 MiB. Large logical responses (notably
+;; check syntax and images) travel as contiguous base64 chunks, reassembled on
+;; the Rust reader thread with a separate, explicit 64 MiB logical limit.
+(define logical-limit (* 64 1024 1024))
+(define chunk-size (* 256 1024))
+(define (write-message msg)
+  (define bs (jsexpr->bytes msg))
+  (cond
+    [(> (bytes-length bs) logical-limit)
+     (write-message
+      (if (hash-has-key? msg 'id)
+          (hasheq 'id (hash-ref msg 'id) 'ok #f 'error "Racket response exceeded the 64 MiB analysis limit")
+          (hasheq 'ev "error" 'kind "runtime" 'message "Racket result exceeded the 64 MiB display limit" 'srclocs '() 'stack '())))]
+    [(> (bytes-length bs) (* 1024 1024))
+     (for ([start (in-range 0 (bytes-length bs) chunk-size)])
+       (define end (min (+ start chunk-size) (bytes-length bs)))
+       (write-bytes (jsexpr->bytes
+                     (hasheq 'chunk (bytes->string/latin-1 (base64-encode (subbytes bs start end) #""))
+                             'last (= end (bytes-length bs)))) protocol-out)
        (newline protocol-out)
-       (flush-output protocol-out)))))
+       (flush-output protocol-out))]
+    [else (write-bytes bs protocol-out) (newline protocol-out) (flush-output protocol-out)]))
+(define (emit msg) (protocol-submit (λ () (write-message msg))))
+
+;; Bound formatting while producing it, rather than allocating an unbounded
+;; string and then truncating. The escape leaves only the printing operation.
+(define (bounded-format v [limit 4096] [mode 'write])
+  (define out (open-output-bytes))
+  (define remaining limit)
+  (let/ec stop
+    (define port
+      (make-output-port
+       'bounded-value always-evt
+       (λ (bs start end non-block? breakable?)
+         (define n (min remaining (- end start)))
+         (write-bytes bs out start (+ start n))
+         (set! remaining (- remaining n))
+         (when (< n (- end start)) (write-bytes #"..." out) (stop (void)))
+         (- end start))
+       void))
+    (if (eq? mode 'display) (display v port) (write v port)))
+  (bytes->string/utf-8 (get-output-bytes out) #\?))
 
 ;; read-command : input-port -> (or/c hash? eof)
 ;; Skips malformed lines instead of dying.
