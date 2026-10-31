@@ -181,7 +181,10 @@ pub struct TerminalView {
     focused: bool,
     blink_reset: Instant,
     scroll_accum: f32,
-    suppress_text: bool,
+    ctrl_v_translated: bool,
+    paste_requested_at: Option<f64>,
+    keyboard_modifiers: Modifiers,
+    v_press_seen: bool,
     last_click: Option<Click>,
     selecting: bool,
     mouse_button_down: Option<u8>,
@@ -193,6 +196,7 @@ pub struct TerminalView {
 }
 
 impl TerminalView {
+    pub fn has_focus(&self, ctx: &egui::Context) -> bool { ctx.memory(|m| m.has_focus(self.id)) }
     /// Spawn the user's login shell (`shell` override, else `$SHELL`, else the passwd shell)
     /// in `cwd`.
     pub fn spawn(cwd: &Path, shell: Option<&str>, ctx: &egui::Context) -> anyhow::Result<Self> {
@@ -274,7 +278,10 @@ impl TerminalView {
             focused: false,
             blink_reset: Instant::now(),
             scroll_accum: 0.0,
-            suppress_text: false,
+            ctrl_v_translated: false,
+            paste_requested_at: None,
+            keyboard_modifiers: Modifiers::NONE,
+            v_press_seen: false,
             last_click: None,
             selecting: false,
             mouse_button_down: None,
@@ -403,6 +410,7 @@ impl TerminalView {
         }
         if has_focus != self.focused {
             self.focused = has_focus;
+            if !has_focus { self.ctrl_v_translated = false; self.v_press_seen = false; }
             self.blink_reset = Instant::now();
             if self.term.lock().mode().contains(TermMode::FOCUS_IN_OUT) {
                 self.write(if has_focus { b"\x1b[I".to_vec() } else { b"\x1b[O".to_vec() });
@@ -574,7 +582,22 @@ impl TerminalView {
             let mouse_mode = mode.intersects(TermMode::MOUSE_MODE) && !ui.input(|i| i.modifiers.shift);
             ui.ctx().set_cursor_icon(if mouse_mode { CursorIcon::Default } else { CursorIcon::Text });
         }
+        response.context_menu(|ui| {
+            let suffix = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl+Shift+" };
+            if ui.button(format!("Copy ({suffix}C)")).clicked() {
+                if let Some(text) = self.term.lock().selection_to_string() { ui.ctx().copy_text(text); }
+                ui.close();
+            }
+            if ui.button(format!("Paste ({suffix}V)")).clicked() {
+                self.request_paste(ui); ui.close();
+            }
+        });
         response
+    }
+
+    fn request_paste(&mut self, ui:&egui::Ui) {
+        self.paste_requested_at = Some(ui.input(|i| i.time));
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
     }
 
     fn blink_phase(&self) -> bool {
@@ -928,8 +951,26 @@ impl TerminalView {
         let events = ui.input(|i| i.events.clone());
         let mode = *self.term.lock().mode();
         let modes = KeyModes { app_cursor: mode.contains(TermMode::APP_CURSOR), app_keypad: mode.contains(TermMode::APP_KEYPAD) };
-        for event in events {
+
+        let explicit_paste = self.paste_requested_at.is_some_and(|t| ui.input(|i| i.time)-t < 1.0);
+        for event in keys::terminal_events(events) {
+            if let egui::Event::ModifiersChanged(modifiers) = &event { self.keyboard_modifiers = *modifiers; }
+            let modifiers = self.keyboard_modifiers;
+            let ctrl_clipboard = !modifiers.mac_cmd && !modifiers.shift && !modifiers.alt && (modifiers.ctrl || !cfg!(target_os = "macos"));
             match event {
+                event if ctrl_clipboard && keys::clipboard_control(&event).is_some()
+                    && (!explicit_paste || !matches!(event, egui::Event::Paste(_) | egui::Event::PasteImage(_))) => {
+                    // egui-winit emits clipboard events instead of Key(C/X/V).
+                    let byte = keys::clipboard_control(&event).unwrap();
+                    if byte == 22 { self.ctrl_v_translated = true; }
+                    self.on_user_input(); self.write(vec![byte]);
+                }
+                egui::Event::Key { key: Key::V, pressed: false, modifiers, .. } => {
+                    // Empty/image-only clipboard can yield no Paste event at all.
+                    let translated = std::mem::take(&mut self.ctrl_v_translated);
+                    let press_seen = std::mem::take(&mut self.v_press_seen);
+                    if !translated && !press_seen && !modifiers.shift && !modifiers.mac_cmd && !cfg!(target_os = "macos") { self.on_user_input(); self.write(vec![22]); }
+                }
                 egui::Event::Copy | egui::Event::Cut => {
                     let text = self.term.lock().selection_to_string();
                     if let Some(text) = text.filter(|t| !t.is_empty()) {
@@ -937,13 +978,14 @@ impl TerminalView {
                     }
                 }
                 egui::Event::Paste(text) => {
+                    self.paste_requested_at = None;
                     self.on_user_input();
                     self.write(encode_paste(&text, mode.contains(TermMode::BRACKETED_PASTE)));
                 }
+                egui::Event::MiddleClickPaste { text, .. } => {
+                    self.on_user_input(); self.write(encode_paste(&text,mode.contains(TermMode::BRACKETED_PASTE)));
+                }
                 egui::Event::Text(text) => {
-                    if std::mem::take(&mut self.suppress_text) {
-                        continue;
-                    }
                     self.on_user_input();
                     self.write(text.into_bytes());
                 }
@@ -952,6 +994,15 @@ impl TerminalView {
                     self.write(text.into_bytes());
                 }
                 egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                    self.keyboard_modifiers = modifiers;
+                    if key == Key::V { self.v_press_seen = true; }
+                    if modifiers.ctrl && modifiers.shift && !modifiers.mac_cmd {
+                        match key {
+                            Key::C => { if let Some(text) = self.term.lock().selection_to_string() { ui.ctx().copy_text(text); } continue; }
+                            Key::V => { self.request_paste(ui); continue; }
+                            _ => {}
+                        }
+                    }
                     // Host shortcuts on macOS.
                     if modifiers.mac_cmd {
                         match key {
@@ -975,15 +1026,6 @@ impl TerminalView {
                         continue;
                     }
                     if let Some(bytes) = encode_key(key, modifiers, modes) {
-                        // Option+letter produces a composed character as Text too; we sent
-                        // the Meta sequence instead, so drop that Text event.
-                        if modifiers.alt && !modifiers.ctrl {
-                            self.suppress_text = true;
-                        }
-                        // Ctrl combos never produce Text on macOS, but do on some platforms.
-                        if modifiers.ctrl {
-                            self.suppress_text = true;
-                        }
                         self.on_user_input();
                         self.term.lock().selection = None;
                         self.write(bytes);
@@ -1071,4 +1113,52 @@ fn row_hash(row: &[CellView], font_key: (u32, u32)) -> u64 {
     font_key.hash(&mut h);
     row.hash(&mut h);
     h.finish()
+}
+
+#[cfg(test)]
+mod input_regression_tests {
+    use super::*;
+    fn feed(view:&mut TerminalView, ctx:&egui::Context, events:Vec<egui::Event>) {
+        let mut output = ctx.run_ui(egui::RawInput {events,..Default::default()}, |ui| view.handle_keyboard(ui));
+        output.textures_delta.clear();
+    }
+    fn key(key:Key,pressed:bool,modifiers:Modifiers) -> egui::Event { egui::Event::Key {key,pressed,modifiers,physical_key:None,repeat:false} }
+    #[test]
+    fn translated_controls_and_later_text_reach_the_terminal_exactly_once() {
+        let ctx = egui::Context::default();
+        let mut terminal = TerminalView::spawn(&std::env::temp_dir(),None,&ctx).unwrap();
+        let ctrl = Modifiers {ctrl:true,command:true,..Default::default()};
+        feed(&mut terminal,&ctx,vec![egui::Event::ModifiersChanged(ctrl),egui::Event::Copy,egui::Event::Cut,egui::Event::Paste("not shell input".into()),key(Key::V,false,ctrl)]);
+        feed(&mut terminal,&ctx,vec![egui::Event::ModifiersChanged(Modifiers::NONE),egui::Event::Text("next".into())]);
+        assert_eq!(terminal.pending_input,b"\x03\x18\x16next");
+        terminal.pending_input.clear();
+        feed(&mut terminal,&ctx,vec![key(Key::C,true,ctrl)]);
+        feed(&mut terminal,&ctx,vec![egui::Event::Text("x".into())]);
+        assert_eq!(terminal.pending_input,b"\x03x");
+    }
+    #[test]
+    fn explicit_paste_and_alt_companion_handling_preserve_ordinary_text() {
+        let ctx = egui::Context::default();
+        let mut terminal = TerminalView::spawn(&std::env::temp_dir(),None,&ctx).unwrap();
+        let alt = Modifiers {alt:true,..Default::default()};
+        feed(&mut terminal,&ctx,vec![key(Key::B,true,alt),egui::Event::Text("∫".into())]);
+        feed(&mut terminal,&ctx,vec![egui::Event::Text("later".into())]);
+        assert_eq!(terminal.pending_input,b"\x1bblater");
+        terminal.pending_input.clear();
+        terminal.paste_requested_at = Some(ctx.input(|i| i.time));
+        feed(&mut terminal,&ctx,vec![egui::Event::Paste("a\tb\nλ".into())]);
+        assert_eq!(terminal.pending_input,"a\tb\rλ".as_bytes());
+    }
+    #[cfg(not(target_os="macos"))]
+    #[test]
+    fn empty_clipboard_control_v_survives_early_control_release() {
+        let ctx = egui::Context::default();
+        let mut terminal = TerminalView::spawn(&std::env::temp_dir(),None,&ctx).unwrap();
+        let ctrl = Modifiers {ctrl:true,command:true,..Default::default()};
+        feed(&mut terminal,&ctx,vec![egui::Event::ModifiersChanged(ctrl),egui::Event::ModifiersChanged(Modifiers::NONE),key(Key::V,false,Modifiers::NONE)]);
+        assert_eq!(terminal.pending_input,b"\x16");
+        terminal.pending_input.clear();
+        feed(&mut terminal,&ctx,vec![key(Key::V,true,Modifiers::NONE),egui::Event::Text("v".into()),key(Key::V,false,Modifiers::NONE)]);
+        assert_eq!(terminal.pending_input,b"v");
+    }
 }

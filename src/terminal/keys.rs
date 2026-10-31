@@ -181,8 +181,16 @@ fn plain_char(key: Key, shift: bool) -> Option<char> {
 /// Wrap pasted text in bracketed-paste markers when the application asked for it, and
 /// normalize newlines to carriage returns as terminals do.
 pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
-    // Strip any embedded paste terminators so pasted text cannot escape bracketed mode.
-    let cleaned = text.replace("\x1b[201~", "").replace("\r\n", "\r").replace('\n', "\r");
+    // Render control introducers visibly instead of deleting marker substrings. Deletion can
+    // join two fragments into a NEW terminator. No ESC or C1 control survives this mapping.
+    let cleaned: String = text.replace("\r\n", "\r").chars().map(|c| match c {
+        '\n' => '\r',
+        '\t' | '\r' => c,
+        '\x1b' => '\u{241b}',
+        '\x7f' => '\u{2421}',
+        c if c.is_control() => '\u{fffd}',
+        c => c,
+    }).collect();
     if bracketed {
         let mut v = b"\x1b[200~".to_vec();
         v.extend_from_slice(cleaned.as_bytes());
@@ -191,6 +199,22 @@ pub fn encode_paste(text: &str, bracketed: bool) -> Vec<u8> {
     } else {
         cleaned.into_bytes()
     }
+}
+
+/// egui-winit emits Key(Alt+letter), Text(composed) adjacently. Discard only that
+/// companion, within this batch. Ctrl keys never produce Text in egui-winit 0.37.
+pub fn terminal_events(events: Vec<egui::Event>) -> Vec<egui::Event> {
+    let mut companion = false;
+    events.into_iter().filter(|e| {
+        let skip = companion && matches!(e, egui::Event::Text(_));
+        companion = matches!(e, egui::Event::Key {key,pressed:true,modifiers,..} if modifiers.alt && !modifiers.ctrl && !modifiers.mac_cmd && plain_char(*key,modifiers.shift).is_some());
+        !skip
+    }).collect()
+}
+
+/// Control bytes for egui-winit's clipboard events when the terminal owns Ctrl.
+pub fn clipboard_control(event:&egui::Event) -> Option<u8> {
+    match event { egui::Event::Copy => Some(3),egui::Event::Cut => Some(24),egui::Event::Paste(_) | egui::Event::PasteImage(_) => Some(22),_ => None }
 }
 
 #[cfg(test)]
@@ -265,6 +289,46 @@ mod tests {
     #[test]
     fn paste_brackets_and_sanitizes() {
         assert_eq!(encode_paste("a\nb", false), b"a\rb");
-        assert_eq!(encode_paste("x\x1b[201~y", true), b"\x1b[200~xy\x1b[201~");
+        assert_eq!(encode_paste("x\x1b[201~y", true), "\x1b[200~x␛[201~y\x1b[201~".as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod adversarial_paste_tests {
+    use super::*;
+    #[test] fn paste_cannot_synthesize_terminators_or_controls() {
+        for text in ["\x1b[20\x1b[201~1~", "\x1b\x1b[201~[201~", "\x1b[201~\x1b[201~", "\u{9b}201~", "\0\x03\x1b]52;c;data\x07", "tabs\tand\nnewlines λ"] {
+            let out = encode_paste(text, true);
+            assert_eq!(out.windows(6).filter(|w| *w == b"\x1b[201~").count(), 1);
+            let body = &out[6..out.len()-6];
+            assert!(!body.contains(&0x1b));
+            assert!(std::str::from_utf8(body).unwrap().chars().all(|c| !c.is_control() || matches!(c,'\r'|'\t')));
+        }
+        assert_eq!(encode_paste("λ\t x\r\ny\n",false), "λ\t x\ry\r".as_bytes());
+    }
+}
+
+#[cfg(test)]
+mod event_tests {
+    use super::*;
+    fn key(key: Key, modifiers: Modifiers) -> egui::Event { egui::Event::Key { key, physical_key:None, pressed:true, repeat:false, modifiers } }
+    #[test] fn only_adjacent_alt_companion_is_suppressed() {
+        let alt = Modifiers {alt:true,..Modifiers::NONE};
+        assert_eq!(terminal_events(vec![key(Key::A,alt),egui::Event::Text("å".into())]).len(),1);
+        assert_eq!(terminal_events(vec![key(Key::C,Modifiers::CTRL),egui::Event::Text("next".into())]).len(),2);
+        assert_eq!(terminal_events(vec![key(Key::A,alt),key(Key::B,Modifiers::NONE),egui::Event::Text("b".into())]).len(),3);
+        terminal_events(vec![key(Key::A,alt)]);
+        assert_eq!(terminal_events(vec![egui::Event::Text("later".into())]).len(),1);
+    }
+}
+
+#[cfg(test)]
+mod clipboard_tests {
+    #[test] fn translated_clipboard_events_retain_terminal_controls() {
+        use egui::Event;
+        assert_eq!(super::clipboard_control(&Event::Copy),Some(3));
+        assert_eq!(super::clipboard_control(&Event::Cut),Some(24));
+        assert_eq!(super::clipboard_control(&Event::Paste("clipboard text".into())),Some(22));
+        assert_eq!(super::clipboard_control(&Event::Text("c".into())),None);
     }
 }
