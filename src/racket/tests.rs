@@ -164,7 +164,10 @@ fn a_check_expect_that_errors_counts_as_failed() {
         let config = RunConfig { path: Some(path.clone()), source, offset, language: lang.run_language(), options: RunOptions::default() };
         let s = RunSession::start(b, &config).unwrap();
         let events = run_until(&s, ready(None));
-        let tests = events.iter().find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None }).expect("tests");
+        let tests = events
+            .iter()
+            .find_map(|e| if let RunEvent::Tests(t) = e { Some(t) } else { None })
+            .unwrap_or_else(|| panic!("{lang:?}: no test results; got {events:#?}\nstderr: {}", s.stderr_tail()));
         assert_eq!((tests.passed, tests.total), (1, 3), "{lang:?}: {}", tests.text);
         assert_eq!(tests.failures.len(), 2, "{lang:?}: {}", tests.text);
         assert!(tests.failures[0].message.contains("expects only 2 arguments, but found 3"), "{}", tests.failures[0].message);
@@ -282,7 +285,9 @@ fn debugger_shows_only_the_users_variables_and_frames_in_teaching_languages() {
 #[test]
 fn profiler_reports_user_functions() {
     let b = need_racket!();
-    let src = "#lang racket\n(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(void (fib 27))\n";
+    // Long enough (~0.1 s on a fast Mac) for the sampler to catch it even while other tests
+    // load the machine; `(fib 27)` could finish between samples.
+    let src = "#lang racket\n(define (fib n) (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2)))))\n(void (fib 32))\n";
     let s = RunSession::start(b, &module_config(None, src, Instrument::Profile)).unwrap();
     let events = run_until(&s, ready(None));
     let report = events.iter().find_map(|e| if let RunEvent::Profile(r) = e { Some(r) } else { None }).expect("profile");

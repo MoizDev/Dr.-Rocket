@@ -7,6 +7,7 @@
          racket/unit
          (only-in trace/stacktrace stacktrace@ stacktrace^ stacktrace-imports^)
          racket/async-channel
+         (only-in ffi/unsafe/atomic start-atomic end-atomic)
          racket/list
          racket/port
          racket/pretty
@@ -24,39 +25,55 @@
 (define protocol-in (current-input-port))
 (define real-exit-handler (exit-handler))
 
-;; Everything user code writes is buffered and coalesced into `output` events. Any other
-;; event flushes the buffer first so the IDE sees output and results in program order.
-;; The protocol writer alone mutates the pending output buffer.
-(define pending-stream #f)
-(define pending (open-output-string))
-(define pending-size 0)
+;; Everything user code writes is coalesced into `output` events, and every other event keeps
+;; its place among them. Producers append to one ordered queue of output runs and messages in
+;; atomic mode, where no other thread can run: a producer can't be suspended (for the memory
+;; limit) or killed halfway, so it never holds anything the protocol writer needs. Only the
+;; writer sends what's queued: every 25 ms, before an event, or once 64 KB of output waits.
+(struct output-run (stream [parts #:mutable])) ; parts newest first
+(define queued '())        ; output runs and messages, newest first
+(define open-run #f)       ; the run that further output to its stream joins
+(define queued-size 0)     ; characters of output queued
 (define flush-threshold 65536)
 
-(define (flush-pending!/locked)
-  (when (and pending-stream (> pending-size 0))
-    (emit (hasheq 'ev "output" 'stream pending-stream 'text (bytes->string/utf-8 (get-output-bytes pending #t) #\?))))
-  (set! pending-size 0)
-  (set! pending-stream #f))
+;; Protocol writer only.
+(define (send-queued!)
+  (start-atomic)
+  (define items (reverse queued))
+  (set! queued '())
+  (set! open-run #f)
+  (set! queued-size 0)
+  (end-atomic)
+  (for ([item (in-list items)])
+    (if (output-run? item)
+        (emit (hasheq 'ev "output" 'stream (output-run-stream item)
+                      'text (apply string-append (reverse (output-run-parts item)))))
+        (emit item))))
 
 (define (flush-output-events!)
-  (protocol-submit flush-pending!/locked))
+  (protocol-submit send-queued!))
 
 (define (buffer-output! stream str)
   (viz-note-output! str)
   (unless (string=? str "")
-    (protocol-submit
-     (λ ()
-       (unless (equal? stream pending-stream)
-         (flush-pending!/locked)
-         (set! pending-stream stream))
-       (write-string str pending)
-       (set! pending-size (+ pending-size (string-length str)))
-       (when (> pending-size flush-threshold)
-         (flush-pending!/locked))))))
+    (start-atomic)
+    (unless (and open-run (equal? (output-run-stream open-run) stream))
+      (set! open-run (output-run stream '()))
+      (set! queued (cons open-run queued)))
+    (set-output-run-parts! open-run (cons str (output-run-parts open-run)))
+    (set! queued-size (+ queued-size (string-length str)))
+    (define full? (> queued-size flush-threshold))
+    (end-atomic)
+    ;; Waits while the writer is behind, so a program printing forever can't outrun it.
+    (when full? (flush-output-events!))))
 
 ;; emit* : like emit, but keeps ordering with buffered output.
 (define (emit* msg)
-  (protocol-submit (λ () (flush-pending!/locked) (emit msg))))
+  (start-atomic)
+  (set! queued (cons msg queued))
+  (set! open-run #f)
+  (end-atomic)
+  (flush-output-events!))
 
 (define (start-flusher!)
   (thread (λ () (let loop () (sleep 0.025) (flush-output-events!) (loop)))))
@@ -1122,7 +1139,7 @@
          [(and memory-limit (null? memory-paused) (> (program-memory) memory-limit)
                ;; Garbage counts until it's collected: only pause for memory still in use.
                (begin (collect-garbage) (> (program-memory) memory-limit)))
-          (pause-for-memory!)
+          (pause-for-memory! (program-memory))
           (loop shown shown-at)]
          [else
           (define now (current-inexact-milliseconds))
@@ -1133,12 +1150,15 @@
              (loop mb now)]
             [else (loop shown shown-at)])])))))
 
-(define (pause-for-memory!)
+;; `used`: the bytes found over the limit. Rounded up, so 64.3 MB over a 64 MB limit doesn't
+;; read as 64 of 64.
+(define (pause-for-memory! used)
   ;; Threads the program suspended itself stay suspended when it resumes.
   (define threads (filter thread-running? (custodian-threads memory-cust)))
   (for-each thread-suspend threads)
   (set! memory-paused threads)
-  (emit* (hasheq 'ev "memory-limit" 'mb (bytes->mb (program-memory)) 'limit (bytes->mb memory-limit))))
+  (define mb (* 1024 1024))
+  (emit* (hasheq 'ev "memory-limit" 'mb (quotient (+ used mb -1) mb) 'limit (bytes->mb memory-limit))))
 
 (define (memory-continue! limit-mb)
   (set! memory-limit (and (exact-positive-integer? limit-mb) (* limit-mb 1024 1024)))
