@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
   pull_request:
   push:
-    branches: [master, main, optimizations]
+    branches: [master, main]
   workflow_call:
     inputs:
       ref:

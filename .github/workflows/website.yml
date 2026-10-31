@@ -4,7 +4,7 @@ name: Website
 on:
   workflow_dispatch:
   push:
-    branches: [master, main, optimizations]
+    branches: [master, main]
     paths: ["website/**", "tools/sign-updates*", ".github/workflows/website.yml"]
   pull_request:
     paths:
