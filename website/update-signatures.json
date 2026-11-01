@@ -1,20 +1,20 @@
 {
-  "version": "1.0.0-beta.14",
+  "version": "1.0.0-beta.16",
   "downloads": {
     "mac": {
       "url": "https://doctorocket.com/downloads/DrRocket-mac.dmg",
-      "sha256": "89c84fa06eea9f0b94c4dbf114500a96852a16fc7247db05b6d482f06cb517ef",
-      "signature": "V/m0wMCSLoNyCCA6CmDWDKR9w91ZTbBDLRvBdcYDXh4P+vC44dl43kIDLCxfX4Bw9LXmUzn5sh9IvL8wGXvZCw=="
+      "sha256": "ea70f44c20595b6688d495e49b7ff1b1a4f66b59a6722b77fa70b900170a5c69",
+      "signature": "W/HFBcdSoK6qXgwhUkXck/DAjEyhe9HbBjjDHK0Au/9fHempd9+bfC8hKaD+APLiGE+Q3ZG9dNF8wseP7vksCA=="
     },
     "windows": {
       "url": "https://doctorocket.com/downloads/DrRocket-windows-x64.zip",
-      "sha256": "c856b381d0afb1a41b935ef469e5363f04d7a12a00872fd524452ece9056e08c",
-      "signature": "UK7LlTtjCTHYlzwQ/iNLNS/8/SSgUOxzP3JYWbKWUFC6MFuHKc5ZL354DMaPGc0xKSgor15KJ3bTZNp7Qd1oAA=="
+      "sha256": "98cea59204d21afcc0b8c68615b3d582b77972e53d5ba31a6b3406f72e9883be",
+      "signature": "GDcLGPM26KKC64c8GBHgYIN4yd0kW/gWbLczqUjtInah70OL7ttoUmJMzmpzmNwnWgP+iu0QxJbRgoMbImZJBA=="
     },
     "linux": {
       "url": "https://doctorocket.com/downloads/DrRocket-linux-x64.tar.gz",
-      "sha256": "c96dcaf16daf6f222f2db3bc21b346447a924de4358894d326d03582120f6c22",
-      "signature": "eAf+ZKK00Lo51kuzZ8EP1yQMRxb9WprUkhO+ZPqnrsDhK54ElLDFydJcgVTpvG+jRRRQTG4gUzxXjROUurXgDQ=="
+      "sha256": "b759536bf7c5bcf3b61ce11f87cde94c6f32721ffabfa171cd96c463521bab8f",
+      "signature": "SEUAq8LGjb9TrEibCofPwBcdOVq5hCicneAHFrHbtgYNtTZPFyaLTi2b22V7wOeiLU3C6cAuinhKHuKJytSGAg=="
     }
   }
 }
